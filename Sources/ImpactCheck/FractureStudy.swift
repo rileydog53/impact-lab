@@ -35,10 +35,12 @@ private struct AssemblyOutcome {
     var firstSiblingContact: Double?
     var siblingImpulse = 0.0
     var selfContactTopologyJump = 0.0
+    var receiverImpulseAtObservation: Double?
 }
 
 private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinity, stepScale: Double = 1,
-                              recordClearance: Bool = true, auditDetachment: Bool = false) throws -> AssemblyOutcome {
+                              recordClearance: Bool = true, auditDetachment: Bool = false,
+                              receiverObservationTime: Double? = nil) throws -> AssemblyOutcome {
     var s = try AssemblySimulation(test.scene, refinement: test.refinement, stepLimit: stepLimit, stepScale: stepScale)
     s.probeDetachment = auditDetachment
     let initialP = s.momentum, initialL = s.angularMomentum
@@ -59,6 +61,10 @@ private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinit
         previousEnergy = energy
         outcome.momentum = max(outcome.momentum, simd_distance(s.momentum, initialP))
         outcome.angularMomentum = max(outcome.angularMomentum, abs(s.angularMomentum - initialL))
+        if let cutoff = receiverObservationTime, s.time >= cutoff, outcome.receiverImpulseAtObservation == nil {
+            outcome.receiverImpulseAtObservation = s.fragmentContacts.filter { $0.parts == SIMD2(0, 4) }
+                .reduce(0) { $0 + $1.normalImpulse }
+        }
         if recordClearance && s.time >= nextClearance {
             outcome.peakReceiverSpeed = max(outcome.peakReceiverSpeed, simd_length(s.body(4).centerVelocity))
             if reading.pieces > 1 {
@@ -252,13 +258,19 @@ private struct BendOutcome {
     var exits: [Double] = []
     var maxAdvance = 0.0
     var error: String?
+    var finalWork = BendWork()
+    var compression = 0.0
+    var energyError = 0.0
+    var firstInsertion: (time: Double, distanceFromTip: Double)?
+    var firstSupportContact: Double?
 }
 
-private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double) throws -> BendOutcome {
+private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double, pad: StrikerPad? = nil) throws -> BendOutcome {
     // Same prescribed geometry, impact speed and material on every mesh.
     var scene = test.scene
     scene.duration = 0.045
-    var simulation = try AssemblySimulation(scene, refinement: test.refinement, stepLimit: stepLimit, notchDepth: depth)
+    if let pad { scene.parts[1].center.y += pad.thickness }
+    var simulation = try AssemblySimulation(scene, refinement: test.refinement, stepLimit: stepLimit, notchDepth: depth, strikerPad: pad)
     let halfHeight = 0.5 * scene.parts[0].size.y
     let tip = Point(0, -halfHeight + depth)
     let advance = 0.5 * (halfHeight - tip.y)
@@ -266,16 +278,7 @@ private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double)
     var failed = 0
     var workAtLastAdvance = BendWork()
     let toughness = scene.parts[0].fracture!.energy
-    while simulation.step() {
-        let reading = simulation.fractureReading(0)!
-        let force = simulation.normalLoad(0, 1)
-        if force > outcome.peakLoad {
-            outcome.peakLoad = force
-            outcome.peakTime = simulation.time
-            outcome.workAtPeak = reading.dissipation
-        }
-        guard failed != reading.failedEdges else { continue }
-        failed = reading.failedEdges
+    func partition() -> (Double, BendWork, [Double]) {
         let reference = simulation.body(0).mesh.reference
         var links: [Point: [Point]] = [:]
         let faces = simulation.crackFaces(0)
@@ -284,7 +287,7 @@ private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double)
             links[a, default: []].append(b)
             links[b, default: []].append(a)
         }
-        guard let seed = links.keys.first(where: { simd_distance($0, tip) < 1e-10 }) else { continue }
+        let seed = links.keys.first(where: { simd_distance($0, tip) < 1e-10 }) ?? tip
         var reached: Set<Point> = [seed]
         var queue = [seed]
         var i = 0
@@ -300,7 +303,32 @@ private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double)
             let term = (face.damage == 1 ? 0 : 2) + (touchesNotchNetwork ? 0 : 1)
             work.terms[term] += toughness * simd_distance(a, b) * face.damage
         }
-        require(abs(work.total - reading.dissipation) < 1e-10, "Notched-bend fracture-work partition does not close")
+        require(abs(work.total - simulation.fractureReading(0)!.dissipation) < 1e-10, "Notched-bend fracture-work partition does not close")
+        let exits = queue.filter { abs($0.y - halfHeight) < 1e-10 }.map(\.x).sorted()
+        return (crackAdvance, work, exits)
+    }
+    while simulation.step() {
+        if pad != nil {
+            outcome.energyError = max(outcome.energyError, abs(simulation.energies.total / simulation.initialEnergy - 1))
+        }
+        let reading = simulation.fractureReading(0)!
+        if pad != nil && outcome.firstInsertion == nil && reading.insertedEdges > 0 {
+            let p = simulation.body(0).mesh.reference
+            let distance = simulation.crackFaces(0).map {
+                simd_distance((p[$0.first.a] + p[$0.first.b]) / 2, tip)
+            }.min()!
+            outcome.firstInsertion = (simulation.time, distance)
+        }
+        let force = simulation.normalLoad(0, 1)
+        if force > outcome.peakLoad {
+            outcome.peakLoad = force
+            outcome.peakTime = simulation.time
+            outcome.workAtPeak = reading.dissipation
+        }
+        guard failed != reading.failedEdges else { continue }
+        failed = reading.failedEdges
+        let (crackAdvance, work, exits) = partition()
+        if crackAdvance <= 0 { continue }
         if outcome.matched == nil && crackAdvance >= advance {
             let below = outcome.maxAdvance
             let fraction = (advance - below) / (crackAdvance - below)
@@ -310,9 +338,14 @@ private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double)
         }
         if crackAdvance < advance { workAtLastAdvance = work }
         outcome.maxAdvance = max(outcome.maxAdvance, crackAdvance)
-        outcome.exits = queue.filter { abs($0.y - halfHeight) < 1e-10 }.map(\.x).sorted()
+        outcome.exits = exits
     }
     outcome.error = simulation.failure ?? simulation.initialIssue
+    if pad != nil {
+        outcome.finalWork = partition().1
+        outcome.compression = simulation.padPeakCompression
+        outcome.firstSupportContact = [SIMD2(0, 2), SIMD2(0, 3)].compactMap { simulation.firstContactTimes[$0] }.min()
+    }
     return outcome
 }
 
@@ -472,4 +505,113 @@ func fractureStabilityProbe() throws {
                      scale, run.dt * 1e6, run.steps, run.elapsed, 100 * run.imbalance, 100 * run.penetration,
                      Double(usage.ru_maxrss) / 1_048_576, run.error.map { " STOPPED: " + $0 } ?? ""))
     }
+}
+
+func compliantStrikerCheck() throws {
+    let pad = StrikerPad(thickness: 0.004, modulus: 250_000, samples: 32)
+    let step = 0.45e-6
+    let check = pad.response(length: 0.003, stiffness: pad.modulus * 0.025 / pad.thickness)
+    require(abs(check.load - 1562.5) < 1e-10 && abs(check.energy - 0.78125) < 1e-12
+                && pad.response(length: 0.005, stiffness: 1).load == 0, "Pad compression or work is incorrect")
+
+    func trial(_ test: AssemblyCase, pad: StrikerPad?, penalty: Double, dt: Double) throws {
+        var scene = test.scene
+        if let pad { scene.parts[1].center.y += pad.thickness }
+        var run = try AssemblySimulation(scene, refinement: test.refinement, stepLimit: dt, notchDepth: 0.005,
+                                         interbodyStiffnessScale: penalty, insertionEnabled: false, strikerPad: pad)
+        let initialVelocity = run.body(1).centerVelocity.y
+        let mass = 2 * run.kineticEnergy(1) / (initialVelocity * initialVelocity)
+        let initialP = run.momentum, initialL = run.angularMomentum
+        var impulse = 0.0, verticalImpulse = 0.0, oldLoad = 0.0, oldTime = 0.0
+        var peak = 0.0, peakTime = 0.0, imbalance = 0.0
+        var earlyImpulse = 0.0, netForcePeak = 0.0
+        while run.time < 0.008 && run.step() {
+            let load = run.normalLoad(0, 1)
+            let dy = run.body(1).centerVelocity.y - initialVelocity
+            netForcePeak = max(netForcePeak, (mass * dy - verticalImpulse) / run.dt)
+            verticalImpulse = mass * dy
+            if load > peak { peak = load; peakTime = run.time }
+            impulse += 0.5 * (oldLoad + load) * run.dt
+            if oldTime < 0.00405 {
+                let fraction = min(1, (0.00405 - oldTime) / run.dt)
+                earlyImpulse += fraction * run.dt * (oldLoad + 0.5 * fraction * (load - oldLoad))
+            }
+            oldLoad = load
+            oldTime = run.time
+            imbalance = max(imbalance, abs(run.energies.total / run.initialEnergy - 1))
+            require(run.activeContacts.allSatisfy { ($0.x != 1 && $0.y != 1) || $0 == SIMD2(0, 1) },
+                    "Another part applied force to the striker")
+        }
+        require(run.time >= 0.008 && run.failure == nil && (run.fractureReading(0)?.insertedEdges ?? -1) == 0
+                    && imbalance < 0.005 && simd_distance(run.momentum, initialP) < 1e-9
+                    && abs(run.angularMomentum - initialL) < 1e-9, "Elastic loading control violated conservation or failed")
+        if let pad { require(run.padPeakCompression < pad.thickness, "Pad faces crossed") }
+        let onset = run.firstContactTimes[SIMD2(0, 1)]!
+        print(String(format: "%@ %@, dt %.3f µs: peak %.2f (vertical step peak %.2f) N/m at %+.3f ms after onset, early impulse %.5f, 8 ms impulse %.5f (vertical %.5f) N·s/m, max pad compression %.3f mm, ΔE %.4f%%",
+                     pad.map { "pad n=\($0.samples)" } ?? "penalty ×\(Int(penalty))", test.label, run.dt * 1e6,
+                     peak, netForcePeak, 1000 * (peakTime - onset), earlyImpulse, impulse, verticalImpulse,
+                     run.padPeakCompression * 1000, 100 * imbalance))
+    }
+
+    for test in studyCases() where test.refinement >= 2 {
+        try trial(test, pad: pad, penalty: 2, dt: step)
+        if test.refinement == 3 {
+            try trial(test, pad: pad, penalty: 2, dt: step / 2)
+            try trial(test, pad: StrikerPad(thickness: pad.thickness, modulus: pad.modulus, samples: 64), penalty: 2, dt: step)
+            for penalty in [1.0, 2.0, 4.0] { try trial(test, pad: nil, penalty: penalty, dt: step) }
+            try trial(test, pad: nil, penalty: 4, dt: step / 2)
+            try trial(AssemblyCase(mesh: test.mesh, refinement: 4, scene: test.scene), pad: pad, penalty: 2, dt: step)
+        }
+    }
+}
+
+func compliantFractureCheck(_ orientation: String, refinement: Int, halfStep: Bool) throws {
+    let pad = StrikerPad(thickness: 0.004, modulus: 250_000, samples: 64)
+    var scene = AssemblyScene.bendingFractureExample()
+    guard let mesh = MaterialFractureSettings.MeshPattern.allCases.first(where: { $0.rawValue.lowercased() == orientation }) else {
+        require(false, "Expected aligned or staggered")
+        return
+    }
+    scene.parts[0].fracture?.meshPattern = mesh
+    let test = AssemblyCase(mesh: mesh, refinement: refinement, scene: scene)
+    let dt = halfStep ? 0.225e-6 : 0.45e-6
+    let run = try notchedBend(test, stepLimit: dt, depth: 0.005, pad: pad)
+    print(String(format: "%@ at step limit %.3f µs: peak %.2f N/m, advance %.3f mm, pad compression %.3f mm, energy error %.4f%%",
+                 test.label, dt * 1e6, run.peakLoad, 1000 * run.maxAdvance, 1000 * run.compression, 100 * run.energyError))
+    let work = run.finalWork.terms
+    print(String(format: "Final fracture work (J/m): spent notch %.6f, spent elsewhere %.6f, partial at notch %.6f, partial elsewhere %.6f. Total %.6f.",
+                 work.x, work.y, work.z, work.w, run.finalWork.total))
+    if let insertion = run.firstInsertion {
+        print(String(format: "First insertion %.3f ms, nearest inserted face midpoint %.2f mm from notch tip.",
+                     1000 * insertion.time, 1000 * insertion.distanceFromTip))
+    }
+    if let contact = run.firstSupportContact { print(String(format: "First support contact %.3f ms.", 1000 * contact)) }
+    if let match = run.matched {
+        print(String(format: "Work at matched advance %.6f J/m, raw bracket %.6f–%.6f", match.work.total, match.rawWork.x, match.rawWork.y))
+    } else {
+        print("The 10.5 mm matched advance was not reached.")
+    }
+    if let error = run.error { print("STOPPED: \(error)") }
+    require(run.error == nil && run.compression < pad.thickness && run.energyError < 0.005,
+            "The compliant fracture control failed its mechanical checks")
+}
+
+func receiverRefinementCheck(extended: Bool = false) throws {
+    var scene = AssemblyScene.bendingFractureExample()
+    scene.parts[0].fracture?.meshPattern = .staggered
+    let cutoff = scene.duration
+    if extended { scene.duration = 0.155 }
+    let test = AssemblyCase(mesh: .staggered, refinement: 3, scene: scene)
+    let run = try simulateAssembly(test, stepScale: extended ? 0.5 : 0.25,
+                                   receiverObservationTime: extended ? cutoff : nil)
+    printAssembly(test.label + (extended ? ", extended half step" : ", quarter step"), run)
+    if let impulse = run.receiverImpulseAtObservation {
+        print(String(format: "Receiver impulse at the original %.0f ms observation limit %.6f N·s/m", 1000 * cutoff, impulse))
+    }
+    print(String(format: "Receiver impulse %.6f N·s/m from %d episodes, %d tagged on newly exposed faces",
+                 run.receiverEvents.map(\.normalImpulse).reduce(0, +),
+                 run.receiverEvents.count, run.receiverEvents.filter(\.onExposedFace).count))
+    require(run.error == nil && run.time >= scene.duration && run.penetration < 0.02 &&
+            run.imbalance < 0.005 && max(run.momentum, run.angularMomentum) < 1e-9,
+            "Receiver replay failed a contact or conservation check")
 }

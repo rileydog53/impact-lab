@@ -112,6 +112,29 @@ if CommandLine.arguments.dropFirst().contains("--notched-bend") {
     exit(gatePassed ? EXIT_SUCCESS : EXIT_FAILURE)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--compliant-fracture") {
+    let arguments = Array(CommandLine.arguments.dropFirst(index + 1))
+    require(arguments.count >= 2 && arguments.count <= 3, "Usage: --compliant-fracture aligned|staggered 3|4 [half]")
+    guard let resolution = Int(arguments[1]), (3...4).contains(resolution) else { exit(EXIT_FAILURE) }
+    try compliantFractureCheck(arguments[0], refinement: resolution, halfStep: arguments.last == "half")
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--receiver-quarter-step") {
+    try receiverRefinementCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--receiver-extended") {
+    try receiverRefinementCheck(extended: true)
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--compliant-striker") {
+    try compliantStrikerCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--elastic-bend-loading") {
     try elasticBendLoadingCheck()
     exit(EXIT_SUCCESS)

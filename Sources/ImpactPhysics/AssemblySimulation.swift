@@ -60,6 +60,30 @@ private struct MaterialAnchor: Sendable {
     }
 }
 
+// An independently specified elastic pad between the facing surfaces of
+// parts 0 and 1. The reference footprint is integrated in material coordinates.
+package struct StrikerPad: Sendable {
+    package let thickness, modulus: Double
+    package let samples: Int
+
+    package init(thickness: Double, modulus: Double, samples: Int) {
+        precondition(thickness.isFinite && thickness > 0 && modulus.isFinite && modulus > 0 && samples > 0)
+        self.thickness = thickness
+        self.modulus = modulus
+        self.samples = samples
+    }
+
+    package func response(length: Double, stiffness: Double) -> (load: Double, energy: Double) {
+        let compression = max(0, thickness - length)
+        return (stiffness * compression, 0.5 * stiffness * compression * compression)
+    }
+}
+
+private struct PadSpring: Sendable {
+    let specimen, striker: MaterialAnchor
+    let stiffness: Double
+}
+
 private struct AssemblyLink: Sendable {
     let connection: Int
     let firstBody, secondBody: Int
@@ -164,6 +188,9 @@ public struct AssemblySimulation: Sendable {
     private let surfaces: [ContactSurface]
     private let pairs: [Pair]
     private let links: [AssemblyLink]
+    private let strikerPad: StrikerPad?
+    private let padSprings: [PadSpring]
+    package private(set) var padPeakCompression = 0.0
     private var maxima: [Double]
     private var openFragmentContacts: [FragmentPair: (event: Int, load: Double)] = [:]
     private var normalLoads: [SIMD2<Int>: Double] = [:]
@@ -223,7 +250,7 @@ public struct AssemblySimulation: Sendable {
 
     package init(_ scene: AssemblyScene, refinement: Int, stepLimit: Double,
                  notchDepth: Double = 0, stepScale: Double = 1, interbodyStiffnessScale: Double? = nil,
-                 insertionEnabled: Bool = true) throws {
+                 insertionEnabled: Bool = true, strikerPad: StrikerPad? = nil) throws {
         try scene.validate()
         precondition(refinement > 0 && stepLimit > 0 && stepScale > 0 && notchDepth >= 0)
         self.scene = scene
@@ -238,6 +265,7 @@ public struct AssemblySimulation: Sendable {
         hasFracture = scene.parts.contains { $0.fracture != nil }
         self.interbodyStiffnessScale = interbodyStiffnessScale ?? (hasFracture ? 2 : 1)
         self.insertionEnabled = insertionEnabled
+        self.strikerPad = strikerPad
         let surfaces = bodies.map(ContactSurface.init)
         self.surfaces = surfaces
         steps = zip(bodies, scene.parts).map { body, part in
@@ -251,6 +279,7 @@ public struct AssemblySimulation: Sendable {
         var issue: AssemblyError?
         for a in bodies.indices {
             for b in (a + 1)..<bodies.count {
+                if strikerPad != nil && a == 0 && b == 1 { continue }
                 let contact = BoundaryContact(left: surfaces[a], right: surfaces[b], stiffnessScale: self.interbodyStiffnessScale)
                 pairs.append(Pair(a: a, b: b, contact: contact))
                 allowance[a] += 8 * contact.maximumStiffness
@@ -273,6 +302,25 @@ public struct AssemblySimulation: Sendable {
         let indices = Dictionary(uniqueKeysWithValues: scene.parts.enumerated().map { ($0.element.id, $0.offset) })
         var links: [AssemblyLink] = []
         var springs = Array(repeating: [(Int, Double)](), count: bodies.count)
+        if let pad = strikerPad {
+            precondition(scene.parts.count >= 2)
+            let specimen = scene.parts[0], striker = scene.parts[1]
+            precondition(specimen.shape == .block && striker.shape == .block && specimen.angle == 0 && striker.angle == 0)
+            let width = striker.size.x
+            precondition(abs(striker.center.x - specimen.center.x) + width / 2 <= specimen.size.x / 2)
+            precondition(striker.center.y - specimen.center.y - (striker.size.y + specimen.size.y) / 2 >= pad.thickness)
+            let stiffness = pad.modulus * width / pad.thickness / Double(pad.samples)
+            padSprings = (0..<pad.samples).map { sample in
+                let x = width * ((Double(sample) + 0.5) / Double(pad.samples) - 0.5)
+                let a = MaterialAnchor(Point(x + striker.center.x - specimen.center.x, specimen.size.y / 2), mesh: bodies[0].mesh)
+                let b = MaterialAnchor(Point(x, -striker.size.y / 2), mesh: bodies[1].mesh)
+                a.budget(2 * stiffness, mesh: bodies[0].mesh, into: &springs[0])
+                b.budget(2 * stiffness, mesh: bodies[1].mesh, into: &springs[1])
+                return PadSpring(specimen: a, striker: b, stiffness: stiffness)
+            }
+        } else {
+            padSprings = []
+        }
         for (index, connection) in scene.connections.enumerated() {
             let a = indices[connection.first]!, b = indices[connection.second]!
             let count = connection.span > 0 ? 5 : 1
@@ -325,6 +373,7 @@ public struct AssemblySimulation: Sendable {
             let p = left.positions(position), first = left.surface
             let lb = ContactBounds(surface: first, position: p)
             for j in steps.indices where j != i {
+                if strikerPad != nil && min(i, j) == 0 && max(i, j) == 1 { continue }
                 let q = steps[j].nextPosition
                 let others = fractures[j]?.surfaces.map { ($0.surface, $0.positions(q)) } ?? [(surfaces[j], q)]
                 for (second, positions) in others {
@@ -402,6 +451,7 @@ public struct AssemblySimulation: Sendable {
                 let leftBounds = domains[a].bounds, rightBounds = domains[b].bounds
                 guard leftBounds.intersects(rightBounds) else { continue }
                 let partPair = SIMD2(domains[a].part, domains[b].part)
+                if strikerPad != nil && partPair == SIMD2(0, 1) { continue }
                 let pieces = SIMD2(domains[a].proxy?.id ?? 0, domains[b].proxy?.id ?? 0)
                 if partPair.x == partPair.y {
                     let left = domains[a], right = domains[b]
@@ -591,6 +641,34 @@ public struct AssemblySimulation: Sendable {
             intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal)
         }
 
+        var nextPadCompression = padPeakCompression
+        if let pad = strikerPad {
+            let meshA = steps[0].body.mesh, meshB = steps[1].body.mesh
+            let positionsA = steps[0].nextPosition, positionsB = steps[1].nextPosition
+            var load = 0.0
+            for spring in padSprings {
+                let delta = spring.striker.point(in: positionsB, mesh: meshB)
+                    - spring.specimen.point(in: positionsA, mesh: meshA)
+                let length = simd_length(delta)
+                guard delta.y > 0, length > 1e-10 else {
+                    failure = "The specified striker pad collapsed."
+                    return false
+                }
+                let response = pad.response(length: length, stiffness: spring.stiffness)
+                if response.load == 0 { continue }
+                let force = response.load / length * delta
+                spring.specimen.apply(-force, mesh: meshA, to: &steps[0].nextApplied)
+                spring.striker.apply(force, mesh: meshB, to: &steps[1].nextApplied)
+                trial.contact += response.energy
+                load += response.load
+                nextPadCompression = max(nextPadCompression, pad.thickness - length)
+            }
+            if load > 0 {
+                active.append(SIMD2(0, 1))
+                nextNormal[SIMD2(0, 1)] = load
+            }
+        }
+
         var readings: [AssemblyLinkReading] = []
         for (i, link) in links.enumerated() {
             let a = link.firstBody, b = link.secondBody
@@ -651,6 +729,7 @@ public struct AssemblySimulation: Sendable {
         for pair in active where firstContactTimes[pair] == nil { firstContactTimes[pair] = time }
         activeContacts = active
         normalLoads = nextNormal
+        padPeakCompression = nextPadCompression
         if penetration > peakRelativePenetration {
             peakRelativePenetration = penetration
             peakContactDomains = deepest
