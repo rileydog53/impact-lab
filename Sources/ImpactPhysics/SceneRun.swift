@@ -2,6 +2,14 @@ public struct TraceSample: Equatable, Sendable {
     public let time: Double
     public let values: Point
     public let plasticDissipation: Double
+    public let connectionEnergy: Double
+
+    public init(time: Double, values: Point, plasticDissipation: Double, connectionEnergy: Double = 0) {
+        self.time = time
+        self.values = values
+        self.plasticDissipation = plasticDissipation
+        self.connectionEnergy = connectionEnergy
+    }
 }
 
 public struct SceneTrace: Sendable {
@@ -22,7 +30,11 @@ public struct SceneTrace: Sendable {
 
     public func matching(_ reference: SceneTrace) -> [Match] {
         guard preset == reference.preset else { return [] }
-        return zip(reference.samples, samples).map {
+        return Self.matching(reference.samples, samples)
+    }
+
+    public static func matching(_ reference: [TraceSample], _ current: [TraceSample]) -> [Match] {
+        zip(reference, current).map {
             // Both traces record the same simulation-time grid.
             Match(time: $0.time, referenceSample: $0, currentSample: $1)
         }

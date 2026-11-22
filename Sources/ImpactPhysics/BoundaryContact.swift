@@ -36,7 +36,7 @@ struct ContactSurface: Sendable {
     }
 }
 
-private struct ContactBounds {
+struct ContactBounds {
     var lower = Point(repeating: .infinity)
     var upper = Point(repeating: -.infinity)
 
@@ -79,9 +79,16 @@ struct BoundaryContact: Sendable {
             for i in left.nodes { leftForce[i] = .zero }
             for i in right.nodes { rightForce[i] = .zero }
         }
-        var result = ContactResult()
         let leftBounds = ContactBounds(surface: left, position: leftPosition)
         let rightBounds = ContactBounds(surface: right, position: rightPosition)
+        return accumulate(left: leftPosition, right: rightPosition, leftBounds: leftBounds, rightBounds: rightBounds,
+                          leftForce: &leftForce, rightForce: &rightForce)
+    }
+
+    func accumulate(left leftPosition: [Point], right rightPosition: [Point],
+                    leftBounds: ContactBounds, rightBounds: ContactBounds,
+                    leftForce: inout [Point], rightForce: inout [Point]) -> ContactResult {
+        var result = ContactResult()
         guard leftBounds.intersects(rightBounds) else { return result }
         Self.apply(from: left, at: leftPosition, to: right, at: rightPosition, bounds: rightBounds,
                    sourceForce: &leftForce, targetForce: &rightForce, result: &result)
@@ -108,6 +115,18 @@ struct BoundaryContact: Sendable {
             result.penetration = max(result.penetration, hit.distance)
             result.relativePenetration = max(result.relativePenetration, hit.distance / hit.length)
         }
+    }
+
+    static func contains(_ node: Point, within surface: ContactSurface, position: [Point]) -> Bool {
+        var inside = false
+        for edge in surface.edges {
+            let a = position[edge.a], b = position[edge.b]
+            if (a.y > node.y) != (b.y > node.y),
+               node.x < a.x + (node.y - a.y) * (b.x - a.x) / (b.y - a.y) {
+                inside.toggle()
+            }
+        }
+        return inside
     }
 
     private static func boundaryHit(_ node: Point, target: ContactSurface, position: [Point]) -> Hit? {

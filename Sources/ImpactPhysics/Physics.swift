@@ -174,7 +174,7 @@ public struct Diagnostics: Sendable {
     public let angularMomentum: Double
 }
 
-private struct ElementHistory: Sendable {
+struct ElementHistory: Sendable {
     let model: J2Model
     var current: [J2History]
     var next: [J2History]
@@ -188,7 +188,7 @@ private struct ElementHistory: Sendable {
     mutating func accept() { swap(&current, &next) }
 }
 
-private struct ElementEnergy: Sendable {
+struct ElementEnergy: Sendable {
     var elastic = 0.0
     var hardening = 0.0
     var dissipation = 0.0
@@ -198,7 +198,7 @@ private struct ElementEnergy: Sendable {
     var total: Double { elastic + hardening + dissipation }
 }
 
-private struct BodyStep: Sendable {
+struct BodyStep: Sendable {
     var body: Body
     var strain: [Double]
     var internalForce: [Point]
@@ -452,7 +452,7 @@ public struct Simulation: Sendable {
         dt = stepScale * 0.8 / sqrt(max(firstOmega, secondOmega, thirdOmega, receiverOmega))
     }
 
-    private static func squaredFrequency(of body: Body, contact: ContactSurface?, allowance: Double,
+    static func squaredFrequency(of body: Body, contact: ContactSurface?, allowance: Double,
                                          springs: [(Int, Double)]) -> Double {
         let uniformWaveSpeedSquared = pow(body.material.waveSpeed, 2)
         var stiffness = Array(repeating: 0.0, count: body.mass.count)
@@ -658,7 +658,7 @@ public struct Simulation: Sendable {
         return true
     }
 
-    fileprivate static func assemble(body: Body, position: [Point], forces: inout [Point],
+    static func assemble(body: Body, position: [Point], forces: inout [Point],
                                      strain: inout [Double], history: inout ElementHistory?) -> ElementEnergy? {
         for i in forces.indices { forces[i] = .zero }
         let uniformMu = body.material.shear

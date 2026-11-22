@@ -5,21 +5,41 @@ struct ComparisonView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var cursor: Double
     @State private var selectedSignal = 0
-    let reference: SceneTrace
-    let current: SceneTrace
-    let samples: [SceneTrace.Match]
-    private var preset: Preset { current.preset }
+    private let title: String
+    private let referenceDetails, currentDetails: String
+    private let referenceResidual, currentResidual: Double?
+    private let preset: Preset?
+    private let samples: [SceneTrace.Match]
 
     init(reference: SceneTrace, current: SceneTrace) {
-        self.reference = reference
-        self.current = current
+        title = current.preset.rawValue
+        preset = current.preset
+        referenceDetails = Self.details(reference)
+        currentDetails = Self.details(current)
+        referenceResidual = reference.residualLength
+        currentResidual = current.residualLength
         samples = current.matching(reference)
+        _cursor = State(initialValue: Double(max(0, samples.count - 1)))
+    }
+
+    init(reference: AssemblyComparison, current: AssemblyComparison) {
+        title = "Assembly laboratory"
+        preset = nil
+        referenceDetails = reference.details
+        currentDetails = current.details
+        referenceResidual = nil
+        currentResidual = nil
+        samples = SceneTrace.matching(reference.samples, current.samples)
         _cursor = State(initialValue: Double(max(0, samples.count - 1)))
     }
 
     private typealias Signal = (name: String, unit: String, value: KeyPath<TraceSample, Double>, color: Color)
     private var series: [Signal] {
-        switch preset {
+        guard let preset else {
+            return [("Relative X", "mm", \.values.x, .mint), ("Body kinetic energy", "J/m", \.values.y, .orange),
+                    ("Stored connection energy", "J/m", \.connectionEnergy, .yellow)]
+        }
+        return switch preset {
         case .bar, .bondedBar: [("Axial strain", "%", \.values.x, .mint)]
         case .block: [("Orientation", "°", \.values.x, .mint)]
         case .ring: [("Horizontal diameter", "mm", \.values.x, .mint), ("Vertical diameter", "mm", \.values.y, .orange)]
@@ -43,7 +63,7 @@ struct ComparisonView: View {
             HStack {
                 VStack(alignment: .leading) {
                     Text("Compare runs").font(.title2.bold())
-                    Text(preset.rawValue).foregroundStyle(.secondary)
+                    Text(title).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
@@ -51,8 +71,8 @@ struct ComparisonView: View {
             if samples.count > 1 {
                 let selected = samples[Int(cursor)]
                 HStack(spacing: 18) {
-                    runLegend("Reference", trace: reference, symbol: "line.diagonal")
-                    runLegend("Current", trace: current, symbol: "line.horizontal")
+                    runLegend("Reference", details: referenceDetails, symbol: "line.diagonal")
+                    runLegend("Current", details: currentDetails, symbol: "line.horizontal")
                 }
                 .font(.caption).foregroundStyle(.secondary)
                 if choosesSignal {
@@ -94,7 +114,7 @@ struct ComparisonView: View {
                             reading(current - reference, unit: signal.unit)
                         }
                     }
-                    if let referenceLength = reference.residualLength, let currentLength = current.residualLength {
+                    if let referenceLength = referenceResidual, let currentLength = currentResidual {
                         GridRow {
                             Text("Residual length")
                             reading(1000 * referenceLength, unit: "mm")
@@ -109,14 +129,22 @@ struct ComparisonView: View {
         .frame(width: 570)
     }
 
-    private var choosesSignal: Bool { current.materialResponse != nil || current.seamResponse != nil }
+    private var choosesSignal: Bool {
+        switch preset {
+        case nil, .tensionCoupon, .materialImpact, .layeredSeam, .layeredImpact, .offAxisImpact: true
+        default: false
+        }
+    }
 
-    private func runLegend(_ title: String, trace: SceneTrace, symbol: String) -> some View {
+    private static func details(_ trace: SceneTrace) -> String {
         let stop = trace.preset == .layeredImpact ? (trace.hasBackstop ? "Backstop" : "Free specimen") : nil
-        let details = [trace.seamResponse?.rawValue, trace.materialResponse?.rawValue, stop].compactMap { $0 }
-        return VStack(alignment: .leading, spacing: 4) {
+        return [trace.seamResponse?.rawValue, trace.materialResponse?.rawValue, stop].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func runLegend(_ title: String, details: String, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             Label(title, systemImage: symbol)
-            if !details.isEmpty { Text(details.joined(separator: " · ")) }
+            if !details.isEmpty { Text(details) }
         }
     }
 

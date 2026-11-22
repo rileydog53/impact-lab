@@ -155,10 +155,17 @@ private extension Preset {
 }
 
 @main struct ImpactLab: App {
+    @State private var mode = CommandLine.arguments.contains("--smoke") || CommandLine.arguments.contains("--inspect-ms") ? 1 : 0
+
     var body: some Scene {
         WindowGroup("Impact Lab") {
-            LabView()
-                .frame(minWidth: 860, minHeight: 560)
+            TabView(selection: $mode) {
+                AssemblyLab()
+                    .tabItem { Label("Assembly", systemImage: "square.3.layers.3d") }.tag(0)
+                LabView()
+                    .tabItem { Label("Verified presets", systemImage: "waveform.path") }.tag(1)
+            }
+                .frame(minWidth: 940, minHeight: 660)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1180, height: 760)
