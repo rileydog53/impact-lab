@@ -34,11 +34,13 @@ private struct AssemblyOutcome {
     var energyChangeAtFormerRejection: Double?
     var firstSiblingContact: Double?
     var siblingImpulse = 0.0
+    var selfContactTopologyJump = 0.0
 }
 
 private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinity, stepScale: Double = 1,
-                              recordClearance: Bool = true) throws -> AssemblyOutcome {
+                              recordClearance: Bool = true, auditDetachment: Bool = false) throws -> AssemblyOutcome {
     var s = try AssemblySimulation(test.scene, refinement: test.refinement, stepLimit: stepLimit, stepScale: stepScale)
+    s.probeDetachment = auditDetachment
     let initialP = s.momentum, initialL = s.angularMomentum
     let start = ProcessInfo.processInfo.systemUptime
     var outcome = AssemblyOutcome(initialNodes: s.body(0).mesh.reference.count, dt: s.dt)
@@ -81,8 +83,8 @@ private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinit
                                    (s.time + s.dt) * 1000, 100 * penetration)
     }
     if let domains = s.rejectedContactDomains {
-        outcome.rejection! += String(format: "; deepest penetration parts/pieces [%d:%d, %d:%d]; matching closure %.6f J/m",
-                                    domains.x, domains.y, domains.z, domains.w, s.rejectedClosureEnergy ?? 0)
+        outcome.rejection! += String(format: "; deepest penetration parts/pieces [%d:%d, %d:%d]; total contact energy %.6f J/m",
+                                    domains.x, domains.y, domains.z, domains.w, s.rejectedContactEnergy ?? 0)
     }
     outcome.penetration = s.peakRelativePenetration
     outcome.work = s.fractureReading(0)!.dissipation
@@ -91,6 +93,7 @@ private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinit
     let siblings = s.fragmentContacts.filter { $0.parts == SIMD2(0, 0) && $0.pieces == SIMD2(0, 247) }
     outcome.firstSiblingContact = siblings.first?.time
     outcome.siblingImpulse = siblings.reduce(0.0) { $0 + $1.normalImpulse }
+    outcome.selfContactTopologyJump = max(s.maxInsertionContactJump, s.detachmentProbes.map { abs($0.energyJump) }.max() ?? 0)
     for event in outcome.receiverEvents { outcome.clearance[event.pieces.x] = 0 }
     outcome.pieces = s.materialPieces(0)
     outcome.nodes = s.body(0).mesh.reference.count
@@ -102,16 +105,20 @@ func siblingContactCheck() throws {
     var scene = AssemblyScene.bendingFractureExample()
     scene.parts[0].fracture?.meshPattern = .staggered
     let test = AssemblyCase(mesh: .staggered, refinement: 2, scene: scene)
-    let outcome = try simulateAssembly(test, recordClearance: false)
+    let outcome = try simulateAssembly(test, recordClearance: false, auditDetachment: true)
     printAssembly(test.label, outcome)
     print(String(format: "Sibling-contact regression, pieces 0 and 247: first %.3f ms, scalar impulse %.6f N·s/m, step ΔE at previous rejection %+.7f J/m",
                  1000 * (outcome.firstSiblingContact ?? 0), outcome.siblingImpulse,
                  outcome.energyChangeAtFormerRejection ?? .infinity))
     require(outcome.error == nil && outcome.time >= scene.duration, "The sibling-contact reproducer rejected a step")
-    require((outcome.firstSiblingContact ?? .infinity) < 0.028771373 && outcome.siblingImpulse > 0,
-            "Sibling contact was missing before the previous rejection")
+    // The corrected forces change the trajectory. Check the same material
+    // pair at its actual collision and retain the former step as an energy check.
+    require(outcome.firstSiblingContact != nil && outcome.siblingImpulse > 0,
+            "Sibling contact was missing from the completed replay")
     require(outcome.imbalance < 0.005 && abs(outcome.energyChangeAtFormerRejection ?? .infinity) < 1e-3,
             "Sibling-contact activation created an energy jump")
+    require(outcome.selfContactTopologyJump < 1e-10 && outcome.penetration <= 0.02,
+            "Sibling contact added energy at fixed positions or exceeded the penetration gate")
     require(max(outcome.momentum, outcome.angularMomentum) < 1e-9, "Sibling contact lost momentum")
     // The full study applies the separate 2% penetration gate.
 }
@@ -192,12 +199,11 @@ func detachmentContactCheck() throws -> Bool {
         }
     }
     for event in s.detachmentProbes {
-        let oldClosure = event.oldClosure.map { String(format: "%.8f", $0) } ?? "unavailable"
-        print(String(format: "Detachment %.6f ms, domains %d → %d, paired closure at fixed positions %@ → %.8f J/m",
-                     1000 * event.time, event.oldTopology.pieces, event.newTopology.pieces, oldClosure, event.newClosure))
-        for (label, snapshot) in [("old topology, trial positions", event.oldTopology),
-                                  ("new topology, previous positions", event.newTopologyAtOldPositions),
-                                  ("new topology, trial positions", event.newTopology)] {
+        print(String(format: "Detachment %.6f ms, domains %d → %d, triangle contact energy at fixed positions %.8f → %.8f J/m",
+                     1000 * event.time, event.oldTopology.pieces, event.newTopology.pieces, event.oldContact, event.newContact))
+        for (label, snapshot) in [("legacy probe on old domains, trial positions", event.oldTopology),
+                                  ("legacy probe on new domains, previous positions", event.newTopologyAtOldPositions),
+                                  ("legacy probe on new domains, trial positions", event.newTopology)] {
             print(String(format: "  %@: %d samples, %d edge crossings, U %.8f J/m, |ΣF| %.2e N/m, |Στ| %.2e N",
                          label, snapshot.features.count, snapshot.crossings.count, snapshot.energy,
                          simd_length(snapshot.residualForce), abs(snapshot.residualTorque)))
@@ -212,16 +218,21 @@ func detachmentContactCheck() throws -> Bool {
         }
     }
     let attemptedPeak = max(s.peakRelativePenetration, s.rejectedPenetration ?? 0)
-    let energyJumps = s.detachmentProbes.compactMap(\.energyJump)
-    let maxActivation = energyJumps.map(abs).max() ?? 0
+    let maxActivation = s.detachmentProbes.map { abs($0.energyJump) }.max() ?? 0
     print(String(format: "dt %.3f µs, accepted through %.6f ms, accepted/attempted penetration %.3f%%/%.3f%%, max energy error %.4f%%, ΔP %.2e, ΔL %.2e",
                  s.dt * 1e6, s.time * 1000, s.peakRelativePenetration * 100, attemptedPeak * 100, imbalance * 100, momentum, angularMomentum))
+    if let pair = s.rejectedContactDomains ?? s.peakContactDomains {
+        print("Peak penetration parts/pieces [\(pair.x):\(pair.y), \(pair.z):\(pair.w)]")
+    }
     print(String(format: "Largest fixed-position sibling contact energy change %.8f J/m (%.4f%% of initial energy)",
                  maxActivation, 100 * maxActivation / s.initialEnergy))
+    print(String(format: "Largest fixed-position self-contact energy change at node splitting %.8e J/m", s.maxInsertionContactJump))
+    print(String(format: "Largest fixed-position interbody contact energy change across topology %.8e J/m", s.maxInterbodyTopologyJump))
     if let failure = s.failure ?? s.initialIssue { print("STOPPED: \(failure)") }
     return s.failure == nil && s.initialIssue == nil && s.time >= scene.duration
         && s.detachmentProbes.contains { $0.newTopology.pieces >= 4 }
-        && energyJumps.count == s.detachmentProbes.count && maxActivation < 1e-10 * max(1, s.initialEnergy)
+        && max(maxActivation, s.maxInsertionContactJump) < 1e-10 * max(1, s.initialEnergy)
+        && s.maxInterbodyTopologyJump < 1e-10 * max(1, s.initialEnergy)
         && attemptedPeak <= 0.02 && imbalance < 0.005 && max(momentum, angularMomentum) < 1e-9
 }
 
@@ -367,6 +378,59 @@ func notchedBendStudy() throws -> Bool {
         crackPass = crackPass && pass
     }
     return crackPass
+}
+
+func elasticBendLoadingCheck() throws {
+    let depth = 0.005
+    let cases = studyCases()
+    let penalties = [1.0, 2.0, 4.0]
+    let stableSteps = try penalties.map { penalty in
+        try cases.map {
+            try AssemblySimulation($0.scene, refinement: $0.refinement, stepLimit: .infinity,
+                                   notchDepth: depth, interbodyStiffnessScale: penalty, insertionEnabled: false).dt
+        }.min()!
+    }
+    let commonStep = stableSteps.min()!
+    // Reproduce the archived step, then vary the contact stiffness at one fixed step.
+    for (penalty, dt) in [(1.0, stableSteps[0])] + penalties.map({ ($0, commonStep) }) {
+        var peaks: [Double] = []
+        for test in cases where test.refinement == 3 {
+            // The original loading peaks were both before 4.3 ms.
+            let scene = test.scene
+            let endpoint = 0.006
+            var run = try AssemblySimulation(scene, refinement: test.refinement, stepLimit: dt,
+                                             notchDepth: depth, interbodyStiffnessScale: penalty, insertionEnabled: false)
+            let specimen = run.body(0)
+            let p = specimen.mesh.reference
+            var masses = Array(repeating: 0.0, count: p.count)
+            for e in specimen.mesh.elements {
+                let u = p[e.b] - p[e.a], v = p[e.c] - p[e.a]
+                let third = abs(u.x * v.y - u.y * v.x) * specimen.material.density / 6
+                for i in [e.a, e.b, e.c] { masses[i] += third }
+            }
+            let striker = scene.parts[1], top = 0.5 * scene.parts[0].size.y
+            let footprint = p.indices.filter { abs(p[$0].y - top) < 1e-10 &&
+                abs(p[$0].x - striker.center.x) < 0.5 * striker.size.x }
+            let footprintMasses = footprint.map { masses[$0] }
+            var peak = 0.0, peakTime = 0.0
+            while run.time < endpoint && run.step() {
+                let load = run.normalLoad(0, 1)
+                if load > peak {
+                    peak = load
+                    peakTime = run.time
+                }
+            }
+            let reading = run.fractureReading(0)!
+            require(run.time >= endpoint && run.failure == nil && peak > 0 &&
+                    reading.insertedEdges == 0 && reading.dissipation == 0, "Elastic load control did not complete without damage")
+            let contact = run.firstContactTimes[SIMD2(0, 1)]!
+            print(String(format: "Penalty ×%.0f, %@, dt %.3f µs: peak %.2f N/m at %.3f ms (%.3f ms after contact). Struck boundary-node mass %.4f–%.4f kg/m, sum %.4f kg/m.",
+                         penalty, test.label, dt * 1e6, peak, 1000 * peakTime, 1000 * (peakTime - contact),
+                         footprintMasses.min()!, footprintMasses.max()!, footprintMasses.reduce(0, +)))
+            peaks.append(peak)
+        }
+        print(String(format: "Damage-disabled peak difference at penalty ×%.0f: %.2f%%", penalty, percentChange(peaks[0], peaks[1])))
+    }
 }
 
 func fractureStudy() throws -> Bool {

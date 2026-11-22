@@ -27,18 +27,17 @@ func slidingDetachmentPatch() {
         for node in [moving.a, moving.b, moving.c] { result[node] += Point(slip, compression) }
         return result
     }
-    func state(_ position: [Point]) -> (closure: Double, force: [Point], contact: ContactTopologyProbe) {
+    func state(_ position: [Point]) -> Int {
         var force = Array(repeating: Point.zero, count: reference.count)
-        let closure = patch.accumulate(position: position, reference: reference, force: &force)!
-        let contact = patch.probeContact(at: position)
+        require(patch.accumulate(position: position, reference: reference, force: &force, pairedClosure: false) == 0,
+                "Geometric closure was duplicated in the cohesive law")
         let torque = zip(position, force).reduce(0.0) { $0 + moment($1.0, $1.1) }
-        require(simd_length(force.reduce(.zero, +)) < 1e-9 && abs(torque) < 1e-9
-                && simd_length(contact.residualForce) < 1e-9 && abs(contact.residualTorque) < 1e-9,
-                "Contact or cohesive closure lost force or moment balance")
-        return (closure, force, contact)
+        require(simd_length(force.reduce(.zero, +)) < 1e-9 && abs(torque) < 1e-9,
+                "The cohesive patch lost force or moment balance")
+        return patch.reading.pieces
     }
     let inserted = state(reference)
-    require(split.sources.count > points.count && inserted.contact.pieces == 1 && inserted.closure == 0,
+    require(split.sources.count > points.count && inserted == 1,
             "Node splitting changed the collision topology or added contact energy at zero gap")
     let feature = SIMD3(0, 3, 4)
     let beforeSplitNode = mesh.elements[0].a
@@ -48,43 +47,70 @@ func slidingDetachmentPatch() {
             "Material corners did not track the new sector of a split node")
     let compression = min(0.001 * length, 0.1 * slipAtFailure)
     let increment = 1e-8 * slipAtFailure
-    let before = state(positions(slip: slipAtFailure - increment, compression: compression))
-    let after = state(positions(slip: slipAtFailure + increment, compression: compression))
-    let forceJump = zip(before.force, after.force).map { simd_length($0 - $1) }.max()!
-    let forceScale = after.force.map { simd_length($0) }.max()!
-    require(before.contact.pieces == 1 && after.contact.pieces == 2 &&
+    let stiffness = 120 * material.young
+    func probe(_ position: [Point]) -> TriangleContactProbe {
+        let contact = probeTriangleContact(mesh: split.mesh, positions: position, stiffness: stiffness)
+        let torque = zip(position, contact.force).reduce(0.0) { $0 + moment($1.0, $1.1) }
+        require(simd_length(contact.force.reduce(.zero, +)) < 1e-9 && abs(torque) < 1e-9,
+                "Triangle contact lost force or moment balance")
+        return contact
+    }
+    require(probe(reference).energy == 0, "Splitting at zero gap seeded contact energy")
+    let earlier = positions(slip: slipAtFailure - increment, compression: compression)
+    let later = positions(slip: slipAtFailure + increment, compression: compression)
+    let before = state(earlier), after = state(later)
+    let beforeContact = probe(earlier), afterContact = probe(later)
+    let forceJump = zip(beforeContact.force, afterContact.force).map { simd_length($0 - $1) }.max()!
+    let forceScale = afterContact.force.map { simd_length($0) }.max()!
+    require(before == 1 && after == 2 &&
             abs(patch.reading.dissipation - expectedWork) < 1e-12, "Patch did not detach at the prescribed work")
-    require(after.closure > 0 && abs(after.closure - before.closure) < 1e-13 &&
-            forceJump / forceScale < 1e-5 && after.contact.energy == 0
-            && !after.contact.features.isEmpty && after.contact.features.allSatisfy { $0.closureSeam != nil },
-            "Detachment changed live paired-face closure or counted it twice")
+    require(afterContact.energy > 0 && abs(afterContact.energy - beforeContact.energy) < 1e-10 &&
+            forceJump / forceScale < 1e-5, "Detachment changed live geometric closure")
 
     let slip = 0.15 * length
-    let openPosition = positions(slip: slip, compression: -compression)
-    let open = state(openPosition)
-    require(open.closure == 0 && open.contact.energy == 0, "A traction remained on an open, spent seam")
-    patch.finishMatchingContact(position: openPosition, overlapping: Set(open.contact.features.compactMap(\.closureSeam)))
-    let released = state(openPosition)
-    require(released.closure == 0 && released.contact.energy == 0, "Handoff introduced energy on an open seam")
-
+    let open = probe(positions(slip: slip, compression: -compression))
+    require(open.energy == 0 && open.force.allSatisfy { $0 == .zero }, "Traction remained on an open seam")
     let small = 1e-4 * compression
-    let touch = state(positions(slip: slip, compression: small))
-    let closed = state(positions(slip: slip, compression: compression))
-    let slid = state(positions(slip: 1.1 * slip, compression: compression))
-    let penetration = closed.contact.features.map(\.relativePenetration).max()!
-    let reaction = closed.contact.features.reduce(0.0) { $0 + abs($1.force.y) }
-    let touchReaction = touch.contact.features.reduce(0.0) { $0 + abs($1.force.y) }
-    let materialPairs = closed.contact.features.map { [$0.nodeCorners[0], $0.edgeCorners.x, $0.edgeCorners.y] }
-    require(closed.closure == 0 && closed.contact.energy > 0 && penetration < 0.02 &&
-            closed.contact.features.allSatisfy { $0.closureSeam == nil } && Set(materialPairs).count == materialPairs.count,
-            "Recontact missed or duplicated features, or exceeded the penetration gate")
-    require(abs(2 * closed.contact.energy - reaction * compression) < 1e-12 &&
-            abs(touchReaction / reaction - small / compression) < 1e-9 &&
-            abs(slid.contact.energy - closed.contact.energy) < 1e-12 &&
-            slid.contact.features.allSatisfy { abs($0.force.x) < 1e-9 },
-            "Free sliding or normal penalty work was inconsistent")
-    print(String(format: "Sliding patch: detachment ΔU %+.2e J/m, relative closure-force jump %.2e, recontact %.4f%% penetration, work %.6f J/m",
-                 after.closure - before.closure, forceJump / forceScale, 100 * penetration, patch.reading.dissipation))
+    let touching = probe(positions(slip: slip, compression: small))
+    let closedPosition = positions(slip: slip, compression: compression)
+    let closed = probe(closedPosition)
+    let slid = probe(positions(slip: 1.1 * slip, compression: compression))
+    let reaction = -(closed.force[moving.a] + closed.force[moving.b] + closed.force[moving.c])
+    let touchReaction = -(touching.force[moving.a] + touching.force[moving.b] + touching.force[moving.c])
+    let incrementY = 1e-4 * compression
+    let high = probe(positions(slip: slip, compression: compression + incrementY)).energy
+    let low = probe(positions(slip: slip, compression: compression - incrementY)).energy
+    require(closed.energy > 0 && closed.relativePenetration < 0.02 &&
+            abs((high - low) / (2 * incrementY) - reaction.y) < 1e-5,
+            "Recontact penalty work or penetration was inconsistent")
+    require(abs(touchReaction.y / reaction.y - small / compression) < 1e-9 &&
+            abs(slid.energy / closed.energy - 1) < 1e-6 && abs(reaction.x / reaction.y) < 1e-6,
+            "Frictionless sliding or force activation was inconsistent")
+
+    // Test a proper edge crossing with all six vertices outside the opposing triangle.
+    let edgeCrossing = [Point(-0.02, -0.001), Point(0.02, -0.001), Point(0, 0.001),
+                        Point(-0.001, -0.02), Point(0.001, -0.02), Point(0, 0.02)]
+    let crossingMesh = Mesh(reference: edgeCrossing, triangles: [(0, 1, 2), (3, 4, 5)], boundary: [])
+    let crossing = probeTriangleContact(mesh: crossingMesh, positions: edgeCrossing, stiffness: stiffness)
+    require(crossing.energy > 0 && crossing.force.contains { simd_length($0) > 0 },
+            "Contact missed an edge crossing with no contained vertices")
+    let step = 1e-8
+    var gradientError = 0.0
+    for i in edgeCrossing.indices {
+        for j in 0..<2 {
+            var plus = edgeCrossing, minus = edgeCrossing
+            plus[i][j] += step
+            minus[i][j] -= step
+            let upper = probeTriangleContact(mesh: crossingMesh, positions: plus, stiffness: stiffness).energy
+            let lower = probeTriangleContact(mesh: crossingMesh, positions: minus, stiffness: stiffness).energy
+            gradientError = max(gradientError, abs((upper - lower) / (2 * step) + crossing.force[i][j]))
+        }
+    }
+    require(gradientError < 1e-6 * crossing.force.map { simd_length($0) }.max()!,
+            "Edge crossing force is inconsistent with the contact potential")
+    print(String(format: "Sliding patch: live energy change %+.2e J/m, relative force change %.2e, recontact %.4f%% penetration, work %.6f J/m",
+                 afterContact.energy - beforeContact.energy, forceJump / forceScale,
+                 100 * closed.relativePenetration, patch.reading.dissipation))
 }
 
 private func cohesivePatchCheck() {
@@ -211,7 +237,8 @@ private func intactComplianceCheck() throws {
         return (body.mesh.reference.count, reaction / strain)
     }
     func arrival() throws -> Double {
-        var s = try AssemblySimulation(scene, refinement: 1, stepLimit: 0.9e-6)
+        // Use identical contact compliance for the bulk response comparison.
+        var s = try AssemblySimulation(scene, refinement: 1, stepLimit: 0.9e-6, interbodyStiffnessScale: 1)
         let mesh = s.body(0).mesh
         let gauge = mesh.elements.indices.filter { i in
             let e = mesh.elements[i]

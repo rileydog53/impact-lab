@@ -140,9 +140,12 @@ public struct AssemblySimulation: Sendable {
     package private(set) var rejectedEnergy: AssemblyEnergy?
     package private(set) var rejectedPenetration: Double?
     package private(set) var rejectedContactDomains: SIMD4<Int>?
-    package private(set) var rejectedClosureEnergy: Double?
+    package private(set) var peakContactDomains: SIMD4<Int>?
+    package private(set) var rejectedContactEnergy: Double?
     package var probeDetachment = false
     package private(set) var detachmentProbes: [DetachmentContactProbe] = []
+    package private(set) var maxInsertionContactJump = 0.0
+    package private(set) var maxInterbodyTopologyJump = 0.0
 
     package func contactTrack(_ corners: SIMD3<Int>, part: Int) -> ContactFeatureTrack? {
         fractures[part]?.contactTrack(corners, at: steps[part].body.position)
@@ -154,7 +157,10 @@ public struct AssemblySimulation: Sendable {
     public private(set) var fragmentContacts: [FragmentContactReading] = []
     private var steps: [BodyStep]
     private var fractures: [MaterialFracture?]
+    private var contactWorkspaces: [TriangleContact.Workspace]
     private let hasFracture: Bool
+    private let interbodyStiffnessScale: Double
+    private let insertionEnabled: Bool
     private let surfaces: [ContactSurface]
     private let pairs: [Pair]
     private let links: [AssemblyLink]
@@ -216,7 +222,8 @@ public struct AssemblySimulation: Sendable {
     }
 
     package init(_ scene: AssemblyScene, refinement: Int, stepLimit: Double,
-                 notchDepth: Double = 0, stepScale: Double = 1) throws {
+                 notchDepth: Double = 0, stepScale: Double = 1, interbodyStiffnessScale: Double? = nil,
+                 insertionEnabled: Bool = true) throws {
         try scene.validate()
         precondition(refinement > 0 && stepLimit > 0 && stepScale > 0 && notchDepth >= 0)
         self.scene = scene
@@ -227,7 +234,10 @@ public struct AssemblySimulation: Sendable {
             part.fracture.map { MaterialFracture(body: body, settings: $0) }
         }
         self.fractures = fractures
+        contactWorkspaces = Array(repeating: TriangleContact.Workspace(), count: bodies.count)
         hasFracture = scene.parts.contains { $0.fracture != nil }
+        self.interbodyStiffnessScale = interbodyStiffnessScale ?? (hasFracture ? 2 : 1)
+        self.insertionEnabled = insertionEnabled
         let surfaces = bodies.map(ContactSurface.init)
         self.surfaces = surfaces
         steps = zip(bodies, scene.parts).map { body, part in
@@ -241,7 +251,7 @@ public struct AssemblySimulation: Sendable {
         var issue: AssemblyError?
         for a in bodies.indices {
             for b in (a + 1)..<bodies.count {
-                let contact = BoundaryContact(left: surfaces[a], right: surfaces[b])
+                let contact = BoundaryContact(left: surfaces[a], right: surfaces[b], stiffnessScale: self.interbodyStiffnessScale)
                 pairs.append(Pair(a: a, b: b, contact: contact))
                 allowance[a] += 8 * contact.maximumStiffness
                 allowance[b] += 8 * contact.maximumStiffness
@@ -307,13 +317,76 @@ public struct AssemblySimulation: Sendable {
         body.mass.indices.reduce(0) { $0 + 0.5 * body.mass[$1] * simd_length_squared(body.velocity[$1]) }
     }
 
-    private mutating func fractureContact(fractures: inout [MaterialFracture?], energy: inout AssemblyEnergy,
+    private static let trianglePenalty = 120.0
+
+    private func interbodyPotential(part i: Int, fracture: MaterialFracture, position: [Point]) -> Double {
+        var energy = 0.0
+        for left in fracture.surfaces {
+            let p = left.positions(position), first = left.surface
+            let lb = ContactBounds(surface: first, position: p)
+            for j in steps.indices where j != i {
+                let q = steps[j].nextPosition
+                let others = fractures[j]?.surfaces.map { ($0.surface, $0.positions(q)) } ?? [(surfaces[j], q)]
+                for (second, positions) in others {
+                    let rb = ContactBounds(surface: second, position: positions)
+                    if !lb.intersects(rb) { continue }
+                    var lf = Array(repeating: Point.zero, count: p.count)
+                    var rf = Array(repeating: Point.zero, count: positions.count)
+                    let penalty = BoundaryContact(left: first, right: second, stiffnessScale: interbodyStiffnessScale)
+                    energy += penalty.accumulate(left: p, right: positions, leftBounds: lb, rightBounds: rb,
+                                                 leftForce: &lf, rightForce: &rf).energy
+                }
+            }
+        }
+        return energy
+    }
+
+    private mutating func selfContact(fractures: [MaterialFracture?], energy: inout AssemblyEnergy,
                                           penetration: inout Double, active: inout [SIMD2<Int>],
                                           loads: inout [FragmentPair: FragmentLoad], normal: inout [SIMD2<Int>: Double],
                                           deepest: inout SIMD4<Int>?) {
+        for i in steps.indices {
+            guard let fracture = fractures[i] else { continue }
+            let tree = fracture.contactTree
+            let body = steps[i].body
+            let state = tree.state(mesh: body.mesh, position: steps[i].nextPosition)
+            let parts = SIMD2(repeating: i)
+            var force = steps[i].nextApplied
+            tree.visit(state, stiffness: Self.trianglePenalty * body.material.young, workspace: &contactWorkspaces[i]) { hit in
+                let left = state.elements[hit.elements.x].nodes, right = state.elements[hit.elements.y].nodes
+                for j in 0..<3 {
+                    force[left[j]] += hit.force[j]
+                    force[right[j]] += hit.force[j + 3]
+                }
+                energy.contact += hit.energy
+                let a = fracture.piece(for: hit.elements.x), b = fracture.piece(for: hit.elements.y)
+                let pieces = SIMD2(min(a, b), max(a, b))
+                if hit.relativePenetration > penetration {
+                    penetration = hit.relativePenetration
+                    deepest = SIMD4(i, pieces.x, i, pieces.y)
+                }
+                guard a != b else { return }
+                if !active.contains(parts) { active.append(parts) }
+                normal[parts, default: 0] += hit.normalLoad
+                let exposed = hit.face < 3
+                    ? fracture.isExposed(corner: hit.elements.x * 3 + hit.face)
+                    : fracture.isExposed(corner: hit.elements.y * 3 + hit.face - 3)
+                let key = FragmentPair(parts: parts, pieces: pieces)
+                let previous = loads[key]
+                loads[key] = FragmentLoad(load: hit.normalLoad + (previous?.load ?? 0),
+                                          onExposedFace: exposed || (previous?.onExposedFace ?? false))
+            }
+            steps[i].nextApplied = force
+        }
+    }
+
+    private mutating func fractureContact(fractures: [MaterialFracture?], energy: inout AssemblyEnergy,
+                                          penetration: inout Double, active: inout [SIMD2<Int>],
+                                          loads: inout [FragmentPair: FragmentLoad], normal: inout [SIMD2<Int>: Double],
+                                          deepest: inout SIMD4<Int>?) {
+        // Keep the existing boundary penetration measurement as an independent
+        // check against deep crossings spanning more than one target triangle.
         var domains: [ContactDomain] = []
-        let matching = fractures.map { $0?.matchingFeatures() ?? [:] }
-        var overlapping = Array(repeating: Set<Int>(), count: fractures.count)
         for i in steps.indices {
             let position = steps[i].nextPosition
             if let fracture = fractures[i] {
@@ -330,21 +403,26 @@ public struct AssemblySimulation: Sendable {
                 guard leftBounds.intersects(rightBounds) else { continue }
                 let partPair = SIMD2(domains[a].part, domains[b].part)
                 let pieces = SIMD2(domains[a].proxy?.id ?? 0, domains[b].proxy?.id ?? 0)
-                let siblingContact = partPair.x == partPair.y && !matching[partPair.x].isEmpty
-                    ? MatchingContact(leftNodes: domains[a].proxy!.nodes, rightNodes: domains[b].proxy!.nodes,
-                                      seams: matching[partPair.x]) : nil
-                let contact = BoundaryContact(left: domains[a].surface, right: domains[b].surface)
-                let result = domains.withUnsafeMutableBufferPointer { buffer in
-                    let first = buffer.baseAddress!.advanced(by: a)
-                    let second = buffer.baseAddress!.advanced(by: b)
-                    let leftPosition = first.pointee.position, rightPosition = second.pointee.position
-                    let leftFaces = first.pointee.proxy?.exposedEdges ?? [], rightFaces = second.pointee.proxy?.exposedEdges ?? []
-                    return contact.accumulate(left: leftPosition, right: rightPosition, leftBounds: leftBounds,
-                                              rightBounds: rightBounds, leftForce: &first.pointee.force,
-                                              rightForce: &second.pointee.force, leftExposed: leftFaces, rightExposed: rightFaces,
-                                              matching: siblingContact)
+                if partPair.x == partPair.y {
+                    let left = domains[a], right = domains[b]
+                    let depth = BoundaryContact.relativePenetration(left.surface, at: left.position, bounds: left.bounds,
+                                                                    right.surface, at: right.position, bounds: right.bounds)
+                    if depth > penetration {
+                        penetration = depth
+                        deepest = SIMD4(partPair.x, pieces.x, partPair.y, pieces.y)
+                    }
+                    continue
                 }
-                if !result.matchingContacts.isEmpty { overlapping[partPair.x].formUnion(result.matchingContacts) }
+                let contact = BoundaryContact(left: domains[a].surface, right: domains[b].surface,
+                                              stiffnessScale: interbodyStiffnessScale)
+                let result = domains.withUnsafeMutableBufferPointer { buffer in
+                    let left = buffer.baseAddress!.advanced(by: a), right = buffer.baseAddress!.advanced(by: b)
+                    return contact.accumulate(left: left.pointee.position, right: right.pointee.position,
+                                              leftBounds: leftBounds, rightBounds: rightBounds,
+                                              leftForce: &left.pointee.force, rightForce: &right.pointee.force,
+                                              leftExposed: left.pointee.proxy?.exposedEdges ?? [],
+                                              rightExposed: right.pointee.proxy?.exposedEdges ?? [])
+                }
                 energy.contact += result.energy
                 if result.relativePenetration > penetration {
                     penetration = result.relativePenetration
@@ -360,9 +438,6 @@ public struct AssemblySimulation: Sendable {
                 }
             }
         }
-        for i in fractures.indices where !matching[i].isEmpty {
-            fractures[i]!.finishMatchingContact(position: steps[i].nextPosition, overlapping: overlapping[i])
-        }
         for domain in domains {
             if let proxy = domain.proxy {
                 proxy.apply(domain.force, to: &steps[domain.part].nextApplied)
@@ -370,6 +445,7 @@ public struct AssemblySimulation: Sendable {
                 steps[domain.part].nextApplied = domain.force
             }
         }
+
     }
 
     private mutating func recordFragmentLoads(_ loads: [FragmentPair: FragmentLoad]) {
@@ -437,7 +513,6 @@ public struct AssemblySimulation: Sendable {
         var nextNormal: [SIMD2<Int>: Double] = [:]
         var penetration = 0.0
         var deepest: SIMD4<Int>?
-        var closureEnergy = 0.0
         var nextFractures = fractures
         var fragmentLoads: [FragmentPair: FragmentLoad] = [:]
         var nextMaxima = maxima
@@ -455,41 +530,52 @@ public struct AssemblySimulation: Sendable {
             for i in steps.indices where nextFractures[i] != nil {
                 let position = steps[i].nextPosition
                 let mesh = steps[i].body.mesh
-                if let split = nextFractures[i]!.insert(position: position, piola: steps[i].trialPiola, mesh: mesh) {
+                let split = insertionEnabled
+                    ? nextFractures[i]!.insert(position: position, piola: steps[i].trialPiola, mesh: mesh) : nil
+                if let split {
                     beforeSplit.append((i, steps[i]))
+                    contactWorkspaces[i].origin.removeAll()
                     let balance = steps[i].splitNodes(mesh: split.mesh, sources: split.sources, dt: dt)
                     nextFractures[i]!.record(balance)
                 }
                 let newPosition = steps[i].nextPosition
                 let reference = steps[i].body.mesh.reference
-                guard let closure = nextFractures[i]!.accumulate(position: newPosition, reference: reference,
-                                                                force: &steps[i].nextApplied) else {
+                guard nextFractures[i]!.accumulate(position: newPosition, reference: reference,
+                                                   force: &steps[i].nextApplied, pairedClosure: false) != nil else {
                     failure = "A cohesive face collapsed in \(scene.parts[i].name)."
                     return false
                 }
-                trial.contact += closure
-                closureEnergy += closure
                 trial.cohesive += nextFractures[i]!.reading.storedEnergy
                 trial.fracture += nextFractures[i]!.reading.dissipation
                 if probeDetachment && i == 0 {
                     let old = fractures[i]!, new = nextFractures[i]!
-                    if old.surfaces.count != new.surfaces.count {
-                        // Re-evaluate closure at the same trial positions while keeping
-                        // the original collision domains for the ordinary contact probe.
-                        var oldClosureTopology = old
-                        var probeForce = Array(repeating: Point.zero, count: position.count)
-                        let oldClosure = oldClosureTopology.accumulate(position: position, reference: mesh.reference,
-                                                                       force: &probeForce)
-                        detachmentProbes.append(DetachmentContactProbe(time: time + dt,
-                            oldTopology: old.probeContact(at: position),
-                            newTopologyAtOldPositions: new.probeContact(at: steps[i].body.position),
-                            newTopology: new.probeContact(at: newPosition),
-                            oldClosure: oldClosure, newClosure: closure))
+                    let detached = old.surfaces.count != new.surfaces.count
+                    if split != nil || detached {
+                        let tree = old.contactTree
+                        let oldState = tree.state(mesh: mesh, position: position)
+                        let newState = tree.state(mesh: steps[i].body.mesh, position: newPosition)
+                        let stiffness = Self.trianglePenalty * steps[i].body.material.young
+                        var oldContact = 0.0, newContact = 0.0
+                        tree.visit(oldState, stiffness: stiffness) { oldContact += $0.energy }
+                        tree.visit(newState, stiffness: stiffness) { newContact += $0.energy }
+                        let before = interbodyPotential(part: i, fracture: old, position: position)
+                        let after = interbodyPotential(part: i, fracture: new, position: newPosition)
+                        maxInterbodyTopologyJump = max(maxInterbodyTopologyJump, abs(after - before))
+                        if split != nil { maxInsertionContactJump = max(maxInsertionContactJump, abs(newContact - oldContact)) }
+                        if detached {
+                            detachmentProbes.append(DetachmentContactProbe(time: time + dt,
+                                oldTopology: old.probeContact(at: position),
+                                newTopologyAtOldPositions: new.probeContact(at: steps[i].body.position),
+                                newTopology: new.probeContact(at: newPosition),
+                                oldContact: oldContact, newContact: newContact))
+                        }
                     }
                 }
             }
+            selfContact(fractures: nextFractures, energy: &trial, penetration: &penetration,
+                        active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest)
             if nextFractures.contains(where: { ($0?.reading.insertedEdges ?? 0) > 0 }) {
-                fractureContact(fractures: &nextFractures, energy: &trial, penetration: &penetration,
+                fractureContact(fractures: nextFractures, energy: &trial, penetration: &penetration,
                                 active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest)
             } else {
                 intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal)
@@ -497,7 +583,7 @@ public struct AssemblySimulation: Sendable {
             guard penetration <= 0.10 else {
                 rejectedPenetration = penetration
                 rejectedContactDomains = deepest
-                rejectedClosureEnergy = closureEnergy
+                rejectedContactEnergy = trial.contact
                 failure = "Contact overlapped by more than 10% of an edge. Try a slower impact or a different mesh."
                 return false
             }
@@ -550,7 +636,7 @@ public struct AssemblySimulation: Sendable {
                 rejectedEnergy = trial
                 rejectedPenetration = penetration
                 rejectedContactDomains = deepest
-                rejectedClosureEnergy = closureEnergy
+                rejectedContactEnergy = trial.contact
                 failure = "Energy imbalance exceeded 2%. Try a slower impact or a different mesh."
                 return false
             }
@@ -565,7 +651,10 @@ public struct AssemblySimulation: Sendable {
         for pair in active where firstContactTimes[pair] == nil { firstContactTimes[pair] = time }
         activeContacts = active
         normalLoads = nextNormal
-        peakRelativePenetration = max(peakRelativePenetration, penetration)
+        if penetration > peakRelativePenetration {
+            peakRelativePenetration = penetration
+            peakContactDomains = deepest
+        }
         accepted = true
         return true
     }

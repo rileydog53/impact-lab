@@ -125,7 +125,6 @@ package struct MaterialFracture: Sendable {
         let law: InsertedLaw
         var left, right: Edge // FEM node IDs.
         var maxima: Point
-        var handedOff = false
 
         var failed: Bool { min(maxima.x, maxima.y) >= law.finalOpening }
 
@@ -147,6 +146,8 @@ package struct MaterialFracture: Sendable {
     private let cornerStiffness: [Double]
     private var slots: [Int]
     private var interfaces: [Interface] = []
+    private var exposedCorners: Set<Int> = []
+    let contactTree: TriangleContact
     private var pieces: [Int]
     private var cornerNodes: [Int]
     private(set) var surfaces: [FractureSurface] = []
@@ -190,6 +191,7 @@ package struct MaterialFracture: Sendable {
         self.faces = faces
         cornerStiffness = stiffnesses
         exterior = pending.sorted { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }.map(\.value)
+        contactTree = TriangleContact(mesh: mesh)
         slots = Array(repeating: -1, count: faces.count)
         pieces = Array(repeating: 0, count: mesh.elements.count)
         rebuildSurfaces(reference: mesh.reference)
@@ -287,6 +289,8 @@ package struct MaterialFracture: Sendable {
             let seed = law.evaluate(gap: .zero, previous: law.onset, closes: true)
             reading.peakSeedTractionError = max(reading.peakSeedTractionError, simd_distance(seed.traction, item.traction) / strength)
             reading.peakBulkTractionGap = max(reading.peakBulkTractionGap, item.bulkGap)
+            exposedCorners.insert(face.left.a)
+            exposedCorners.insert(face.right.b)
             slots[item.index] = interfaces.count
             interfaces.append(Interface(face: item.index, law: law, left: edge(face.left), right: edge(face.right),
                                         maxima: Point(repeating: law.onset)))
@@ -341,7 +345,8 @@ package struct MaterialFracture: Sendable {
         }
     }
 
-    package mutating func accumulate(position: [Point], reference: [Point], force: inout [Point]) -> Double? {
+    package mutating func accumulate(position: [Point], reference: [Point], force: inout [Point],
+                                     pairedClosure: Bool = true) -> Double? {
         guard !interfaces.isEmpty else { return 0 }
         var values = reading
         values.damagedEdges = 0
@@ -354,15 +359,6 @@ package struct MaterialFracture: Sendable {
         for i in interfaces.indices {
             var seam = interfaces[i]
             let length = faces[seam.face].length
-            if seam.handedOff {
-                values.damagedEdges += 1
-                values.failedEdges += 1
-                values.crackLength += length
-                values.dissipation += length * toughness
-                let (gapA, gapB) = seam.gap(position)
-                values.separation = max(values.separation, simd_length(gapA), simd_length(gapB))
-                continue
-            }
             let frame = seam.frame(position)
             guard frame.length.isFinite && frame.length > 0.15 * length else { return nil }
             let (gapA, gapB) = seam.gap(position)
@@ -372,7 +368,7 @@ package struct MaterialFracture: Sendable {
                 let a = 1 - b
                 let gap = a * gapA + b * gapB
                 let local = Point(simd_dot(gap, frame.normal), simd_dot(gap, frame.tangent))
-                let sample = seam.law.evaluate(gap: local, previous: seam.maxima[q], closes: true)
+                let sample = seam.law.evaluate(gap: local, previous: seam.maxima[q], closes: pairedClosure)
                 seam.maxima[q] = sample.maximum
                 let traction = weight * (sample.traction.x * frame.normal + sample.traction.y * frame.tangent)
                 // Differentiate the rotating local frame as well as the gap.
@@ -400,32 +396,22 @@ package struct MaterialFracture: Sendable {
         return contactEnergy
     }
 
+    func piece(for element: Int) -> Int { pieces[element] }
+
+    func isExposed(corner: Int) -> Bool { exposedCorners.contains(corner) }
+
     func matchingFeatures() -> [SIMD3<Int>: Int] {
         guard surfaces.count > 1 else { return [:] }
         var features: [SIMD3<Int>: Int] = [:]
-        for (i, seam) in interfaces.enumerated() where seam.failed && !seam.handedOff {
+        // The legacy boundary probe labels matching hits for comparison
+        // with the old paired-closure formulation.
+        for (i, seam) in interfaces.enumerated() where seam.failed {
             let face = faces[seam.face]
             guard pieces[face.a] != pieces[face.b] else { continue }
             for node in [seam.left.a, seam.left.b] { features[SIMD3(node, seam.right.b, seam.right.a)] = i }
             for node in [seam.right.a, seam.right.b] { features[SIMD3(node, seam.left.a, seam.left.b)] = i }
         }
         return features
-    }
-
-    // Both representations must have zero contact energy at the handoff.
-    // An overlapping feature continues to carry a force via its closure law;
-    // other features on these same pieces are already handled by contact.
-    package mutating func finishMatchingContact(position: [Point], overlapping: Set<Int>) {
-        guard surfaces.count > 1 else { return }
-        for (i, seam) in interfaces.enumerated() where seam.failed && !seam.handedOff && !overlapping.contains(i) {
-            let face = faces[seam.face]
-            guard pieces[face.a] != pieces[face.b] else { continue }
-            let frame = seam.frame(position)
-            let (gapA, gapB) = seam.gap(position)
-            if min(simd_dot(gapA, frame.normal), simd_dot(gapB, frame.normal)) >= 0 {
-                interfaces[i].handedOff = true
-            }
-        }
     }
 
     func crackFaces(position: [Point]) -> [CrackFace] {

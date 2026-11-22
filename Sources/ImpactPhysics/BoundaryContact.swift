@@ -8,7 +8,6 @@ struct ContactResult {
     var normalLoad = 0.0
     var wallImpulse = 0.0
     var wallAngularImpulse = 0.0
-    var matchingContacts: Set<Int> = []
     var samples: [ContactSample] = []
 
     mutating func add(_ other: Self) {
@@ -19,7 +18,6 @@ struct ContactResult {
         normalLoad += other.normalLoad
         wallImpulse += other.wallImpulse
         wallAngularImpulse += other.wallAngularImpulse
-        if !other.matchingContacts.isEmpty { matchingContacts.formUnion(other.matchingContacts) }
     }
 }
 
@@ -95,9 +93,16 @@ struct BoundaryContact: Sendable {
 
     let left: ContactSurface
     let right: ContactSurface
+    let stiffnessScale: Double
+
+    init(left: ContactSurface, right: ContactSurface, stiffnessScale: Double = 1) {
+        self.left = left
+        self.right = right
+        self.stiffnessScale = stiffnessScale
+    }
 
     var maximumStiffness: Double {
-        max(left.stiffness.max() ?? 0, right.stiffness.max() ?? 0)
+        stiffnessScale * max(left.stiffness.max() ?? 0, right.stiffness.max() ?? 0)
     }
 
     func assemble(left leftPosition: [Point], right rightPosition: [Point],
@@ -121,10 +126,10 @@ struct BoundaryContact: Sendable {
         guard leftBounds.intersects(rightBounds) else { return result }
         Self.apply(from: left, at: leftPosition, to: right, at: rightPosition, bounds: rightBounds,
                    sourceForce: &leftForce, targetForce: &rightForce, exposed: rightExposed, result: &result,
-                   matching: matching, leftToRight: true, sample: sample)
+                   matching: matching, leftToRight: true, sample: sample, stiffnessScale: stiffnessScale)
         Self.apply(from: right, at: rightPosition, to: left, at: leftPosition, bounds: leftBounds,
                    sourceForce: &rightForce, targetForce: &leftForce, exposed: leftExposed, result: &result,
-                   matching: matching, leftToRight: false, sample: sample)
+                   matching: matching, leftToRight: false, sample: sample, stiffnessScale: stiffnessScale)
         return result
     }
 
@@ -132,7 +137,7 @@ struct BoundaryContact: Sendable {
                               to target: ContactSurface, at targetPosition: [Point], bounds: ContactBounds,
                               sourceForce: inout [Point], targetForce: inout [Point],
                               exposed: Set<SIMD2<Int>>, result: inout ContactResult,
-                              matching: MatchingContact?, leftToRight: Bool, sample: Bool) {
+                              matching: MatchingContact?, leftToRight: Bool, sample: Bool, stiffnessScale: Double) {
         for (i, stiffness) in zip(source.nodes, source.stiffness) where stiffness > 0 {
             let node = sourcePosition[i]
             guard bounds.contains(node), let hit = boundaryHit(node, target: target, position: targetPosition) else {
@@ -146,7 +151,7 @@ struct BoundaryContact: Sendable {
                 let targetNodes = leftToRight ? matching.rightNodes : matching.leftNodes
                 closure = matching.seams[SIMD3(sourceNodes[i], targetNodes[hit.edge.a], targetNodes[hit.edge.b])]
             }
-            let load = closure == nil ? stiffness * hit.distance : 0
+            let load = closure == nil ? stiffnessScale * stiffness * hit.distance : 0
             let energy = 0.5 * load * hit.distance
             if sample {
                 result.samples.append(ContactSample(leftToRight: leftToRight, node: i, edgeIndex: hit.edgeIndex,
@@ -154,10 +159,7 @@ struct BoundaryContact: Sendable {
                                                     fraction: hit.fraction, load: load, energy: energy,
                                                     normal: hit.normal, closureSeam: closure))
             }
-            if let closure {
-                result.matchingContacts.insert(closure)
-                continue // Its paired closure law supplies this reaction.
-            }
+            if closure != nil { continue } // Omitted only by the legacy probe.
             result.normalLoad += load
             let force = load * hit.normal
             sourceForce[i] += force
@@ -181,6 +183,19 @@ struct BoundaryContact: Sendable {
             }
         }
         return inside
+    }
+
+    static func relativePenetration(_ left: ContactSurface, at lp: [Point], bounds lb: ContactBounds,
+                                    _ right: ContactSurface, at rp: [Point], bounds rb: ContactBounds) -> Double {
+        var maximum = 0.0
+        for (source, positions, target, opposite, bounds) in [(left, lp, right, rp, rb), (right, rp, left, lp, lb)] {
+            for (node, stiffness) in zip(source.nodes, source.stiffness) where stiffness > 0 && bounds.contains(positions[node]) {
+                if let hit = boundaryHit(positions[node], target: target, position: opposite) {
+                    maximum = max(maximum, hit.distance / hit.length)
+                }
+            }
+        }
+        return maximum
     }
 
     private static func boundaryHit(_ node: Point, target: ContactSurface, position: [Point]) -> Hit? {

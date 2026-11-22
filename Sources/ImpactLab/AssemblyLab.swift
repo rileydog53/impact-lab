@@ -405,17 +405,21 @@ struct AssemblyLab: View {
             experiment.advance(to: experiment.scene.duration)
             let matched = SceneTrace.matching(base, experiment.samples)
             result.append("refinement aligned fracture output=\(experiment.finished && matched.count == base.count && matched.contains { $0.referenceSample.crackLength != $0.currentSample.crackLength })")
+            NSApplication.shared.activate(ignoringOtherApps: true)
             compare = true
-            try? await Task.sleep(for: .milliseconds(450))
+            for _ in 0..<20 where !NSApplication.shared.windows.contains(where: { $0.attachedSheet?.isVisible == true }) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             result.append("native window=\(NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" })")
             result.append("comparison sheet=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
             compare = false
             var contactScene = try AssemblyScene.open(sceneURL)
-            contactScene.meshResolution = .extraFine
+            contactScene.meshResolution = .fine
+            contactScene.parts[0].fracture?.meshPattern = .staggered
             try experiment.configure(contactScene)
             experiment.select(specimen)
             showPieces = true
-            experiment.advance(to: 0.0402)
+            experiment.advance(to: 0.060)
             result.append("paused after observed receiver contact=\(!experiment.running && experiment.simulation.fragmentContacts.contains { $0.parts == SIMD2(0, 4) && $0.onExposedFace && $0.normalImpulse > 0 })")
         } catch {
             result.append("error=\(error.localizedDescription)")

@@ -32,12 +32,9 @@ package struct ContactTopologyProbe: Sendable {
 package struct DetachmentContactProbe: Sendable {
     package let time: Double
     package let oldTopology, newTopologyAtOldPositions, newTopology: ContactTopologyProbe
-    package let oldClosure: Double?
-    package let newClosure: Double
+    package let oldContact, newContact: Double
 
-    package var energyJump: Double? {
-        oldClosure.map { newTopology.energy + newClosure - (oldTopology.energy + $0) }
-    }
+    package var energyJump: Double { newContact - oldContact }
 }
 
 extension MaterialFracture {
