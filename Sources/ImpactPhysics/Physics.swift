@@ -167,37 +167,64 @@ public struct Body: Sendable {
 
 public struct Diagnostics: Sendable {
     public let kinetic, elastic, contact: Double
+    public let hardening, plasticDissipation, appliedWork, peakOutOfPlaneStress: Double
     public let relativeEnergyError: Double
     public let momentum: Point
     public let angularMomentum: Double
+}
+
+private struct ElementHistory: Sendable {
+    let model: J2Model
+    var current: [J2History]
+    var next: [J2History]
+
+    init(model: J2Model, count: Int) {
+        self.model = model
+        current = Array(repeating: J2History(), count: count)
+        next = current
+    }
+
+    mutating func accept() { swap(&current, &next) }
+}
+
+private struct ElementEnergy: Sendable {
+    var elastic = 0.0
+    var hardening = 0.0
+    var dissipation = 0.0
+    var peakOutOfPlaneStress = 0.0
+    var meanPlasticStrain = 0.0
+    var peakPlasticStrain = 0.0
+    var total: Double { elastic + hardening + dissipation }
 }
 
 private struct BodyStep: Sendable {
     var body: Body
     var strain: [Double]
     var internalForce: [Point]
-    var contactForce: [Point]
+    var appliedForce: [Point]
     var nextInternal: [Point]
-    var nextContact: [Point]
+    var nextApplied: [Point]
     var nextPosition: [Point]
     var nextVelocity: [Point]
     var nextStrain: [Double]
+    var history: ElementHistory?
 
-    init(_ body: Body) {
+    init(_ body: Body, j2: J2Model? = nil) {
         self.body = body
         strain = Array(repeating: 0, count: body.mesh.elements.count)
         nextStrain = strain
         internalForce = Array(repeating: .zero, count: body.mass.count)
-        contactForce = internalForce
+        appliedForce = internalForce
         nextInternal = internalForce
-        nextContact = internalForce
+        nextApplied = internalForce
         nextPosition = body.position
         nextVelocity = body.velocity
+        history = j2.map { ElementHistory(model: $0, count: body.mesh.elements.count) }
     }
 
     mutating func drift(_ dt: Double) -> Bool {
         for i in body.mass.indices {
-            let acceleration = (internalForce[i] + contactForce[i]) / body.mass[i]
+            let acceleration = (internalForce[i] + appliedForce[i]) / body.mass[i]
             let position = body.position[i] + dt * (body.velocity[i] + 0.5 * dt * acceleration)
             guard position.x.isFinite && position.y.isFinite else { return false }
             nextPosition[i] = position
@@ -205,13 +232,14 @@ private struct BodyStep: Sendable {
         return true
     }
 
-    mutating func assemble() -> Double? {
-        Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain)
+    mutating func assemble() -> ElementEnergy? {
+        Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain,
+                            history: &history)
     }
 
     mutating func kick(_ dt: Double) -> Bool {
         for i in body.mass.indices {
-            let force = internalForce[i] + contactForce[i] + nextInternal[i] + nextContact[i]
+            let force = internalForce[i] + appliedForce[i] + nextInternal[i] + nextApplied[i]
             let velocity = body.velocity[i] + (0.5 * dt / body.mass[i]) * force
             guard velocity.x.isFinite && velocity.y.isFinite else { return false }
             nextVelocity[i] = velocity
@@ -223,8 +251,9 @@ private struct BodyStep: Sendable {
         swap(&body.velocity, &nextVelocity)
         swap(&body.position, &nextPosition)
         swap(&internalForce, &nextInternal)
-        swap(&contactForce, &nextContact)
+        swap(&appliedForce, &nextApplied)
         swap(&strain, &nextStrain)
+        history?.accept()
     }
 }
 
@@ -235,6 +264,12 @@ public struct Simulation: Sendable {
     public var strain: [Double] { primary.strain }
     public var secondBody: Body? { secondary?.body }
     public var secondStrain: [Double]? { secondary?.strain }
+    public var plasticStrain: [Double] { primary.history?.current.map(\.equivalentStrain) ?? [] }
+    public var meanPlasticStrain: Double { primaryEnergy.meanPlasticStrain }
+    public var peakPlasticStrain: Double { primaryEnergy.peakPlasticStrain }
+    public var gaugeLength: Double? { tension?.length(of: body.position) }
+    public var appliedTraction: Double { tension?.traction(at: time) ?? 0 }
+    public var loadReleaseTime: Double? { tension?.releaseTime }
     public private(set) var time = 0.0
     public private(set) var failure: String?
     public private(set) var wallImpulse = 0.0
@@ -242,11 +277,14 @@ public struct Simulation: Sendable {
     public private(set) var peakPenetration = 0.0
     public private(set) var peakRelativePenetration = 0.0
     private let initialKinetic: Double
-    private var elasticEnergy = 0.0
+    private var primaryEnergy = ElementEnergy()
+    private var secondaryEnergy = ElementEnergy()
     private var contactEnergy = 0.0
+    private var appliedWork = 0.0
     private var primary: BodyStep
     private var secondary: BodyStep?
     private let pairContact: BoundaryContact?
+    private let tension: TensionLoad?
 
     public init(mesh: Mesh = .bar(), material: Material = Material(), speed: Double = 0.4,
                 gap: Double = 0.0005, penalty: Double = 2500, stepScale: Double = 1, tilt: Double = 0) {
@@ -256,15 +294,16 @@ public struct Simulation: Sendable {
     }
 
     init(primary: Body, secondary: Body? = nil, pairContact: BoundaryContact? = nil,
-         gap: Double, stepScale: Double) {
+         gap: Double, stepScale: Double, tension: TensionLoad? = nil, j2: J2Model? = nil) {
         let material = primary.material
         precondition(material.young > 0 && material.density > 0 && abs(material.poisson) < 0.5)
         precondition(stepScale > 0 && stepScale <= 1)
         precondition((secondary == nil) == (pairContact == nil))
-        self.primary = BodyStep(primary)
-        self.secondary = secondary.map(BodyStep.init)
+        self.primary = BodyStep(primary, j2: j2)
+        self.secondary = secondary.map { BodyStep($0) }
         self.pairContact = pairContact
         self.gap = gap
+        self.tension = tension
         func kineticEnergy(_ body: Body) -> Double {
             zip(body.mass, body.velocity).reduce(0) { $0 + 0.5 * $1.0 * simd_length_squared($1.1) }
         }
@@ -318,9 +357,12 @@ public struct Simulation: Sendable {
         }
         accumulate(body)
         if let secondBody { accumulate(secondBody) }
-        let relativeError = (kinetic + elasticEnergy + contactEnergy - initialKinetic)
-            / max(initialKinetic, Double.leastNormalMagnitude)
-        return Diagnostics(kinetic: kinetic, elastic: elasticEnergy, contact: contactEnergy,
+        let relativeError = (kinetic + primaryEnergy.total + secondaryEnergy.total + contactEnergy - initialKinetic - appliedWork)
+            / max(tension?.referenceEnergy ?? initialKinetic, Double.leastNormalMagnitude)
+        return Diagnostics(kinetic: kinetic, elastic: primaryEnergy.elastic + secondaryEnergy.elastic, contact: contactEnergy,
+                           hardening: primaryEnergy.hardening + secondaryEnergy.hardening,
+                           plasticDissipation: primaryEnergy.dissipation + secondaryEnergy.dissipation,
+                           appliedWork: appliedWork, peakOutOfPlaneStress: primaryEnergy.peakOutOfPlaneStress,
                            relativeEnergyError: relativeError, momentum: momentum,
                            angularMomentum: angularMomentum)
     }
@@ -328,7 +370,8 @@ public struct Simulation: Sendable {
     package func internalForces(at position: [Point]) -> [Point]? {
         var forces = primary.internalForce
         var strain = strain
-        guard Self.assemble(body: body, position: position, forces: &forces, strain: &strain) != nil
+        var history = primary.history
+        guard Self.assemble(body: body, position: position, forces: &forces, strain: &strain, history: &history) != nil
         else { return nil }
         return forces
     }
@@ -341,20 +384,24 @@ public struct Simulation: Sendable {
             failure = "Position became non-finite."
             return false
         }
-        guard let firstElastic = primary.assemble(),
-              let secondElastic = secondary == nil ? 0 : secondary?.assemble() else {
+        guard let firstEnergy = primary.assemble(),
+              let secondEnergy = secondary == nil ? ElementEnergy() : secondary?.assemble() else {
             failure = "An element inverted or its stress became non-finite."
             return false
         }
-        let nextElastic = firstElastic + secondElastic
         var contact = ContactResult()
+        var work = 0.0
         if let pairContact {
             contact = pairContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
-                                           leftForce: &primary.nextContact, rightForce: &secondary!.nextContact)
+                                           leftForce: &primary.nextApplied, rightForce: &secondary!.nextApplied)
         } else if primary.body.hasWall {
             contact = wallContact()
+        } else if let tension {
+            work = tension.apply(from: primary.body.position, to: primary.nextPosition, time: time,
+                                 dt: dt, forces: &primary.nextApplied)
         }
-        guard (contact.energy + nextElastic).isFinite, (wallImpulse + contact.wallImpulse).isFinite,
+        guard (contact.energy + firstEnergy.total + secondEnergy.total).isFinite, (appliedWork + work).isFinite,
+              (wallImpulse + contact.wallImpulse).isFinite,
               (wallAngularImpulse + contact.wallAngularImpulse).isFinite else {
             failure = "Contact energy or impulse became non-finite."
             return false
@@ -366,8 +413,10 @@ public struct Simulation: Sendable {
         primary.accept()
         secondary?.accept()
         time += dt
-        elasticEnergy = nextElastic
+        primaryEnergy = firstEnergy
+        secondaryEnergy = secondEnergy
         contactEnergy = contact.energy
+        appliedWork += work
         wallImpulse += contact.wallImpulse
         wallAngularImpulse += contact.wallAngularImpulse
         peakPenetration = max(peakPenetration, contact.penetration)
@@ -380,8 +429,8 @@ public struct Simulation: Sendable {
         for i in primary.body.boundaryNodes {
             let overlap = max(0, primary.nextPosition[i].x)
             let reaction = primary.body.wallStiffness[i] * overlap
-            let previousReaction = primary.contactForce[i].x
-            primary.nextContact[i] = Point(-reaction, 0)
+            let previousReaction = primary.appliedForce[i].x
+            primary.nextApplied[i] = Point(-reaction, 0)
             result.penetration = max(result.penetration, overlap)
             result.energy += 0.5 * reaction * overlap
             // Trapezoidal wall kicks match the velocity updates. Torque is
@@ -393,12 +442,13 @@ public struct Simulation: Sendable {
         return result
     }
 
-    static func assemble(body: Body, position: [Point], forces: inout [Point],
-                         strain: inout [Double]) -> Double? {
+    fileprivate static func assemble(body: Body, position: [Point], forces: inout [Point],
+                                     strain: inout [Double], history: inout ElementHistory?) -> ElementEnergy? {
         for i in forces.indices { forces[i] = .zero }
         let uniformMu = body.material.shear
         let uniformLambda = body.material.lambda
-        var energy = 0.0
+        var energy = ElementEnergy()
+        var plasticArea = 0.0
         for (i, e) in body.mesh.elements.enumerated() {
             let material = body.elementMaterials?[i]
             let mu = material?.shear ?? uniformMu
@@ -409,23 +459,39 @@ public struct Simulation: Sendable {
             let fy = u * e.g1.y + v * e.g2.y
             let j = cross2D(fx, fy)
             guard j > 0, j.isFinite else { return nil }
-            // P = mu F + (lambda ln J - mu) F^(-T), with Fzz = 1.
-            let logJ = log(j)
-            let pressure = (lambda * logJ - mu) / j
-            let px = -e.area * (mu * fx + pressure * Point(fy.y, -fy.x))
-            let py = -e.area * (mu * fy + pressure * Point(-fx.y, fx.x))
+            let xx = simd_length_squared(fx)
+            let yy = simd_length_squared(fy)
+            strain[i] = 0.5 * ((body.measuresVerticalStrain ? yy : xx) - 1)
+            let px, py: Point
+            if let model = history?.model {
+                guard let response = model.update(x: fx, y: fy, from: history!.current[i]) else { return nil }
+                history!.next[i] = response.history
+                px = -e.area * response.piolaX
+                py = -e.area * response.piolaY
+                let alpha = response.history.equivalentStrain
+                plasticArea += e.area
+                energy.meanPlasticStrain += e.area * alpha
+                energy.peakPlasticStrain = max(energy.peakPlasticStrain, alpha)
+                energy.peakOutOfPlaneStress = max(energy.peakOutOfPlaneStress, abs(response.cauchyZZ))
+                energy.elastic += e.area * response.elasticEnergy
+                energy.hardening += e.area * response.hardeningEnergy
+                energy.dissipation += e.area * response.dissipation
+            } else {
+                // P = mu F + (lambda ln J - mu) F^(-T), with Fzz = 1.
+                let logJ = log(j)
+                let pressure = (lambda * logJ - mu) / j
+                px = -e.area * (mu * fx + pressure * Point(fy.y, -fy.x))
+                py = -e.area * (mu * fy + pressure * Point(-fx.y, fx.x))
+                energy.elastic += e.area * (0.5 * mu * (xx + yy - 2 - 2 * logJ) + 0.5 * lambda * logJ * logJ)
+            }
             guard px.x.isFinite && px.y.isFinite && py.x.isFinite && py.y.isFinite else {
                 return nil
             }
             forces[e.a] += px * e.g0.x + py * e.g0.y
             forces[e.b] += px * e.g1.x + py * e.g1.y
             forces[e.c] += px * e.g2.x + py * e.g2.y
-            let xx = simd_length_squared(fx)
-            let yy = simd_length_squared(fy)
-            strain[i] = 0.5 * ((body.measuresVerticalStrain ? yy : xx) - 1)
-            energy += e.area * (0.5 * mu * (xx + yy - 2 - 2 * logJ)
-                                + 0.5 * lambda * logJ * logJ)
         }
-        return energy.isFinite ? energy : nil
+        if plasticArea > 0 { energy.meanPlasticStrain /= plasticArea }
+        return energy.total.isFinite ? energy : nil
     }
 }

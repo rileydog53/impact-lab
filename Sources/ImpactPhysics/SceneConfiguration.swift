@@ -22,6 +22,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public var targetVelocityX = 0.0
     public var velocityY = 0.0
     public var mirrored = false
+    public var tension: TensionSettings?
 
     public static let youngRange = 0.5e6...4e6
     public static let densityRange = 500.0...2500.0
@@ -47,6 +48,9 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
             SceneConfiguration(preset: preset, first: .init(width: 1, height: 0.10),
                                second: .init(width: 0.80, height: 0.10, material: Material(young: 4e6)),
                                gap: 0, speed: 0.05)
+        case .tensionCoupon:
+            SceneConfiguration(preset: preset, first: .init(width: 0.30, height: 0.06, material: Material(poisson: 0.25)),
+                               gap: 0, speed: 0, tension: TensionSettings())
         }
     }
 
@@ -62,7 +66,13 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         return isPair || isBonded ? (x - 0.025)...(x + 0.025) : 0...0
     }
     public var targetVelocityXRange: ClosedRange<Double> { isPair || isBonded ? -0.15...0.15 : 0...0 }
-    public var speedRange: ClosedRange<Double> { isBonded ? 0.01...0.10 : 0.10...1.0 }
+    public var speedRange: ClosedRange<Double> {
+        switch preset {
+        case .tensionCoupon: 0...0
+        case .bondedBar: 0.01...0.10
+        default: 0.10...1.0
+        }
+    }
     public var puckOffsetRange: ClosedRange<Double> { preset == .puckStrip ? 0.04...0.07 : 0...0 }
 
     public static func sizeRange(_ nominal: Double) -> ClosedRange<Double> {
@@ -79,6 +89,8 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .twoBars: duration = 0.070
         case .puckStrip: duration = 0.11
         case .bondedBar: return 1.05 * first.width / first.material.waveSpeed
+        case .tensionCoupon:
+            return (2 * TensionLoad.rampTransits + TensionLoad.settleTransits) * first.width / first.material.waveSpeed
         }
         let firstWidth = first.width / reference.first.width
         let firstHeight = (first.height ?? 1) / (reference.first.height ?? 1)
@@ -116,6 +128,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
               gapRange.contains(gap), speedRange.contains(speed), targetXRange.contains(targetX),
               targetVelocityXRange.contains(targetVelocityX), puckOffsetRange.contains(puckOffsetY),
               Self.centerYRange.contains(centerY), Self.velocityYRange.contains(velocityY),
+              preset == .tensionCoupon ? tension?.isValid == true && velocityY == 0 : tension == nil,
               !mirrored || preset == .block else {
             throw SceneFileError.invalidConfiguration
         }
@@ -124,6 +137,12 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public func makeSimulation() throws -> Simulation {
         try validate()
         return buildSimulation()
+    }
+
+    package func refinedTension(columns: Int, rows: Int, stepScale: Double) throws -> Simulation {
+        try validate()
+        precondition(preset == .tensionCoupon)
+        return Simulation.tensionCoupon(scene: self, columns: columns, rows: rows, stepScale: stepScale)
     }
 
     func buildSimulation() -> Simulation {
@@ -135,6 +154,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .twoBars: return Simulation.alignedBars(scene: self)
         case .puckStrip: return Simulation.puckAndStrip(scene: self)
         case .bondedBar: return Simulation.bondedBar(scene: self)
+        case .tensionCoupon: return Simulation.tensionCoupon(scene: self, columns: 32, rows: 6, stepScale: 1)
         }
         let body = Body(mesh: mesh, material: first.material, velocity: Point(speed, velocityY),
                         gap: gap, penalty: 2500, tilt: preset == .block ? (mirrored ? -Preset.blockTilt : Preset.blockTilt) : 0,

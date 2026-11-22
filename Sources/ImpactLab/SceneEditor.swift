@@ -8,11 +8,24 @@ struct SceneEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            DisclosureGroup("Initial conditions") {
-                VStack(alignment: .leading, spacing: 9) {
-                    initialControls
+            if let tension = scene.tension {
+                DisclosureGroup("Loading and yield") {
+                    VStack(alignment: .leading, spacing: 9) {
+                        tensionControl("Peak end stress / E", tension, key: \.peakFraction, range: TensionSettings.peakRange)
+                        if tension.response == .elastoplastic {
+                            tensionControl("Yield stress / E", tension, key: \.yieldFraction, range: TensionSettings.yieldRange)
+                            tensionControl("Hardening / E", tension, key: \.hardeningFraction, range: TensionSettings.hardeningRange)
+                        }
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
+            } else {
+                DisclosureGroup("Initial conditions") {
+                    VStack(alignment: .leading, spacing: 9) {
+                        initialControls
+                    }
+                    .padding(.top, 8)
+                }
             }
             DisclosureGroup(scene.second == nil ? "Material and dimensions" : firstLabel) {
                 specimenControls(second: false)
@@ -72,7 +85,8 @@ struct SceneEditor: View {
         let diameter = !second && (scene.preset == .puckStrip || scene.preset == .ring)
         let sharedHeight = scene.sharesHeight ? "Shared height" : "Height"
         return VStack(alignment: .leading, spacing: 9) {
-            specimenControl(diameter ? "Diameter" : "Width", unit: "mm", second: second,
+            let widthLabel = scene.tension != nil ? "Length" : (diameter ? "Diameter" : "Width")
+            specimenControl(widthLabel, unit: "mm", second: second,
                             range: SceneConfiguration.sizeRange(nominal.width), scale: 1000, digits: 1,
                             read: { $0.width }, write: { $0.width = $1 })
             if let height = nominal.height, !second || !scene.sharesHeight {
@@ -101,6 +115,15 @@ struct SceneEditor: View {
                             read: { $0.material.poisson }, write: { $0.material.poisson = $1 })
         }
         .padding(.top, 8)
+    }
+
+    private func tensionControl(_ label: String, _ tension: TensionSettings, key: WritableKeyPath<TensionSettings, Double>,
+                                range: ClosedRange<Double>) -> some View {
+        slider(label, unit: "%", value: tension[keyPath: key], range: range, scale: 100, digits: 1) { value in
+            var draft = scene
+            draft.tension?[keyPath: key] = value
+            experiment.edit(draft)
+        }
     }
 
     private func sceneControl(_ label: String, unit: String, key: WritableKeyPath<SceneConfiguration, Double>,

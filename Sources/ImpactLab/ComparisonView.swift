@@ -4,12 +4,15 @@ import SwiftUI
 struct ComparisonView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var cursor: Double
-    let preset: Preset
+    let reference: SceneTrace
+    let current: SceneTrace
     let samples: [SceneTrace.Match]
+    private var preset: Preset { current.preset }
 
-    init(preset: Preset, samples: [SceneTrace.Match]) {
-        self.preset = preset
-        self.samples = samples
+    init(reference: SceneTrace, current: SceneTrace) {
+        self.reference = reference
+        self.current = current
+        samples = current.matching(reference)
         _cursor = State(initialValue: Double(max(0, samples.count - 1)))
     }
 
@@ -20,6 +23,8 @@ struct ComparisonView: View {
         case .ring: [("Horizontal diameter", "mm", \.x, .mint), ("Vertical diameter", "mm", \.y, .orange)]
         case .twoBars: [("Left bar", "m/s", \.x, .mint), ("Right bar", "m/s", \.y, .orange)]
         case .puckStrip: [("Puck", "m/s", \.x, .mint), ("Strip", "m/s", \.y, .orange)]
+        case .tensionCoupon:
+            [("Length change", "mm", \.x, .mint), ("Mean plastic strain", "%", \.y, .orange)]
         }
     }
 
@@ -36,10 +41,13 @@ struct ComparisonView: View {
             if samples.count > 1 {
                 let selected = samples[Int(cursor)]
                 HStack(spacing: 18) {
-                    Label("Reference · dashed", systemImage: "line.diagonal")
-                    Label("Current · solid", systemImage: "line.horizontal")
+                    Label("\(reference.couponResponse?.rawValue ?? "Reference") · dashed", systemImage: "line.diagonal")
+                    Label("\(current.couponResponse?.rawValue ?? "Current") · solid", systemImage: "line.horizontal")
                 }
                 .font(.caption).foregroundStyle(.secondary)
+                if preset == .tensionCoupon {
+                    Text("Length change (mm)").font(.caption).foregroundStyle(.secondary)
+                }
                 chart.frame(height: 190)
                 HStack {
                     Text("Simulated time").foregroundStyle(.secondary)
@@ -69,6 +77,14 @@ struct ComparisonView: View {
                             reading(current - reference, unit: signal.unit)
                         }
                     }
+                    if let referenceLength = reference.residualLength, let currentLength = current.residualLength {
+                        GridRow {
+                            Text("Residual length")
+                            reading(1000 * referenceLength, unit: "mm")
+                            reading(1000 * currentLength, unit: "mm")
+                            reading(1000 * (currentLength - referenceLength), unit: "mm")
+                        }
+                    }
                 }
             }
         }
@@ -84,7 +100,7 @@ struct ComparisonView: View {
 
     private var chart: some View {
         Canvas { context, size in
-            let signals = series
+            let signals = preset == .tensionCoupon ? Array(series.prefix(1)) : series
             let time = samples.last!.time
             var low = Double.infinity
             var high = -Double.infinity
