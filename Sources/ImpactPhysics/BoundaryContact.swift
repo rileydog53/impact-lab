@@ -4,6 +4,7 @@ struct ContactResult {
     var energy = 0.0
     var penetration = 0.0
     var relativePenetration = 0.0
+    var exposedFaceContact = false
     var wallImpulse = 0.0
     var wallAngularImpulse = 0.0
 
@@ -11,6 +12,7 @@ struct ContactResult {
         energy += other.energy
         penetration = max(penetration, other.penetration)
         relativePenetration = max(relativePenetration, other.relativePenetration)
+        exposedFaceContact = exposedFaceContact || other.exposedFaceContact
         wallImpulse += other.wallImpulse
         wallAngularImpulse += other.wallAngularImpulse
     }
@@ -22,8 +24,11 @@ struct ContactSurface: Sendable {
     let stiffness: [Double]
 
     init(body: Body) {
-        edges = body.mesh.boundary
-        let reference = body.mesh.reference
+        self.init(edges: body.mesh.boundary, reference: body.mesh.reference, young: body.material.young)
+    }
+
+    init(edges: [Edge], reference: [Point], young: Double) {
+        self.edges = edges
         var lengths: [Int: Double] = [:]
         for edge in edges {
             let halfLength = 0.5 * simd_distance(reference[edge.a], reference[edge.b])
@@ -32,7 +37,7 @@ struct ContactSurface: Sendable {
         }
         nodes = lengths.keys.sorted()
         // The two passes each carry half the tributary-length quadrature.
-        stiffness = nodes.map { 0.5 * lengths[$0]! * body.material.young * 2500 }
+        stiffness = nodes.map { 0.5 * lengths[$0]! * young * 2500 }
     }
 }
 
@@ -87,20 +92,21 @@ struct BoundaryContact: Sendable {
 
     func accumulate(left leftPosition: [Point], right rightPosition: [Point],
                     leftBounds: ContactBounds, rightBounds: ContactBounds,
-                    leftForce: inout [Point], rightForce: inout [Point]) -> ContactResult {
+                    leftForce: inout [Point], rightForce: inout [Point],
+                    leftExposed: Set<SIMD2<Int>> = [], rightExposed: Set<SIMD2<Int>> = []) -> ContactResult {
         var result = ContactResult()
         guard leftBounds.intersects(rightBounds) else { return result }
         Self.apply(from: left, at: leftPosition, to: right, at: rightPosition, bounds: rightBounds,
-                   sourceForce: &leftForce, targetForce: &rightForce, result: &result)
+                   sourceForce: &leftForce, targetForce: &rightForce, exposed: rightExposed, result: &result)
         Self.apply(from: right, at: rightPosition, to: left, at: leftPosition, bounds: leftBounds,
-                   sourceForce: &rightForce, targetForce: &leftForce, result: &result)
+                   sourceForce: &rightForce, targetForce: &leftForce, exposed: leftExposed, result: &result)
         return result
     }
 
     private static func apply(from source: ContactSurface, at sourcePosition: [Point],
                               to target: ContactSurface, at targetPosition: [Point], bounds: ContactBounds,
                               sourceForce: inout [Point], targetForce: inout [Point],
-                              result: inout ContactResult) {
+                              exposed: Set<SIMD2<Int>>, result: inout ContactResult) {
         for (i, stiffness) in zip(source.nodes, source.stiffness) {
             let node = sourcePosition[i]
             guard bounds.contains(node), let hit = boundaryHit(node, target: target, position: targetPosition) else {
@@ -114,6 +120,9 @@ struct BoundaryContact: Sendable {
             result.energy += 0.5 * load * hit.distance
             result.penetration = max(result.penetration, hit.distance)
             result.relativePenetration = max(result.relativePenetration, hit.distance / hit.length)
+            if !exposed.isEmpty, exposed.contains(SIMD2(hit.edge.a, hit.edge.b)) {
+                result.exposedFaceContact = true
+            }
         }
     }
 

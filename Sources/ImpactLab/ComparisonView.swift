@@ -10,10 +10,12 @@ struct ComparisonView: View {
     private let referenceResidual, currentResidual: Double?
     private let preset: Preset?
     private let samples: [SceneTrace.Match]
+    private let tracksFracture: Bool
 
     init(reference: SceneTrace, current: SceneTrace) {
         title = current.preset.rawValue
         preset = current.preset
+        tracksFracture = false
         referenceDetails = Self.details(reference)
         currentDetails = Self.details(current)
         referenceResidual = reference.residualLength
@@ -25,19 +27,26 @@ struct ComparisonView: View {
     init(reference: AssemblyComparison, current: AssemblyComparison) {
         title = "Assembly laboratory"
         preset = nil
+        tracksFracture = reference.tracksFracture || current.tracksFracture
         referenceDetails = reference.details
         currentDetails = current.details
         referenceResidual = nil
         currentResidual = nil
         samples = SceneTrace.matching(reference.samples, current.samples)
         _cursor = State(initialValue: Double(max(0, samples.count - 1)))
+        _selectedSignal = State(initialValue: tracksFracture ? 3 : 0)
     }
 
     private typealias Signal = (name: String, unit: String, value: KeyPath<TraceSample, Double>, color: Color)
     private var series: [Signal] {
         guard let preset else {
-            return [("Relative X", "mm", \.values.x, .mint), ("Body kinetic energy", "J/m", \.values.y, .orange),
+            let motion: [Signal] = [("Relative X", "mm", \.values.x, .mint), ("Body kinetic energy", "J/m", \.values.y, .orange),
                     ("Stored connection energy", "J/m", \.connectionEnergy, .yellow)]
+            guard tracksFracture else { return motion }
+            return motion + [("Material fracture dissipation", "J/m", \.materialFracture, .pink),
+                             ("Crack length", "mm", \.crackLength, .red),
+                             ("Face separation", "mm", \.crackSeparation, .purple),
+                             ("Sampled peak stress", "kPa", \.peakStress, .cyan)]
         }
         return switch preset {
         case .bar, .bondedBar: [("Axial strain", "%", \.values.x, .mint)]
@@ -82,8 +91,7 @@ struct ComparisonView: View {
                             Text("\(signal.name) (\(signal.unit))").tag(index)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    .pickerStyle(.menu)
                 }
                 chart.frame(height: 190)
                 HStack {
@@ -91,6 +99,7 @@ struct ComparisonView: View {
                     Slider(value: $cursor, in: 0...Double(samples.count - 1), step: 1) {
                         Text("Simulated time")
                     }
+                    .labelsHidden()
                     Text("\(selected.time * 1000, specifier: "%.2f") ms").monospacedDigit()
                         .frame(width: 88, alignment: .trailing)
                 }

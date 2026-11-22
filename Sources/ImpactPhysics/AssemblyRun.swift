@@ -28,9 +28,13 @@ public struct AssemblyRun {
 
     private var current: TraceSample {
         let energy = simulation.energies
+        let fracture = monitoredIndex.flatMap(simulation.fractureReading)
         return TraceSample(time: simulation.time, values: Point(relativeMotion.x * 1000,
                                                                monitoredIndex.map(simulation.kineticEnergy) ?? 0),
-                           plasticDissipation: energy.plastic, connectionEnergy: energy.connection)
+                           plasticDissipation: energy.plastic, connectionEnergy: energy.connection,
+                           materialFracture: fracture?.dissipation ?? 0, crackLength: (fracture?.crackLength ?? 0) * 1000,
+                           crackSeparation: (fracture?.separation ?? 0) * 1000,
+                           peakStress: (monitoredIndex.map { simulation.stress($0).max() ?? 0 } ?? 0) / 1000)
     }
 
     @discardableResult public mutating func step() -> Bool {
@@ -45,7 +49,11 @@ public struct AssemblyRun {
                 let fraction = (time - before.time) / (after.time - before.time)
                 samples.append(TraceSample(time: time, values: before.values + fraction * (after.values - before.values),
                                            plasticDissipation: before.plasticDissipation + fraction * (after.plasticDissipation - before.plasticDissipation),
-                                           connectionEnergy: before.connectionEnergy + fraction * (after.connectionEnergy - before.connectionEnergy)))
+                                           connectionEnergy: before.connectionEnergy + fraction * (after.connectionEnergy - before.connectionEnergy),
+                                           materialFracture: before.materialFracture + fraction * (after.materialFracture - before.materialFracture),
+                                           crackLength: before.crackLength, // Topology changes discretely at acceptance.
+                                           crackSeparation: before.crackSeparation + fraction * (after.crackSeparation - before.crackSeparation),
+                                           peakStress: before.peakStress + fraction * (after.peakStress - before.peakStress)))
                 time = Double(samples.count) * SceneRun.sampleInterval
             }
         }
@@ -80,6 +88,28 @@ extension AssemblyScene {
         scene.connections = [mount, bond]
         scene.monitor = mass.id
         scene.relativeTo = shell.id
+        return scene
+    }
+}
+
+extension AssemblyScene {
+    public static func bendingFractureExample() -> Self {
+        var scene = Self()
+        var specimen = AssemblyPart("Fracture specimen", size: Point(0.163, 0.026))
+        specimen.material = Material(young: 1.0e6, density: 950, poisson: 0.12)
+        specimen.fracture = MaterialFractureSettings()
+        var tup = AssemblyPart("Striker", center: Point(-0.018, 0.040), size: Point(0.025, 0.043))
+        tup.material = Material(young: 3.0e6, density: 2200, poisson: 0.15)
+        tup.velocity.y = -1.45
+        var left = AssemblyPart("Left support", center: Point(-0.062, -0.070), size: Point(0.033, 0.110))
+        left.material = Material(young: 3.5e6, density: 2500, poisson: 0.1)
+        var right = AssemblyPart("Right support", center: Point(0.062, -0.070), size: left.size)
+        right.material = left.material
+        var receiver = AssemblyPart("Receiver", center: Point(0.002, -0.076), size: Point(0.064, 0.031))
+        receiver.material = Material(young: 2.5e6, density: 2100, poisson: 0.15)
+        scene.parts = [specimen, tup, left, right, receiver]
+        scene.monitor = specimen.id
+        scene.duration = 0.115
         return scene
     }
 }

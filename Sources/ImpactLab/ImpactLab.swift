@@ -154,21 +154,46 @@ private extension Preset {
     }
 }
 
-@main struct ImpactLab: App {
-    @State private var mode = CommandLine.arguments.contains("--smoke") || CommandLine.arguments.contains("--inspect-ms") ? 1 : 0
+@main enum ImpactLab {
+    @MainActor static func main() {
+        if #available(macOS 15.0, *) {
+            PresentedLaboratory.main()
+        } else {
+            Laboratory.main()
+        }
+    }
+}
 
+@available(macOS 15.0, *)
+private struct PresentedLaboratory: App {
+    var body: some Scene { LaboratoryWindow().defaultLaunchBehavior(.presented) }
+}
+
+private struct Laboratory: App {
+    var body: some Scene { LaboratoryWindow() }
+}
+
+private struct LaboratoryWindow: Scene {
     var body: some Scene {
         WindowGroup("Impact Lab") {
-            TabView(selection: $mode) {
-                AssemblyLab()
-                    .tabItem { Label("Assembly", systemImage: "square.3.layers.3d") }.tag(0)
-                LabView()
-                    .tabItem { Label("Verified presets", systemImage: "waveform.path") }.tag(1)
-            }
+            LaboratoryTabs()
                 .frame(minWidth: 940, minHeight: 660)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1180, height: 760)
+    }
+}
+
+private struct LaboratoryTabs: View {
+    @State private var mode = CommandLine.arguments.contains("--smoke") || CommandLine.arguments.contains("--inspect-ms") ? 1 : 0
+
+    var body: some View {
+        TabView(selection: $mode) {
+            AssemblyLab()
+                .tabItem { Label("Assembly", systemImage: "square.3.layers.3d") }.tag(0)
+            LabView()
+                .tabItem { Label("Verified presets", systemImage: "waveform.path") }.tag(1)
+        }
     }
 }
 

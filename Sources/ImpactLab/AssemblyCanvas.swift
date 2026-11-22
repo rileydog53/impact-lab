@@ -1,10 +1,49 @@
 import ImpactPhysics
+import simd
 import SwiftUI
 
 let assemblyInk = Color(red: 0.85, green: 0.91, blue: 0.95)
 let assemblyMint = Color(red: 0.43, green: 0.89, blue: 0.77)
 let assemblyAmber = Color(red: 1, green: 0.67, blue: 0.39)
 let assemblyPanel = Color(red: 0.085, green: 0.125, blue: 0.17)
+private let crackColor = Color(red: 1, green: 0.39, blue: 0.33)
+
+enum AssemblyField: String, CaseIterable {
+    case strain = "Axial strain"
+    case stress = "Von Mises stress"
+    case plastic = "Plastic strain"
+    case damage = "Interface damage"
+    case separation = "Crack separation"
+
+    var scale: Double {
+        switch self {
+        case .strain, .plastic: 0.08
+        case .stress: 60_000
+        case .damage: 1
+        case .separation: 0.010
+        }
+    }
+
+    var legend: String {
+        switch self {
+        case .strain: "Axial strain · −8% compression / +8% tension"
+        case .stress: "Cauchy von Mises stress · 0–60 kPa"
+        case .plastic: "Accumulated equivalent plastic strain · 0–8%"
+        case .damage: "Interface damage · 0–1 · red lines mark failed faces"
+        case .separation: "Face separation · 0–10 mm · color on faces"
+        }
+    }
+
+    func values(_ index: Int, in simulation: AssemblySimulation) -> [Double] {
+        switch self {
+        case .strain: simulation.strain(index)
+        case .stress: simulation.stress(index)
+        case .plastic: simulation.plasticStrain(index)
+        case .damage: simulation.materialDamage(index)
+        case .separation: []
+        }
+    }
+}
 
 func assemblyColor(_ index: Int) -> Color {
     let palette = [assemblyMint, assemblyAmber, Color(red: 0.55, green: 0.75, blue: 1),
@@ -45,7 +84,8 @@ private struct AssemblyProjection {
 
 struct AssemblyCanvas: View {
     let experiment: AssemblyExperiment
-    let plastic: Bool
+    let field: AssemblyField
+    var showMesh: Bool
     @State private var dragOrigin: Point?
     @State private var dragTarget: UUID?
     @State private var dragDelta: Point = .zero
@@ -69,8 +109,7 @@ struct AssemblyCanvas: View {
                     p.addLine(to: CGPoint(x: end, y: y - 4))
                 }, with: .color(assemblyInk.opacity(0.6)))
                 context.draw(Text("25 mm").font(.caption2.monospaced()), at: CGPoint(x: x, y: y - 7), anchor: .bottomLeading)
-                let legend = plastic ? "Plastic strain · 0–8%" : "Amber fill · compression     Mint fill · tension"
-                context.draw(Text(legend).font(.caption2).foregroundStyle(assemblyInk.opacity(0.73)),
+                context.draw(Text(field.legend).font(.caption2).foregroundStyle(assemblyInk.opacity(0.86)),
                              at: CGPoint(x: size.width - 19, y: y), anchor: .trailing)
             }
             .contentShape(Rectangle())
@@ -131,13 +170,14 @@ struct AssemblyCanvas: View {
         let body = experiment.simulation.body(i)
         let shift = offset(part.id)
         let nodes = body.position.map { projection.screen($0 + shift) }
-        let strains = plastic ? experiment.simulation.plasticStrain(i) : experiment.simulation.strain(i)
+        let values = field.values(i, in: experiment.simulation)
         let color = assemblyColor(i)
         var buckets = Array(repeating: Path(), count: 13)
         for (index, triangle) in body.mesh.elements.enumerated() {
-            let strain = strains.isEmpty ? 0 : strains[index]
-            let step = Int((min(1, sqrt(abs(strain) / 0.08)) * 6).rounded())
-            let slot = strain < 0 ? 6 - step : 6 + step
+            let value = values.isEmpty ? 0 : values[index]
+            let level = min(1, abs(value) / field.scale)
+            let step = Int((level * 6).rounded())
+            let slot = value < 0 ? 6 - step : 6 + step
             buckets[slot].move(to: nodes[triangle.a])
             buckets[slot].addLine(to: nodes[triangle.b])
             buckets[slot].addLine(to: nodes[triangle.c])
@@ -146,9 +186,10 @@ struct AssemblyCanvas: View {
         for (i, path) in buckets.enumerated() where !path.isEmpty {
             context.fill(path, with: .color(color.opacity(0.25)))
             if i != 6 {
-                context.fill(path, with: .color((plastic || i < 6 ? assemblyAmber : assemblyMint)
-                    .opacity(Double(abs(i - 6)) / 6 * 0.88)))
+                let shade = field == .damage ? crackColor : (field == .strain && i > 6 ? assemblyMint : assemblyAmber)
+                context.fill(path, with: .color(shade.opacity(Double(abs(i - 6)) / 6 * 0.9)))
             }
+            if showMesh { context.stroke(path, with: .color(assemblyInk.opacity(0.17)), lineWidth: 0.45) }
         }
         let outline = Path { p in
             for edge in body.mesh.boundary {
@@ -159,6 +200,19 @@ struct AssemblyCanvas: View {
         let active = experiment.simulation.activeContacts.contains { $0.x == i || $0.y == i }
         let selected = experiment.selectedPart == part.id
         context.stroke(outline, with: .color(active ? .white : color), lineWidth: selected ? 2.3 : 1.3)
+        let cracks = experiment.simulation.crackFaces(i)
+        for crack in cracks where crack.damage == 1 || field == .damage || field == .separation {
+            let ratio = min(1, crack.separation / field.scale)
+            let shade = field == .separation ? Color(red: 0.6 + 0.4 * ratio, green: 0.8 - 0.44 * ratio, blue: 0.2) : crackColor
+            let opacity = field == .separation ? 0.4 + 0.6 * ratio : 0.25 + 0.75 * crack.damage
+            let faces = Path { p in
+                for edge in [crack.first, crack.second] {
+                    p.move(to: nodes[edge.a])
+                    p.addLine(to: nodes[edge.b])
+                }
+            }
+            context.stroke(faces, with: .color(shade.opacity(opacity)), lineWidth: crack.damage == 1 ? 2.5 : 1.2)
+        }
         let center = body.centerOfMass + shift
         let bottom = body.position.map(\.y).min()! + shift.y
         let top = body.position.map(\.y).max()! + shift.y
@@ -199,15 +253,14 @@ struct AssemblyCanvas: View {
     private func part(at point: Point) -> UUID? {
         for i in experiment.scene.parts.indices.reversed() {
             let body = experiment.simulation.body(i)
-            var inside = false
-            for edge in body.mesh.boundary {
-                let a = body.position[edge.a], b = body.position[edge.b]
-                if (a.y > point.y) != (b.y > point.y),
-                   point.x < a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y) {
-                    inside.toggle()
+            for triangle in body.mesh.elements {
+                let a = body.position[triangle.a], b = body.position[triangle.b], c = body.position[triangle.c]
+                func side(_ start: Point, _ end: Point) -> Double {
+                    let edge = end - start, offset = point - start
+                    return edge.x * offset.y - edge.y * offset.x
                 }
+                if min(side(a, b), side(b, c), side(c, a)) >= -1e-12 { return experiment.scene.parts[i].id }
             }
-            if inside { return experiment.scene.parts[i].id }
         }
         return nil
     }

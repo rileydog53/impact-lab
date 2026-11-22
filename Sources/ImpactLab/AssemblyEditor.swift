@@ -113,6 +113,23 @@ struct AssemblyEditor: View {
                 if !name.isEmpty { experiment.updatePart(part.id) { $0.name = String(name.prefix(48)) } }
             }))
             .textFieldStyle(.roundedBorder)
+            Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
+                experiment.updatePart(part.id) { $0.fracture = enabled ? MaterialFractureSettings() : nil }
+            })).toggleStyle(.checkbox)
+            if let fracture = part.fracture {
+                HStack {
+                    numeric("Strength / E (%)", value: fracture.strengthFraction,
+                            range: MaterialFractureSettings.strengthRange, scale: 100) { value in
+                        experiment.updatePart(part.id) { $0.fracture?.strengthFraction = value }
+                    }
+                    numeric("Fracture energy (J/m²)", value: fracture.energy,
+                            range: MaterialFractureSettings.energyRange, scale: 1) { value in
+                        experiment.updatePart(part.id) { $0.fracture?.energy = value }
+                    }
+                }
+                Text("Cracks follow mesh edges. Compare resolutions before interpreting local peaks.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             DisclosureGroup("Geometry and initial motion", isExpanded: $bodySettings) {
                 Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                     GridRow {
@@ -214,6 +231,13 @@ struct AssemblyEditor: View {
     private var runSettings: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Run settings").font(.headline)
+            Picker("Mesh", selection: Binding(get: { experiment.scene.resolution }, set: { resolution in
+                experiment.edit { $0.meshResolution = resolution }
+            })) {
+                ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.2f") µs step")
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             numeric("Duration (ms)", value: experiment.scene.duration, range: 0.02...0.25, scale: 1000) { value in
                 experiment.edit { $0.duration = value }
             }

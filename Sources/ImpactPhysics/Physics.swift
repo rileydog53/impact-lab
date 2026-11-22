@@ -51,7 +51,7 @@ public struct Mesh: Sendable {
     public let probe: [Int]
     public let interfaceNodes: [Int]
 
-    init(reference: [Point], triangles: [(Int, Int, Int)], boundary: [Edge],
+    package init(reference: [Point], triangles: [(Int, Int, Int)], boundary: [Edge],
          probe: [Int] = [], interfaceNodes: [Int] = []) {
         self.reference = reference
         elements = triangles.map { Triangle($0.0, $0.1, $0.2, reference) }
@@ -129,7 +129,7 @@ public struct Body: Sendable {
                   velocity: velocity, wallPenalty: penalty)
     }
 
-    init(mesh: Mesh, material: Material, position: [Point], velocity: Point,
+    package init(mesh: Mesh, material: Material, position: [Point], velocity: Point,
          wallPenalty: Double = 0, measuresVerticalStrain: Bool = false,
          elementMaterials: [Material]? = nil, velocityPerturbation: [Point]? = nil) {
         self.mesh = mesh
@@ -709,5 +709,28 @@ public struct Simulation: Sendable {
         }
         if plasticArea > 0 { energy.meanPlasticStrain /= plasticArea }
         return energy.total.isFinite ? energy : nil
+    }
+}
+
+extension BodyStep {
+    func equivalentCauchyStress() -> [Double] {
+        body.mesh.elements.enumerated().map { index, e in
+            let u = body.position[e.b] - body.position[e.a]
+            let v = body.position[e.c] - body.position[e.a]
+            let x = u * e.g1.x + v * e.g2.x
+            let y = u * e.g1.y + v * e.g2.y
+            let jacobian = cross2D(x, y)
+            if let history {
+                let response = history.model.update(x: x, y: y, from: history.current[index])
+                return (response?.equivalentStress ?? 0) / jacobian
+            }
+            let mu = (body.elementMaterials?[index] ?? body.material).shear
+            // The spherical part cancels in von Mises stress. Fzz is one.
+            let xx = x.x * x.x + y.x * y.x
+            let yy = x.y * x.y + y.y * y.y
+            let xy = x.x * x.y + y.x * y.y
+            let norm = ((xx - yy) * (xx - yy) + (xx - 1) * (xx - 1) + (yy - 1) * (yy - 1)) / 2 + 3 * xy * xy
+            return mu / jacobian * norm.squareRoot()
+        }
     }
 }

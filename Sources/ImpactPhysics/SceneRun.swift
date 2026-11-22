@@ -3,12 +3,19 @@ public struct TraceSample: Equatable, Sendable {
     public let values: Point
     public let plasticDissipation: Double
     public let connectionEnergy: Double
+    public let materialFracture, crackLength, crackSeparation, peakStress: Double
 
-    public init(time: Double, values: Point, plasticDissipation: Double, connectionEnergy: Double = 0) {
+    public init(time: Double, values: Point, plasticDissipation: Double, connectionEnergy: Double = 0,
+                materialFracture: Double = 0, crackLength: Double = 0, crackSeparation: Double = 0,
+                peakStress: Double = 0) {
         self.time = time
         self.values = values
         self.plasticDissipation = plasticDissipation
         self.connectionEnergy = connectionEnergy
+        self.materialFracture = materialFracture
+        self.crackLength = crackLength
+        self.crackSeparation = crackSeparation
+        self.peakStress = peakStress
     }
 }
 

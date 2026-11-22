@@ -5,6 +5,7 @@ import Observation
 struct AssemblyComparison {
     let details: String
     let samples: [TraceSample]
+    let tracksFracture: Bool
 }
 
 @MainActor @Observable final class AssemblyExperiment {
@@ -26,9 +27,20 @@ struct AssemblyComparison {
     var finished: Bool { run.finished }
     var selectedIndex: Int? { scene.parts.firstIndex { $0.id == selectedPart } }
     var monitoredName: String { scene.parts.first { $0.id == scene.monitor }?.name ?? scene.parts.first?.name ?? "Body" }
+    var elementCount: Int { (0..<simulation.bodyCount).reduce(0) { $0 + simulation.body($1).mesh.elements.count } }
     var relativeName: String { scene.parts.first { $0.id == scene.relativeTo }?.name ?? "Lab frame" }
     var current: AssemblyComparison {
-        AssemblyComparison(details: "\(monitoredName) relative to \(relativeName) · \(scene.parts.count) bodies", samples: samples)
+        AssemblyComparison(details: "\(monitoredName) · \(scene.resolution.label) · \(elementCount) triangles",
+                           samples: samples, tracksFracture: scene.parts.contains { $0.fracture != nil })
+    }
+
+    var canRefine: Bool { scene.resolution != .extraFine && samples.count > 1 }
+
+    func refine() {
+        guard canRefine, let resolution = AssemblyScene.Resolution(rawValue: scene.resolution.rawValue + 1) else { return }
+        pin()
+        edit { $0.meshResolution = resolution }
+        if self.scene.resolution == resolution { toggle() }
     }
 
     func configure(_ scene: AssemblyScene) throws {

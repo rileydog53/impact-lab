@@ -97,6 +97,11 @@ func patchCheck() {
             "Inverted elements must be rejected")
 }
 
+if CommandLine.arguments.dropFirst().contains("--fracture") {
+    try fractureCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--assembly") {
     try assemblyCheck()
     exit(EXIT_SUCCESS)
@@ -159,3 +164,4 @@ try layeredImpactCheck()
 try layeredImpactEnvelopeCheck()
 try offAxisImpactCheck()
 try assemblyCheck()
+try fractureCheck()

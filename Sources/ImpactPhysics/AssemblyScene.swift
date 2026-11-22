@@ -1,6 +1,19 @@
 import Foundation
 import simd
 
+public struct MaterialFractureSettings: Codable, Equatable, Sendable {
+    public static let strengthRange = 0.005...0.08
+    public static let energyRange = 0.5...50.0
+    public var strengthFraction = 0.030
+    public var energy = 7.0
+
+    public init() {}
+
+    var isValid: Bool {
+        Self.strengthRange.contains(strengthFraction) && Self.energyRange.contains(energy)
+    }
+}
+
 public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public enum Shape: String, CaseIterable, Codable, Sendable {
         case block = "Block"
@@ -17,6 +30,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public var velocity = Point.zero
     public var material = Material()
     public var plasticity = ImpactPlasticity(response: .elastic)
+    public var fracture: MaterialFractureSettings?
 
     public init(_ name: String, shape: Shape = .block, center: Point = .zero,
                 size: Point = Point(0.06, 0.06)) {
@@ -35,7 +49,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && SceneConfiguration.youngRange.contains(material.young)
             && SceneConfiguration.densityRange.contains(material.density)
             && SceneConfiguration.poissonRange.contains(material.poisson)
-            && plasticity.isValid && !name.isEmpty && name.count <= 48
+            && plasticity.isValid && (fracture?.isValid ?? true) && !name.isEmpty && name.count <= 48
     }
 
     func makeBody(refinement: Int) -> Body {
@@ -89,12 +103,26 @@ public struct AssemblyConnection: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct AssemblyScene: Codable, Equatable, Sendable {
+    public enum Resolution: Int, CaseIterable, Codable, Sendable {
+        case standard = 1, fine, extraFine
+
+        public var label: String {
+            switch self {
+            case .standard: "Standard (≈9 mm)"
+            case .fine: "Fine (≈4.5 mm)"
+            case .extraFine: "Extra fine (≈3 mm)"
+            }
+        }
+    }
     public private(set) var assemblyVersion = 1
     public var parts: [AssemblyPart] = []
     public var connections: [AssemblyConnection] = []
     public var duration = 0.12
     public var monitor: UUID?
     public var relativeTo: UUID?
+    // Optional on disk so scenes from 0.6 retain their original meshes.
+    public var meshResolution: Resolution?
+    public var resolution: Resolution { meshResolution ?? .standard }
 
     public static let maximumParts = 8
     public static let maximumConnections = 12

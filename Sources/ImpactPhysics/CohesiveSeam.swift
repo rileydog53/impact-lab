@@ -31,15 +31,17 @@ public struct SeamSettings: Codable, Equatable, Sendable {
 
 package struct CohesiveLaw: Sendable {
     package let strength, finalOpening: Double
-    package var onset: Double { 0.25 * finalOpening }
+    package let onset: Double
     package var stiffness: Double { strength / onset }
     private let minimumCompressionStiffness: Double
     package var contactStiffness: Double { max(4 * stiffness, minimumCompressionStiffness) }
     package var fractureEnergy: Double { 0.5 * strength * finalOpening }
 
-    package init(strength: Double, finalOpening: Double, minimumCompressionStiffness: Double = 0) {
+    package init(strength: Double, finalOpening: Double, minimumCompressionStiffness: Double = 0,
+                 initialStiffness: Double? = nil) {
         self.strength = strength
         self.finalOpening = finalOpening
+        onset = initialStiffness.map { strength / $0 } ?? 0.25 * finalOpening
         self.minimumCompressionStiffness = minimumCompressionStiffness
     }
 
