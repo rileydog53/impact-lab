@@ -13,8 +13,8 @@ struct ContactSurface: Sendable {
     let nodes: [Int]
     let stiffness: [Double]
 
-    init(body: Body, edges: [Edge]) {
-        self.edges = edges
+    init(body: Body) {
+        edges = body.mesh.boundary
         let reference = body.mesh.reference
         var lengths: [Int: Double] = [:]
         for edge in edges {
@@ -50,11 +50,6 @@ private struct ContactBounds {
 }
 
 struct BoundaryContact: Sendable {
-    enum Geometry: Sendable {
-        case opposingFaces
-        case closedBoundaries
-    }
-
     private struct Hit {
         let edge: Edge
         let fraction: Double
@@ -65,7 +60,6 @@ struct BoundaryContact: Sendable {
 
     let left: ContactSurface
     let right: ContactSurface
-    let geometry: Geometry
 
     var maximumStiffness: Double {
         max(left.stiffness.max() ?? 0, right.stiffness.max() ?? 0)
@@ -76,19 +70,9 @@ struct BoundaryContact: Sendable {
         for i in left.nodes { leftForce[i] = .zero }
         for i in right.nodes { rightForce[i] = .zero }
         var result = ContactResult()
-        let leftBounds: ContactBounds?
-        let rightBounds: ContactBounds?
-        switch geometry {
-        case .opposingFaces:
-            leftBounds = nil
-            rightBounds = nil
-        case .closedBoundaries:
-            let a = ContactBounds(surface: left, position: leftPosition)
-            let b = ContactBounds(surface: right, position: rightPosition)
-            guard a.intersects(b) else { return result }
-            leftBounds = a
-            rightBounds = b
-        }
+        let leftBounds = ContactBounds(surface: left, position: leftPosition)
+        let rightBounds = ContactBounds(surface: right, position: rightPosition)
+        guard leftBounds.intersects(rightBounds) else { return result }
         Self.apply(from: left, at: leftPosition, to: right, at: rightPosition, bounds: rightBounds,
                    sourceForce: &leftForce, targetForce: &rightForce, result: &result)
         Self.apply(from: right, at: rightPosition, to: left, at: leftPosition, bounds: leftBounds,
@@ -97,19 +81,14 @@ struct BoundaryContact: Sendable {
     }
 
     private static func apply(from source: ContactSurface, at sourcePosition: [Point],
-                              to target: ContactSurface, at targetPosition: [Point], bounds: ContactBounds?,
+                              to target: ContactSurface, at targetPosition: [Point], bounds: ContactBounds,
                               sourceForce: inout [Point], targetForce: inout [Point],
                               result: inout ContactResult) {
         for (i, stiffness) in zip(source.nodes, source.stiffness) {
             let node = sourcePosition[i]
-            let hit: Hit?
-            if let bounds {
-                guard bounds.contains(node) else { continue }
-                hit = closedBoundaryHit(node, target: target, position: targetPosition)
-            } else {
-                hit = opposingFaceHit(node, target: target, position: targetPosition)
+            guard bounds.contains(node), let hit = boundaryHit(node, target: target, position: targetPosition) else {
+                continue
             }
-            guard let hit else { continue }
             let load = stiffness * hit.distance
             let force = load * hit.normal
             sourceForce[i] += force
@@ -121,30 +100,7 @@ struct BoundaryContact: Sendable {
         }
     }
 
-    private static func opposingFaceHit(_ node: Point, target: ContactSurface, position: [Point]) -> Hit? {
-        var nearest: (hit: Hit, gap: Double)?
-        for edge in target.edges {
-            let a = position[edge.a]
-            let tangent = position[edge.b] - a
-            let delta = node - a
-            let lengthSquared = simd_length_squared(tangent)
-            let fraction = simd_dot(delta, tangent) / lengthSquared
-            // Allow roundoff at a shared vertex of the aligned faces.
-            guard fraction >= -1e-10, fraction <= 1 + 1e-10 else { continue }
-            let length = lengthSquared.squareRoot()
-            let outward = Point(tangent.y, -tangent.x) / length
-            let gap = simd_dot(delta, outward)
-            if abs(gap) < abs(nearest?.gap ?? .infinity) {
-                let hit = Hit(edge: edge, fraction: min(1, max(0, fraction)), normal: outward,
-                              distance: abs(gap), length: length)
-                nearest = (hit, gap)
-            }
-        }
-        guard let nearest, nearest.gap < 0 else { return nil }
-        return nearest.hit
-    }
-
-    private static func closedBoundaryHit(_ node: Point, target: ContactSurface, position: [Point]) -> Hit? {
+    private static func boundaryHit(_ node: Point, target: ContactSurface, position: [Point]) -> Hit? {
         var inside = false
         var nearest: (edge: Edge, fraction: Double, offset: Point, distanceSquared: Double, lengthSquared: Double)?
         for edge in target.edges {

@@ -3,7 +3,7 @@ import simd
 
 public typealias Point = SIMD2<Double>
 
-public struct Material: Sendable {
+public struct Material: Codable, Equatable, Sendable {
     public var young: Double
     public var density: Double
     public var poisson: Double
@@ -49,21 +49,24 @@ public struct Mesh: Sendable {
     public let elements: [Triangle]
     public let boundary: [Edge]
     public let probe: [Int]
+    public let interfaceNodes: [Int]
 
-    init(reference: [Point], triangles: [(Int, Int, Int)], boundary: [Edge], probe: [Int] = []) {
+    init(reference: [Point], triangles: [(Int, Int, Int)], boundary: [Edge],
+         probe: [Int] = [], interfaceNodes: [Int] = []) {
         self.reference = reference
         elements = triangles.map { Triangle($0.0, $0.1, $0.2, reference) }
         self.boundary = boundary
         self.probe = probe
+        self.interfaceNodes = interfaceNodes
     }
 
-    public static func bar(columns: Int = 120, rows: Int = 6) -> Mesh {
-        rectangle(columns: columns, rows: rows, hasProbe: true) { u, v in
-            Point(u - 1, 0.1 * (v - 0.5))
+    public static func bar(columns: Int = 120, rows: Int = 6, width: Double = 1, height: Double = 0.1) -> Mesh {
+        rectangle(columns: columns, rows: rows, probeColumn: columns / 2) { u, v in
+            Point(width * (u - 1), height * (v - 0.5))
         }
     }
 
-    static func rectangle(columns: Int, rows: Int, hasProbe: Bool = false,
+    static func rectangle(columns: Int, rows: Int, probeColumn: Int? = nil, interfaceColumn: Int? = nil,
                           position: (Double, Double) -> Point) -> Mesh {
         precondition(columns >= 2 && rows >= 1)
         var nodes: [Point] = []
@@ -80,7 +83,7 @@ public struct Mesh: Sendable {
             for i in 0..<columns {
                 let a = node(i, j), b = node(i + 1, j)
                 let c = node(i + 1, j + 1), d = node(i, j + 1)
-                if hasProbe && (i == columns / 2 - 1 || i == columns / 2) {
+                if let probeColumn, i == probeColumn - 1 || i == probeColumn {
                     probe.append(contentsOf: [triangles.count, triangles.count + 1])
                 }
                 if (i + j).isMultiple(of: 2) {
@@ -94,7 +97,8 @@ public struct Mesh: Sendable {
                 if i == 0 { edges.append(Edge(d, a)) }
             }
         }
-        return Mesh(reference: nodes, triangles: triangles, boundary: edges, probe: probe)
+        let interfaceNodes = interfaceColumn.map { column in (0...rows).map { node(column, $0) } } ?? []
+        return Mesh(reference: nodes, triangles: triangles, boundary: edges, probe: probe, interfaceNodes: interfaceNodes)
     }
 }
 
@@ -112,26 +116,33 @@ public struct Body: Sendable {
     let referenceCenter: Point
     let boundaryNodes: [Int]
     let wallStiffness: [Double]
+    let hasWall: Bool
     let measuresVerticalStrain: Bool
+    let elementMaterials: [Material]?
 
-    init(mesh: Mesh, material: Material, speed: Double, gap: Double, penalty: Double, tilt: Double) {
+    init(mesh: Mesh, material: Material, velocity: Point, gap: Double, penalty: Double, tilt: Double,
+         centerY: Double = 0) {
         let c = cos(tilt), s = sin(tilt)
         let rotated = mesh.reference.map { Point(c * $0.x - s * $0.y, s * $0.x + c * $0.y) }
-        let offset = Point(rotated.map(\.x).max()! + gap, 0)
+        let offset = Point(rotated.map(\.x).max()! + gap, -centerY)
         self.init(mesh: mesh, material: material, position: rotated.map { $0 - offset },
-                  speed: speed, wallPenalty: penalty)
+                  velocity: velocity, wallPenalty: penalty)
     }
 
-    init(mesh: Mesh, material: Material, position: [Point], speed: Double,
-         wallPenalty: Double = 0, measuresVerticalStrain: Bool = false) {
+    init(mesh: Mesh, material: Material, position: [Point], velocity: Point,
+         wallPenalty: Double = 0, measuresVerticalStrain: Bool = false,
+         elementMaterials: [Material]? = nil, velocityPerturbation: [Point]? = nil) {
         self.mesh = mesh
         self.material = material
         self.position = position
+        hasWall = wallPenalty > 0
         self.measuresVerticalStrain = measuresVerticalStrain
-        velocity = Array(repeating: Point(speed, 0), count: position.count)
+        self.elementMaterials = elementMaterials
+        self.velocity = velocityPerturbation?.map { velocity + $0 }
+            ?? Array(repeating: velocity, count: position.count)
         var nodalMass = Array(repeating: 0.0, count: position.count)
-        for e in mesh.elements {
-            let share = material.density * e.area / 3
+        for (i, e) in mesh.elements.enumerated() {
+            let share = (elementMaterials?[i].density ?? material.density) * e.area / 3
             nodalMass[e.a] += share
             nodalMass[e.b] += share
             nodalMass[e.c] += share
@@ -240,7 +251,7 @@ public struct Simulation: Sendable {
     public init(mesh: Mesh = .bar(), material: Material = Material(), speed: Double = 0.4,
                 gap: Double = 0.0005, penalty: Double = 2500, stepScale: Double = 1, tilt: Double = 0) {
         precondition(gap >= 0 && penalty > 0)
-        let body = Body(mesh: mesh, material: material, speed: speed, gap: gap, penalty: penalty, tilt: tilt)
+        let body = Body(mesh: mesh, material: material, velocity: Point(speed, 0), gap: gap, penalty: penalty, tilt: tilt)
         self.init(primary: body, gap: gap, stepScale: stepScale)
     }
 
@@ -254,9 +265,8 @@ public struct Simulation: Sendable {
         self.secondary = secondary.map(BodyStep.init)
         self.pairContact = pairContact
         self.gap = gap
-        // Each body starts at a uniform velocity.
         func kineticEnergy(_ body: Body) -> Double {
-            0.5 * body.totalMass * simd_length_squared(body.velocity[0])
+            zip(body.mass, body.velocity).reduce(0) { $0 + 0.5 * $1.0 * simd_length_squared($1.1) }
         }
         initialKinetic = kineticEnergy(primary) + (secondary.map(kineticEnergy) ?? 0)
         // Budget both the node's own contact spring and reactions to opposing springs.
@@ -271,12 +281,15 @@ public struct Simulation: Sendable {
     }
 
     private static func squaredFrequency(of body: Body, contact: ContactSurface?, allowance: Double) -> Double {
-        let material = body.material
+        let uniformWaveSpeedSquared = pow(body.material.waveSpeed, 2)
         var stiffness = Array(repeating: 0.0, count: body.mass.count)
-        for e in body.mesh.elements {
+        for (i, e) in body.mesh.elements.enumerated() {
             // A lumped-mass bound on the initial elastic spectral radius.
             let gradientSum = simd_length(e.g0) + simd_length(e.g1) + simd_length(e.g2)
-            let scale = e.area * material.density * pow(material.waveSpeed, 2) * gradientSum
+            let material = body.elementMaterials?[i]
+            let density = material?.density ?? body.material.density
+            let waveSpeedSquared = material.map { pow($0.waveSpeed, 2) } ?? uniformWaveSpeedSquared
+            let scale = e.area * density * waveSpeedSquared * gradientSum
             stiffness[e.a] += scale * simd_length(e.g0)
             stiffness[e.b] += scale * simd_length(e.g1)
             stiffness[e.c] += scale * simd_length(e.g2)
@@ -338,7 +351,7 @@ public struct Simulation: Sendable {
         if let pairContact {
             contact = pairContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
                                            leftForce: &primary.nextContact, rightForce: &secondary!.nextContact)
-        } else {
+        } else if primary.body.hasWall {
             contact = wallContact()
         }
         guard (contact.energy + nextElastic).isFinite, (wallImpulse + contact.wallImpulse).isFinite,
@@ -383,10 +396,13 @@ public struct Simulation: Sendable {
     static func assemble(body: Body, position: [Point], forces: inout [Point],
                          strain: inout [Double]) -> Double? {
         for i in forces.indices { forces[i] = .zero }
-        let mu = body.material.shear
-        let lambda = body.material.lambda
+        let uniformMu = body.material.shear
+        let uniformLambda = body.material.lambda
         var energy = 0.0
         for (i, e) in body.mesh.elements.enumerated() {
+            let material = body.elementMaterials?[i]
+            let mu = material?.shear ?? uniformMu
+            let lambda = material?.lambda ?? uniformLambda
             let u = position[e.b] - position[e.a]
             let v = position[e.c] - position[e.a]
             let fx = u * e.g1.x + v * e.g2.x

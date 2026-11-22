@@ -1,36 +1,44 @@
 import Foundation
 import simd
 
-public enum Preset: String, CaseIterable, Identifiable, Sendable {
+public enum Preset: String, CaseIterable, Codable, Identifiable, Sendable {
     case bar = "Bar impact"
     case ring = "Ring impact"
     case block = "Tilted block"
     case twoBars = "Two-bar collision"
     case puckStrip = "Puck and strip"
+    case bondedBar = "Bonded bar"
 
     public var id: Self { self }
 
     public static let blockTilt = Double.pi / 10
 
-    public func makeSimulation(material: Material = Material(), speed: Double = 0.4,
+    public func makeSimulation(material: Material = Material(), speed: Double? = nil,
                                mirrored: Bool = false) -> Simulation {
+        let impactSpeed = speed ?? 0.4
         switch self {
-        case .bar: Simulation(mesh: .bar(), material: material, speed: speed)
-        case .ring: Simulation(mesh: .ring(), material: material, speed: speed, gap: 0.004)
+        case .bar: return Simulation(mesh: .bar(), material: material, speed: impactSpeed)
+        case .ring: return Simulation(mesh: .ring(), material: material, speed: impactSpeed, gap: 0.004)
         case .block:
-            Simulation(mesh: .roundedBlock(), material: material, speed: speed, gap: 0.004,
-                       tilt: mirrored ? -Self.blockTilt : Self.blockTilt)
+            return Simulation(mesh: .roundedBlock(), material: material, speed: impactSpeed, gap: 0.004,
+                              tilt: mirrored ? -Self.blockTilt : Self.blockTilt)
         case .twoBars:
-            Simulation.alignedBars(material: material, speed: speed)
+            return Simulation.alignedBars(material: material, speed: impactSpeed)
         case .puckStrip:
-            Simulation.puckAndStrip(material: material, speed: speed)
+            return Simulation.puckAndStrip(material: material, speed: impactSpeed)
+        case .bondedBar:
+            var scene = SceneConfiguration.standard(.bondedBar)
+            scene.first.material = material
+            scene.speed = speed ?? scene.speed
+            return Simulation.bondedBar(scene: scene)
         }
     }
 }
 
 extension Mesh {
-    public static func roundedBlock(columns: Int = 36, rows: Int = 24) -> Mesh {
-        let halfWidth = 0.18, halfHeight = 0.115, radius = 0.035
+    public static func roundedBlock(columns: Int = 36, rows: Int = 24,
+                                    width: Double = 0.36, height: Double = 0.23, radius: Double = 0.035) -> Mesh {
+        let halfWidth = width / 2, halfHeight = height / 2
         let corner = Point(halfWidth - radius, halfHeight - radius)
         return rectangle(columns: columns, rows: rows) { u, v in
             let p = Point((2 * u - 1) * halfWidth, (2 * v - 1) * halfHeight)
@@ -47,17 +55,18 @@ extension Mesh {
         }
     }
 
-    public static func ring(sectors: Int = 96, layers: Int = 8) -> Mesh {
+    public static func ring(sectors: Int = 96, layers: Int = 8,
+                            diameter: Double = 0.40, thickness: Double = 0.09) -> Mesh {
         precondition(sectors >= 8 && sectors.isMultiple(of: 4) && layers > 0)
         var nodes: [Point] = []
         var triangles: [(Int, Int, Int)] = []
         var edges: [Edge] = []
         func node(_ i: Int, _ j: Int) -> Int { j * sectors + i % sectors }
         for j in 0...layers {
-            let radius = 0.11 + 0.09 * Double(j) / Double(layers)
+            let radius = diameter / 2 - thickness + thickness * Double(j) / Double(layers)
             for i in 0..<sectors {
                 let theta = 2 * Double.pi * Double(i) / Double(sectors)
-                nodes.append(Point(radius * cos(theta) - 0.2, radius * sin(theta)))
+                nodes.append(Point(radius * cos(theta) - diameter / 2, radius * sin(theta)))
             }
         }
         for j in 0..<layers {
