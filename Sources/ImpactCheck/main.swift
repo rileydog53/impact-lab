@@ -117,6 +117,17 @@ if CommandLine.arguments.dropFirst().contains("--sibling-contact") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--detachment-contact") {
+    slidingDetachmentPatch()
+    let gatesPassed = try detachmentContactCheck()
+    exit(gatesPassed ? EXIT_SUCCESS : EXIT_FAILURE)
+}
+
+if CommandLine.arguments.dropFirst().contains("--sliding-contact-patch") {
+    slidingDetachmentPatch()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--fracture-stability") {
     try fractureStabilityProbe()
     exit(EXIT_SUCCESS)

@@ -64,6 +64,7 @@ struct FractureSurface: Sendable {
     let nodes: [Int]
     let surface: ContactSurface
     let exposedEdges: Set<SIMD2<Int>>
+    let edgeCorners: [Edge]
 
     func positions(_ position: [Point]) -> [Point] { nodes.map { position[$0] } }
 
@@ -152,6 +153,10 @@ package struct MaterialFracture: Sendable {
     package private(set) var reading = MaterialFractureReading()
 
     mutating func record(_ balance: InsertionBalance) { reading.insertionBalance.accumulate(balance) }
+
+    func contactCorners(at node: Int) -> [Int] {
+        cornerNodes.indices.filter { cornerNodes[$0] == node }
+    }
 
     package init(body: Body, settings: MaterialFractureSettings) {
         let mesh = body.mesh
@@ -302,14 +307,14 @@ package struct MaterialFracture: Sendable {
             components.join(face.a, face.b)
         }
         pieces = pieces.indices.map { components.root($0) }
-        var boundaries: [Int: [(edge: Edge, lip: Bool, failed: Bool)]] = [:]
+        var boundaries: [Int: [(corners: Edge, lip: Bool, failed: Bool)]] = [:]
         for exteriorEdge in exterior {
-            boundaries[pieces[exteriorEdge.a / 3], default: []].append((edge(exteriorEdge), false, false))
+            boundaries[pieces[exteriorEdge.a / 3], default: []].append((exteriorEdge, false, false))
         }
         for seam in interfaces {
             let face = faces[seam.face]
-            boundaries[pieces[face.a], default: []].append((seam.left, true, seam.failed))
-            boundaries[pieces[face.b], default: []].append((Edge(seam.right.b, seam.right.a), true, seam.failed))
+            boundaries[pieces[face.a], default: []].append((face.left, true, seam.failed))
+            boundaries[pieces[face.b], default: []].append((Edge(face.right.b, face.right.a), true, seam.failed))
         }
         surfaces = boundaries.keys.sorted().map { id in
             var index: [Int: Int] = [:]
@@ -324,13 +329,15 @@ package struct MaterialFracture: Sendable {
             var exposed: Set<SIMD2<Int>> = []
             var sourceEdges: [Edge] = []
             let edges = boundaries[id]!.map { item in
-                let face = Edge(locate(item.edge.a), locate(item.edge.b))
+                let materialEdge = edge(item.corners)
+                let face = Edge(locate(materialEdge.a), locate(materialEdge.b))
                 if item.lip { exposed.insert(SIMD2(face.a, face.b)) }
                 if !item.lip || item.failed { sourceEdges.append(face) }
                 return face
             }
             let surface = ContactSurface(edges: edges, reference: nodes.map { reference[$0] }, young: young, sourceEdges: sourceEdges)
-            return FractureSurface(id: id, nodes: nodes, surface: surface, exposedEdges: exposed)
+            return FractureSurface(id: id, nodes: nodes, surface: surface, exposedEdges: exposed,
+                                   edgeCorners: boundaries[id]!.map(\.corners))
         }
     }
 
@@ -408,7 +415,7 @@ package struct MaterialFracture: Sendable {
     // Both representations must have zero contact energy at the handoff.
     // An overlapping feature continues to carry a force via its closure law;
     // other features on these same pieces are already handled by contact.
-    mutating func finishMatchingContact(position: [Point], overlapping: Set<Int>) {
+    package mutating func finishMatchingContact(position: [Point], overlapping: Set<Int>) {
         guard surfaces.count > 1 else { return }
         for (i, seam) in interfaces.enumerated() where seam.failed && !seam.handedOff && !overlapping.contains(i) {
             let face = faces[seam.face]
@@ -458,5 +465,14 @@ package struct MaterialFracture: Sendable {
             let total = totals[id]!
             return MaterialPiece(id: id, mass: total.mass, center: total.center / total.mass, velocity: total.momentum / total.mass)
         }
+    }
+
+    package func contactTrack(_ corners: SIMD3<Int>, at positions: [Point]) -> ContactFeatureTrack {
+        let node = cornerNodes[corners.x], a = cornerNodes[corners.y], b = cornerNodes[corners.z]
+        let chord = positions[b] - positions[a], offset = positions[node] - positions[a]
+        let length = simd_length(chord)
+        return ContactFeatureTrack(nodes: SIMD3(node, a, b), pieces: SIMD2(pieces[corners.x / 3], pieces[corners.y / 3]),
+                                   gap: (chord.y * offset.x - chord.x * offset.y) / length,
+                                   fraction: simd_dot(chord, offset) / (length * length))
     }
 }

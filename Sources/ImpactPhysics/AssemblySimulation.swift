@@ -141,6 +141,12 @@ public struct AssemblySimulation: Sendable {
     package private(set) var rejectedPenetration: Double?
     package private(set) var rejectedContactDomains: SIMD4<Int>?
     package private(set) var rejectedClosureEnergy: Double?
+    package var probeDetachment = false
+    package private(set) var detachmentProbes: [DetachmentContactProbe] = []
+
+    package func contactTrack(_ corners: SIMD3<Int>, part: Int) -> ContactFeatureTrack? {
+        fractures[part]?.contactTrack(corners, at: steps[part].body.position)
+    }
     public private(set) var peakRelativePenetration = 0.0
     public private(set) var firstContactTimes: [SIMD2<Int>: Double] = [:]
     public private(set) var activeContacts: [SIMD2<Int>] = []
@@ -465,6 +471,22 @@ public struct AssemblySimulation: Sendable {
                 closureEnergy += closure
                 trial.cohesive += nextFractures[i]!.reading.storedEnergy
                 trial.fracture += nextFractures[i]!.reading.dissipation
+                if probeDetachment && i == 0 {
+                    let old = fractures[i]!, new = nextFractures[i]!
+                    if old.surfaces.count != new.surfaces.count {
+                        // Re-evaluate closure at the same trial positions while keeping
+                        // the original collision domains for the ordinary contact probe.
+                        var oldClosureTopology = old
+                        var probeForce = Array(repeating: Point.zero, count: position.count)
+                        let oldClosure = oldClosureTopology.accumulate(position: position, reference: mesh.reference,
+                                                                       force: &probeForce)
+                        detachmentProbes.append(DetachmentContactProbe(time: time + dt,
+                            oldTopology: old.probeContact(at: position),
+                            newTopologyAtOldPositions: new.probeContact(at: steps[i].body.position),
+                            newTopology: new.probeContact(at: newPosition),
+                            oldClosure: oldClosure, newClosure: closure))
+                    }
+                }
             }
             if nextFractures.contains(where: { ($0?.reading.insertedEdges ?? 0) > 0 }) {
                 fractureContact(fractures: &nextFractures, energy: &trial, penetration: &penetration,

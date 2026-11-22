@@ -9,6 +9,7 @@ struct ContactResult {
     var wallImpulse = 0.0
     var wallAngularImpulse = 0.0
     var matchingContacts: Set<Int> = []
+    var samples: [ContactSample] = []
 
     mutating func add(_ other: Self) {
         energy += other.energy
@@ -20,6 +21,14 @@ struct ContactResult {
         wallAngularImpulse += other.wallAngularImpulse
         if !other.matchingContacts.isEmpty { matchingContacts.formUnion(other.matchingContacts) }
     }
+}
+
+struct ContactSample {
+    let leftToRight: Bool
+    let node, edgeIndex: Int
+    let relativePenetration, fraction, load, energy: Double
+    let normal: Point
+    let closureSeam: Int?
 }
 
 // Matching contacts are keyed by material node IDs, so the same rule
@@ -77,6 +86,7 @@ struct ContactBounds {
 struct BoundaryContact: Sendable {
     private struct Hit {
         let edge: Edge
+        let edgeIndex: Int
         let fraction: Double
         let normal: Point
         let distance: Double
@@ -106,15 +116,15 @@ struct BoundaryContact: Sendable {
                     leftBounds: ContactBounds, rightBounds: ContactBounds,
                     leftForce: inout [Point], rightForce: inout [Point],
                     leftExposed: Set<SIMD2<Int>> = [], rightExposed: Set<SIMD2<Int>> = [],
-                    matching: MatchingContact? = nil) -> ContactResult {
+                    matching: MatchingContact? = nil, sample: Bool = false) -> ContactResult {
         var result = ContactResult()
         guard leftBounds.intersects(rightBounds) else { return result }
         Self.apply(from: left, at: leftPosition, to: right, at: rightPosition, bounds: rightBounds,
                    sourceForce: &leftForce, targetForce: &rightForce, exposed: rightExposed, result: &result,
-                   matching: matching, leftToRight: true)
+                   matching: matching, leftToRight: true, sample: sample)
         Self.apply(from: right, at: rightPosition, to: left, at: leftPosition, bounds: leftBounds,
                    sourceForce: &rightForce, targetForce: &leftForce, exposed: leftExposed, result: &result,
-                   matching: matching, leftToRight: false)
+                   matching: matching, leftToRight: false, sample: sample)
         return result
     }
 
@@ -122,28 +132,38 @@ struct BoundaryContact: Sendable {
                               to target: ContactSurface, at targetPosition: [Point], bounds: ContactBounds,
                               sourceForce: inout [Point], targetForce: inout [Point],
                               exposed: Set<SIMD2<Int>>, result: inout ContactResult,
-                              matching: MatchingContact?, leftToRight: Bool) {
+                              matching: MatchingContact?, leftToRight: Bool, sample: Bool) {
         for (i, stiffness) in zip(source.nodes, source.stiffness) where stiffness > 0 {
             let node = sourcePosition[i]
             guard bounds.contains(node), let hit = boundaryHit(node, target: target, position: targetPosition) else {
                 continue
             }
-            result.relativePenetration = max(result.relativePenetration, hit.distance / hit.length)
+            let relative = hit.distance / hit.length
+            result.relativePenetration = max(result.relativePenetration, relative)
+            var closure: Int?
             if let matching {
                 let sourceNodes = leftToRight ? matching.leftNodes : matching.rightNodes
                 let targetNodes = leftToRight ? matching.rightNodes : matching.leftNodes
-                if let seam = matching.seams[SIMD3(sourceNodes[i], targetNodes[hit.edge.a], targetNodes[hit.edge.b])] {
-                    result.matchingContacts.insert(seam)
-                    continue // Its paired closure law supplies this reaction.
-                }
+                closure = matching.seams[SIMD3(sourceNodes[i], targetNodes[hit.edge.a], targetNodes[hit.edge.b])]
             }
-            let load = stiffness * hit.distance
+            let load = closure == nil ? stiffness * hit.distance : 0
+            let energy = 0.5 * load * hit.distance
+            if sample {
+                result.samples.append(ContactSample(leftToRight: leftToRight, node: i, edgeIndex: hit.edgeIndex,
+                                                    relativePenetration: relative,
+                                                    fraction: hit.fraction, load: load, energy: energy,
+                                                    normal: hit.normal, closureSeam: closure))
+            }
+            if let closure {
+                result.matchingContacts.insert(closure)
+                continue // Its paired closure law supplies this reaction.
+            }
             result.normalLoad += load
             let force = load * hit.normal
             sourceForce[i] += force
             targetForce[hit.edge.a] -= (1 - hit.fraction) * force
             targetForce[hit.edge.b] -= hit.fraction * force
-            result.energy += 0.5 * load * hit.distance
+            result.energy += energy
             result.penetration = max(result.penetration, hit.distance)
             if !exposed.isEmpty, exposed.contains(SIMD2(hit.edge.a, hit.edge.b)) {
                 result.exposedFaceContact = true
@@ -165,8 +185,8 @@ struct BoundaryContact: Sendable {
 
     private static func boundaryHit(_ node: Point, target: ContactSurface, position: [Point]) -> Hit? {
         var inside = false
-        var nearest: (edge: Edge, fraction: Double, offset: Point, distanceSquared: Double, lengthSquared: Double)?
-        for edge in target.edges {
+        var nearest: (edge: Edge, index: Int, fraction: Double, offset: Point, distanceSquared: Double, lengthSquared: Double)?
+        for (index, edge) in target.edges.enumerated() {
             let a = position[edge.a]
             let b = position[edge.b]
             let tangent = b - a
@@ -181,14 +201,14 @@ struct BoundaryContact: Sendable {
             let offset = delta - fraction * tangent
             let distanceSquared = simd_length_squared(offset)
             if distanceSquared < (nearest?.distanceSquared ?? .infinity) {
-                nearest = (edge, fraction, offset, distanceSquared, lengthSquared)
+                nearest = (edge, index, fraction, offset, distanceSquared, lengthSquared)
             }
         }
         // One closest location per interior node. At an endpoint the force
         // acts along the node-to-vertex normal, and the full reaction goes there.
         guard inside, let nearest, nearest.distanceSquared > 0 else { return nil }
         let distance = nearest.distanceSquared.squareRoot()
-        return Hit(edge: nearest.edge, fraction: nearest.fraction, normal: -nearest.offset / distance,
+        return Hit(edge: nearest.edge, edgeIndex: nearest.index, fraction: nearest.fraction, normal: -nearest.offset / distance,
                    distance: distance, length: nearest.lengthSquared.squareRoot())
     }
 }

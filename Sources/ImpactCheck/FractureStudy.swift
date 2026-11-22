@@ -153,6 +153,78 @@ func fractureAssemblyCase(_ pattern: String, _ resolution: String) throws {
     printAssembly(test.label + ", half step", try simulateAssembly(test, stepLimit: normal.dt / 2))
 }
 
+func detachmentContactCheck() throws -> Bool {
+    var scene = AssemblyScene.bendingFractureExample()
+    scene.parts[0].fracture?.meshPattern = .aligned
+    var s = try AssemblySimulation(scene, refinement: 3, stepLimit: .infinity, stepScale: 0.5)
+    s.probeDetachment = true
+    let initialP = s.momentum, initialL = s.angularMomentum
+    var imbalance = 0.0, momentum = 0.0, angularMomentum = 0.0
+    // The two material features implicated in the archived aligned ×3 case.
+    let features = [SIMD3(2406, 2086, 2087), SIMD3(2087, 2411, 2409)]
+    var previous = features.map { s.contactTrack($0, part: 0) }
+    var firstPenetration: [Double?] = features.map { _ in nil }
+    while s.step() {
+        imbalance = max(imbalance, abs(s.energies.total / s.initialEnergy - 1))
+        momentum = max(momentum, simd_distance(s.momentum, initialP))
+        angularMomentum = max(angularMomentum, abs(s.angularMomentum - initialL))
+        for (i, corners) in features.enumerated() {
+            guard let sample = s.contactTrack(corners, part: 0) else { continue }
+            if previous[i]?.nodes != sample.nodes || previous[i]?.pieces != sample.pieces {
+                print(String(format: "Feature %@ at %.6f ms: FEM %@, domains %@, local gap %+.6f mm, fraction %.5f",
+                             corners.description, 1000 * s.time, sample.nodes.description,
+                             sample.pieces.description, 1000 * sample.gap, sample.fraction))
+            }
+            let isPenetrating = sample.gap < -1e-10 && (0...1).contains(sample.fraction)
+                && sample.nodes.x != sample.nodes.y && sample.nodes.x != sample.nodes.z
+            if isPenetrating {
+                if firstPenetration[i] == nil { firstPenetration[i] = s.time }
+            } else {
+                firstPenetration[i] = nil
+            }
+            previous[i] = sample
+        }
+    }
+    for (i, corners) in features.enumerated() {
+        if let first = firstPenetration[i], let sample = previous[i] {
+            print(String(format: "Feature %@: current interval of negative local gap began at %.6f ms; last gap %+.6f mm",
+                         corners.description, 1000 * first, 1000 * sample.gap))
+        }
+    }
+    for event in s.detachmentProbes {
+        let oldClosure = event.oldClosure.map { String(format: "%.8f", $0) } ?? "unavailable"
+        print(String(format: "Detachment %.6f ms, domains %d → %d, paired closure at fixed positions %@ → %.8f J/m",
+                     1000 * event.time, event.oldTopology.pieces, event.newTopology.pieces, oldClosure, event.newClosure))
+        for (label, snapshot) in [("old topology, trial positions", event.oldTopology),
+                                  ("new topology, previous positions", event.newTopologyAtOldPositions),
+                                  ("new topology, trial positions", event.newTopology)] {
+            print(String(format: "  %@: %d samples, %d edge crossings, U %.8f J/m, |ΣF| %.2e N/m, |Στ| %.2e N",
+                         label, snapshot.features.count, snapshot.crossings.count, snapshot.energy,
+                         simd_length(snapshot.residualForce), abs(snapshot.residualTorque)))
+            for feature in snapshot.features.sorted(by: { $0.relativePenetration > $1.relativePenetration }).prefix(4) {
+                print(String(format: "    pieces %d→%d, material node %@ → edge %d:%d, FEM node %d → edge %d:%d, %.4f%%, fraction %.5f, F=(%.4f, %.4f) N/m, U %.8f J/m, closure %@",
+                             feature.pieces.x, feature.pieces.y, feature.nodeCorners.description,
+                             feature.edgeCorners.x, feature.edgeCorners.y, feature.node, feature.edge.x, feature.edge.y,
+                             100 * feature.relativePenetration, feature.fraction, feature.force.x, feature.force.y,
+                             feature.energy, feature.closureSeam.map(String.init) ?? "none"))
+            }
+            if !snapshot.crossings.isEmpty { print("    Edge crossings (piece pair, edge corner pair): \(snapshot.crossings)") }
+        }
+    }
+    let attemptedPeak = max(s.peakRelativePenetration, s.rejectedPenetration ?? 0)
+    let energyJumps = s.detachmentProbes.compactMap(\.energyJump)
+    let maxActivation = energyJumps.map(abs).max() ?? 0
+    print(String(format: "dt %.3f µs, accepted through %.6f ms, accepted/attempted penetration %.3f%%/%.3f%%, max energy error %.4f%%, ΔP %.2e, ΔL %.2e",
+                 s.dt * 1e6, s.time * 1000, s.peakRelativePenetration * 100, attemptedPeak * 100, imbalance * 100, momentum, angularMomentum))
+    print(String(format: "Largest fixed-position sibling contact energy change %.8f J/m (%.4f%% of initial energy)",
+                 maxActivation, 100 * maxActivation / s.initialEnergy))
+    if let failure = s.failure ?? s.initialIssue { print("STOPPED: \(failure)") }
+    return s.failure == nil && s.initialIssue == nil && s.time >= scene.duration
+        && s.detachmentProbes.contains { $0.newTopology.pieces >= 4 }
+        && energyJumps.count == s.detachmentProbes.count && maxActivation < 1e-10 * max(1, s.initialEnergy)
+        && attemptedPeak <= 0.02 && imbalance < 0.005 && max(momentum, angularMomentum) < 1e-9
+}
+
 private struct BendWork {
     // Spent notch network, other spent faces, partial faces touching the
     // notch network, and other partial faces, respectively.

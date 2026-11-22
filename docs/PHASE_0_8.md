@@ -21,7 +21,13 @@ The notched-bend work discrepancy survives the contact repair. At extra fine, wo
 
 The nominal production step remains 2.218 µs for the standard case. A paired standard-case probe measured 0.551 s and 7.38 MiB at `923c8f8`, and 0.558 s and 7.33 MiB with the repair. `ImpactCheck --sibling-contact`, `--fracture`, `--assembly`, and the native assembly smoke passed. The scientific study still exits nonzero.
 
-The next numerical change should start with a 2D sliding and opening patch using stable material contact features and swept node–edge and edge–edge detection. It needs to account for overlap before a fragment detaches and verify force and energy consistency across feature changes. This keeps the cohesive law and shared-node FEM in place. [Cohesive element and node-to-segment contact formulation](https://onlinelibrary.wiley.com/doi/10.1002/nme.6705)
+### Contact at detachment
+
+`ImpactCheck --sliding-contact-patch` exercises a two-triangle patch through node splitting, compressed detachment, opening, and sliding recontact. Paired closure energy stayed constant through detachment and its relative force change was 2.55e−9 across the two load samples. Handoff on the open seam transferred zero penalty energy. Recontact reached 0.10% penetration and fracture work was 0.140000 J/m.
+
+`ImpactCheck --detachment-contact` still exits nonzero. It traces features by element corner and compares collision domains at the same trial positions. In the aligned extra-fine half-step case, both features had negative local gaps for over 3.7 ms before the fourth domain activated at 28.905691 ms. Two proper edge crossings were already present at the preceding accepted positions. At activation the 15.941% matching hit stayed on paired closure. A distinct ordinary hit at 2.312% would introduce 0.008482 J/m and about 250 N/m of normal force, with unchanged paired closure energy at the same positions. The guard rejected the step before those forces could act. An already overlapping feature entering the search explains the jump. The FEM indices were stable at this event, the ordinary hit appeared once, and the ordinary penalty has no stored history to reset.
+
+The smallest next contact change to test is local self-contact on already inserted surfaces that still share a collision domain. Swept node–edge crossing checks should start before domain separation, and the 2D patch should verify edge crossings and the transition from paired closure as the surfaces slip. Keep the shared-node FEM, cohesive law, production timestep, and penetration gate. Run the damage-disabled notched-bend control once the contact gate passes. [Continuous collision detection for deforming meshes with changing topology](https://pmc.ncbi.nlm.nih.gov/articles/PMC4500942/)
 
 ## Verification at the original experimental checkpoint
 
