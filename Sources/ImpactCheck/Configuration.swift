@@ -133,12 +133,33 @@ func bondedBarCheck() throws {
         let incidentTime = (probeX - pulseX) / first.waveSpeed
         let reflectedTime = (-probeX - pulseX) / first.waveSpeed
         let window = 0.105 * configuration.first.width / first.waveSpeed
+        // Read close to the bond to limit dispersive broadening of the transmitted peak.
+        let rightProbeX = 0.10 * configuration.second!.width
+        let reference = body.mesh.reference
+        let rightColumns = Set(reference.lazy.map(\.x).filter { $0 > 0 })
+        let nearX = rightColumns.filter { $0 < rightProbeX }.max()!
+        let farX = rightColumns.filter { $0 >= rightProbeX }.min()!
+        let nearNodes = reference.indices.filter { reference[$0].x == nearX }
+        let farNodes = reference.indices.filter { reference[$0].x == farX }
+        let transmittedTime = -pulseX / first.waveSpeed + (nearX + farX) / (2 * second.waveSpeed)
+        let firstModulus = first.density * first.waveSpeed * first.waveSpeed
+        let secondModulus = second.density * second.waveSpeed * second.waveSpeed
         let start = ProcessInfo.processInfo.systemUptime
         var energyDrift = 0.0
+        var transmittedStress = 0.0
         var steps = 0
         while run.step() {
             steps += 1
             energyDrift = max(energyDrift, abs(run.simulation.diagnostics.relativeEnergyError))
+            if abs(run.simulation.time - transmittedTime) <= window {
+                let position = run.simulation.body.position
+                // Cross-section average of the axial strain in the small-amplitude limit.
+                let stretchSum = zip(nearNodes, farNodes).reduce(0.0) { sum, nodes in
+                    sum + (position[nodes.1].x - position[nodes.0].x) / (farX - nearX)
+                }
+                let stress = secondModulus * (stretchSum / Double(nearNodes.count) - 1)
+                transmittedStress = min(transmittedStress, stress)
+            }
         }
         require(run.finished && run.simulation.failure == nil, "The bonded run did not finish")
         require(run.simulation.wallImpulse == 0 && run.simulation.diagnostics.contact == 0, "A free bonded bar contacted a wall")
@@ -150,11 +171,15 @@ func bondedBarCheck() throws {
         let z1 = first.density * first.waveSpeed
         let z2 = second.density * second.waveSpeed
         let expected = (z2 - z1) / (z1 + z2)
+        let transmitted = transmittedStress / (firstModulus * incident / 100)
+        let expectedTransmission = 2 * z2 / (z1 + z2)
         let elapsed = ProcessInfo.processInfo.systemUptime - start
-        print(String(format: "Bonded bar %@: reflection %+.4f (predicted %+.4f), peak energy imbalance %.4f%%, %.1f µs/step",
-                     label, measured, expected, 100 * energyDrift, elapsed * 1e6 / Double(steps)))
+        print(String(format: "Bonded bar %@: reflection %+.4f (predicted %+.4f), transmission %.4f (predicted %.4f), peak energy imbalance %.4f%%, %.1f µs/step",
+                     label, measured, expected, transmitted, expectedTransmission, 100 * energyDrift, elapsed * 1e6 / Double(steps)))
         require(abs(measured - expected) < (abs(expected) < 1e-10 ? 0.01 : 0.03),
                 "Reflected strain disagrees with the impedance prediction")
+        require(abs(transmitted - expectedTransmission) < 0.03,
+                "Transmitted stress disagrees with the impedance prediction")
         require(energyDrift < 0.01, "Bonded bar exceeded 1% peak energy imbalance")
     }
 }
