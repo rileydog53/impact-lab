@@ -112,6 +112,7 @@ public struct Body: Sendable {
     let referenceCenter: Point
     let boundaryNodes: [Int]
     let wallStiffness: [Double]
+    let measuresVerticalStrain: Bool
 
     init(mesh: Mesh, material: Material, speed: Double, gap: Double, penalty: Double, tilt: Double) {
         let c = cos(tilt), s = sin(tilt)
@@ -121,10 +122,12 @@ public struct Body: Sendable {
                   speed: speed, wallPenalty: penalty)
     }
 
-    init(mesh: Mesh, material: Material, position: [Point], speed: Double, wallPenalty: Double = 0) {
+    init(mesh: Mesh, material: Material, position: [Point], speed: Double,
+         wallPenalty: Double = 0, measuresVerticalStrain: Bool = false) {
         self.mesh = mesh
         self.material = material
         self.position = position
+        self.measuresVerticalStrain = measuresVerticalStrain
         velocity = Array(repeating: Point(speed, 0), count: position.count)
         var nodalMass = Array(repeating: 0.0, count: position.count)
         for e in mesh.elements {
@@ -226,12 +229,13 @@ public struct Simulation: Sendable {
     public private(set) var wallImpulse = 0.0
     public private(set) var wallAngularImpulse = 0.0
     public private(set) var peakPenetration = 0.0
+    public private(set) var peakRelativePenetration = 0.0
     private let initialKinetic: Double
     private var elasticEnergy = 0.0
     private var contactEnergy = 0.0
     private var primary: BodyStep
     private var secondary: BodyStep?
-    private let barContact: BarContact?
+    private let pairContact: BoundaryContact?
 
     public init(mesh: Mesh = .bar(), material: Material = Material(), speed: Double = 0.4,
                 gap: Double = 0.0005, penalty: Double = 2500, stepScale: Double = 1, tilt: Double = 0) {
@@ -240,29 +244,33 @@ public struct Simulation: Sendable {
         self.init(primary: body, gap: gap, stepScale: stepScale)
     }
 
-    init(primary: Body, secondary: Body? = nil, barContact: BarContact? = nil,
+    init(primary: Body, secondary: Body? = nil, pairContact: BoundaryContact? = nil,
          gap: Double, stepScale: Double) {
         let material = primary.material
         precondition(material.young > 0 && material.density > 0 && abs(material.poisson) < 0.5)
         precondition(stepScale > 0 && stepScale <= 1)
-        precondition((secondary == nil) == (barContact == nil))
+        precondition((secondary == nil) == (pairContact == nil))
         self.primary = BodyStep(primary)
         self.secondary = secondary.map(BodyStep.init)
-        self.barContact = barContact
+        self.pairContact = pairContact
         self.gap = gap
         // Each body starts at a uniform velocity.
         func kineticEnergy(_ body: Body) -> Double {
             0.5 * body.totalMass * simd_length_squared(body.velocity[0])
         }
         initialKinetic = kineticEnergy(primary) + (secondary.map(kineticEnergy) ?? 0)
-        let firstOmega = Self.squaredFrequency(of: primary, contact: barContact?.left)
-        let secondOmega = secondary.map { Self.squaredFrequency(of: $0, contact: barContact?.right) } ?? 0
+        // Budget both the node's own contact spring and reactions to opposing springs.
+        let allowance = 8 * (pairContact?.maximumStiffness ?? 0)
+        let firstOmega = Self.squaredFrequency(of: primary, contact: pairContact?.left, allowance: allowance)
+        let secondOmega = secondary.map {
+            Self.squaredFrequency(of: $0, contact: pairContact?.right, allowance: allowance)
+        } ?? 0
         // Central difference is linearly stable for dt * omega < 2.
         // The margin also accommodates changes in the tangent during impact.
         dt = stepScale * 0.8 / sqrt(max(firstOmega, secondOmega))
     }
 
-    private static func squaredFrequency(of body: Body, contact: BarFace?) -> Double {
+    private static func squaredFrequency(of body: Body, contact: ContactSurface?, allowance: Double) -> Double {
         let material = body.material
         var stiffness = Array(repeating: 0.0, count: body.mass.count)
         for e in body.mesh.elements {
@@ -274,9 +282,6 @@ public struct Simulation: Sendable {
             stiffness[e.c] += scale * simd_length(e.g2)
         }
         if let contact {
-            // A face node can carry its own spring plus endpoint reactions from
-            // the opposing face. Budget both in the lumped row-sum estimate.
-            let allowance = 8 * (contact.stiffness.max() ?? 0)
             for i in contact.nodes { stiffness[i] += allowance }
         }
         return body.mass.indices.reduce(0) { max($0, (stiffness[$1] + body.wallStiffness[$1]) / body.mass[$1]) }
@@ -330,9 +335,9 @@ public struct Simulation: Sendable {
         }
         let nextElastic = firstElastic + secondElastic
         var contact = ContactResult()
-        if let barContact {
-            contact = barContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
-                                          leftForce: &primary.nextContact, rightForce: &secondary!.nextContact)
+        if let pairContact {
+            contact = pairContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
+                                           leftForce: &primary.nextContact, rightForce: &secondary!.nextContact)
         } else {
             contact = wallContact()
         }
@@ -353,6 +358,7 @@ public struct Simulation: Sendable {
         wallImpulse += contact.wallImpulse
         wallAngularImpulse += contact.wallAngularImpulse
         peakPenetration = max(peakPenetration, contact.penetration)
+        peakRelativePenetration = max(peakRelativePenetration, contact.relativePenetration)
         return true
     }
 
@@ -400,7 +406,7 @@ public struct Simulation: Sendable {
             forces[e.c] += px * e.g2.x + py * e.g2.y
             let xx = simd_length_squared(fx)
             let yy = simd_length_squared(fy)
-            strain[i] = 0.5 * (xx - 1)
+            strain[i] = 0.5 * ((body.measuresVerticalStrain ? yy : xx) - 1)
             energy += e.area * (0.5 * mu * (xx + yy - 2 - 2 * logJ)
                                 + 0.5 * lambda * logJ * logJ)
         }
