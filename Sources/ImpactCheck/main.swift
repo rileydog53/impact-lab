@@ -97,6 +97,20 @@ func patchCheck() {
             "Inverted elements must be rejected")
 }
 
+// The sibling- and detachment-contact replays reproduce specific 0.8 crack
+// trajectories to test contact handoff, so they keep the element-mean
+// insertion criterion that generated those trajectories.
+if ["--legacy-insertion", "--sibling-contact", "--detachment-contact"].contains(where: CommandLine.arguments.contains) {
+    MaterialFracture.recoveredInsertionStress = false
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--fracture-map") {
+    let a = Array(CommandLine.arguments.dropFirst(index + 1))
+    try fractureMapProbe(a[0], refinement: Int(a[1])!, dt: Double(a[2])! * 1e-6, duration: Double(a[3])! * 1e-3,
+                         strikerX: a.count > 4 ? Double(a[4])! * 1e-3 : nil, quiet: a.contains("quiet"), production: a.contains("production"))
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--fracture") {
     try fractureCheck()
     exit(EXIT_SUCCESS)

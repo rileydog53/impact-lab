@@ -4,6 +4,7 @@ public struct CrackFace: Sendable {
     public let first, second: Edge
     public let damage: Double
     public let separation: Double
+    public let seed: Point // Normal and shear traction at insertion.
 }
 
 public struct MaterialFractureReading: Sendable {
@@ -79,7 +80,7 @@ struct FractureSurface: Sendable {
 // displacement 2 Gc / peak. Secant unloading keeps the maximum irreversible.
 private struct InsertedLaw: Sendable {
     let peak, energy, closureStiffness, onset, finalOpening: Double
-    let offset: Point
+    let offset, seed: Point
 
     init(traction: Point, energy: Double, stiffness: Double) {
         peak = simd_length(traction)
@@ -88,6 +89,7 @@ private struct InsertedLaw: Sendable {
         onset = peak / stiffness
         finalOpening = onset + 2 * energy / peak
         offset = traction / stiffness
+        seed = traction
     }
 
     func progress(_ maximum: Double) -> Double {
@@ -112,6 +114,11 @@ private struct InsertedLaw: Sendable {
 }
 
 package struct MaterialFracture: Sendable {
+    // Insertion stress measure. Recovered: linear least-squares patch recovery
+    // at the face endpoints (default). Element: the
+    // mean of the two adjacent constant-strain triangles (legacy 0.8 criterion,
+    // retained only for A/B verification via ImpactCheck --legacy-insertion).
+    package nonisolated(unsafe) static var recoveredInsertionStress = true
     private struct Face: Sendable {
         let left, right: Edge // Element corner IDs, both in the left triangle's orientation.
         let normal: Point
@@ -145,6 +152,7 @@ package struct MaterialFracture: Sendable {
     private let young, density, strength, toughness: Double
     private let cornerStiffness: [Double]
     private var slots: [Int]
+    private var recovery: [[(element: Int, weight: Double)]]
     private var interfaces: [Interface] = []
     private var exposedCorners: Set<Int> = []
     let contactTree: TriangleContact
@@ -193,6 +201,7 @@ package struct MaterialFracture: Sendable {
         exterior = pending.sorted { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }.map(\.value)
         contactTree = TriangleContact(mesh: mesh)
         slots = Array(repeating: -1, count: faces.count)
+        recovery = Self.recoveryWeights(mesh: mesh)
         pieces = Array(repeating: 0, count: mesh.elements.count)
         rebuildSurfaces(reference: mesh.reference)
     }
@@ -237,10 +246,18 @@ package struct MaterialFracture: Sendable {
         if !piola.contains(where: { simd_length_squared($0.x) + simd_length_squared($0.y) >= strengthSquared }) {
             return nil
         }
+        let patch = MaterialFracture.recoveredInsertionStress ? Self.recover(piola, weights: recovery) : []
         for (i, face) in faces.enumerated() where slots[i] < 0 {
             let left = piola[face.a].traction(face.normal), right = piola[face.b].traction(face.normal)
-            let mean = 0.5 * (left + right)
-            guard simd_length_squared(mean) >= strengthSquared else { continue }
+            var mean = 0.5 * (left + right)
+            if MaterialFracture.recoveredInsertionStress {
+                mean = .zero
+                for corner in [face.left.a, face.left.b, face.right.a, face.right.b] {
+                    mean += 0.25 * patch[cornerNodes[corner]].traction(face.normal)
+                }
+            }
+            // Relative 1e-12 allowance absorbs roundoff from the recovery average.
+            guard simd_length_squared(mean) >= strengthSquared * (1 - 1e-12) else { continue }
             let direction = edge(face.left)
             let tangent = simd_normalize(position[direction.b] - position[direction.a])
             let normal = Point(tangent.y, -tangent.x)
@@ -302,7 +319,60 @@ package struct MaterialFracture: Sendable {
         }
         rebuildSurfaces(reference: reference)
         let remeshed = Mesh(reference: reference, triangles: triangles, boundary: exterior.map(edge), probe: mesh.probe)
+        recovery = Self.recoveryWeights(mesh: remeshed)
         return (remeshed, sources)
+    }
+
+    // Linear least-squares patch recovery of the first Piola stress at each
+    // node, fitted to element-centroid values over the incident elements in
+    // the current connectivity, so the fit never spans an open crack. A linear
+    // fit reproduces any linear stress field exactly, including at free
+    // surfaces where plain nodal averaging underestimates bending stress.
+    // The fit is a fixed linear operator of the element stresses, so its
+    // weights are rebuilt only when the connectivity changes.
+    static func recoveryWeights(mesh: Mesh) -> [[(element: Int, weight: Double)]] {
+        let count = mesh.reference.count
+        var incident = Array(repeating: [Int](), count: count)
+        for (i, e) in mesh.elements.enumerated() { for n in [e.a, e.b, e.c] { incident[n].append(i) } }
+        let centroid = mesh.elements.map { (mesh.reference[$0.a] + mesh.reference[$0.b] + mesh.reference[$0.c]) / 3 }
+        var mark = Array(repeating: -1, count: mesh.elements.count)
+        return (0..<count).map { n in
+            // One ring of incident elements; widen to two rings only where one
+            // ring cannot determine a linear field (corners and crack flanks).
+            var patch = incident[n]
+            if patch.count < 4 {
+                for e in incident[n] { mark[e] = n }
+                for e in incident[n] {
+                    let t = mesh.elements[e]
+                    for m in [t.a, t.b, t.c] {
+                        for f in incident[m] where mark[f] != n { mark[f] = n; patch.append(f) }
+                    }
+                }
+            }
+            let origin = mesh.reference[n]
+            let scale = patch.map { simd_length(centroid[$0] - origin) }.max()!
+            let basis = patch.map { e -> SIMD3<Double> in
+                let d = (centroid[e] - origin) / scale
+                return SIMD3(1, d.x, d.y)
+            }
+            var normal = simd_double3x3(0)
+            for v in basis { normal += simd_double3x3(rows: [v * v.x, v * v.y, v * v.z]) }
+            // Fall back to the patch mean if the centroids are nearly collinear.
+            guard patch.count >= 3, abs(normal.determinant) > 1e-9 * pow(Double(patch.count), 3) else {
+                return patch.map { ($0, 1 / Double(patch.count)) }
+            }
+            // Value at the node = first row of (AᵀA)⁻¹Aᵀ applied to the samples.
+            let row = normal.inverse.transpose.columns.0
+            return zip(patch, basis).map { ($0, simd_dot(row, $1)) }
+        }
+    }
+
+    private static func recover(_ piola: [ElementPiola], weights: [[(element: Int, weight: Double)]]) -> [ElementPiola] {
+        weights.map { patch in
+            var x = Point.zero, y = Point.zero
+            for (e, w) in patch { x += w * piola[e].x; y += w * piola[e].y }
+            return ElementPiola(x, y)
+        }
     }
 
     private mutating func rebuildSurfaces(reference: [Point]) {
@@ -419,7 +489,7 @@ package struct MaterialFracture: Sendable {
             let damage = 0.5 * (seam.law.progress(seam.maxima.x) + seam.law.progress(seam.maxima.y))
             let (a, b) = seam.gap(position)
             return CrackFace(first: seam.left, second: seam.right, damage: damage,
-                             separation: 0.5 * (simd_length(a) + simd_length(b)))
+                             separation: 0.5 * (simd_length(a) + simd_length(b)), seed: seam.law.seed)
         }
     }
 
