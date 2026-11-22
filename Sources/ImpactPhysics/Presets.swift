@@ -3,6 +3,7 @@ import simd
 
 public enum Preset: String, CaseIterable, Codable, Identifiable, Sendable {
     case bar = "Bar impact"
+    case materialImpact = "Plasticity impact"
     case ring = "Ring impact"
     case block = "Tilted block"
     case twoBars = "Two-bar collision"
@@ -33,6 +34,11 @@ public enum Preset: String, CaseIterable, Codable, Identifiable, Sendable {
             scene.first.material = material
             scene.speed = speed ?? scene.speed
             return Simulation.bondedBar(scene: scene)
+        case .materialImpact:
+            var scene = SceneConfiguration.standard(self)
+            scene.first.material = material
+            scene.speed = speed ?? scene.speed
+            return scene.buildSimulation()
         case .tensionCoupon, .layeredSeam:
             return SceneConfiguration.standard(self).buildSimulation()
         }

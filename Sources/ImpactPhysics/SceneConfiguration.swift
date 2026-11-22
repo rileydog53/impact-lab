@@ -23,6 +23,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public var velocityY = 0.0
     public var mirrored = false
     public var tension: TensionSettings?
+    public var impactPlasticity: ImpactPlasticity?
     public var seam: SeamSettings?
 
     public static let youngRange = 0.5e6...4e6
@@ -35,6 +36,9 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         switch preset {
         case .bar:
             SceneConfiguration(preset: preset, first: .init(width: 1, height: 0.10), gap: 0.0005)
+        case .materialImpact:
+            SceneConfiguration(preset: preset, first: .init(width: 0.30, height: 0.06, material: Material(poisson: 0.15)),
+                               gap: 0.018, speed: 1.3, impactPlasticity: ImpactPlasticity())
         case .ring:
             SceneConfiguration(preset: preset, first: .init(width: 0.40, wallThickness: 0.09), gap: 0.004)
         case .block:
@@ -75,6 +79,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public var speedRange: ClosedRange<Double> {
         switch preset {
         case .tensionCoupon, .layeredSeam: 0...0
+        case .materialImpact: 0.25...1.5
         case .bondedBar: 0.01...0.10
         default: 0.10...1.0
         }
@@ -96,6 +101,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         let duration: Double
         switch preset {
         case .bar: duration = 0.062
+        case .materialImpact: return gap / speed + 12 * first.width / first.material.waveSpeed
         case .ring: duration = 0.26
         case .block: duration = 0.17
         case .twoBars: duration = 0.070
@@ -142,6 +148,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
               gapRange.contains(gap), speedRange.contains(speed), targetXRange.contains(targetX),
               targetVelocityXRange.contains(targetVelocityX), puckOffsetRange.contains(puckOffsetY),
               Self.centerYRange.contains(centerY), Self.velocityYRange.contains(velocityY),
+              preset == .materialImpact ? impactPlasticity?.isValid == true : impactPlasticity == nil,
               preset == .tensionCoupon ? tension?.isValid == true && velocityY == 0 : tension == nil,
               preset == .layeredSeam ? seam?.isValid == true && velocityY == 0 : seam == nil,
               !mirrored || preset == .block else {
@@ -152,6 +159,12 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public func makeSimulation() throws -> Simulation {
         try validate()
         return buildSimulation()
+    }
+
+    package func refinedImpact(columns: Int, rows: Int, stepScale: Double) throws -> Simulation {
+        try validate()
+        precondition(preset == .materialImpact)
+        return Simulation.materialImpact(scene: self, columns: columns, rows: rows, stepScale: stepScale)
     }
 
     package func refinedTension(columns: Int, rows: Int, stepScale: Double) throws -> Simulation {
@@ -169,6 +182,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     func buildSimulation() -> Simulation {
         let mesh: Mesh
         switch preset {
+        case .materialImpact: return Simulation.materialImpact(scene: self, columns: 48, rows: 8, stepScale: 1)
         case .bar: mesh = .bar(width: first.width, height: first.height!)
         case .ring: mesh = .ring(diameter: first.width, thickness: first.wallThickness!)
         case .block: mesh = .roundedBlock(width: first.width, height: first.height!, radius: first.cornerRadius!)

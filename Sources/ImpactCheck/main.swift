@@ -97,6 +97,12 @@ func patchCheck() {
             "Inverted elements must be rejected")
 }
 
+if CommandLine.arguments.dropFirst().contains("--plasticity") {
+    try plasticityCheck()
+    try materialImpactCheck()
+    exit(EXIT_SUCCESS)
+}
+
 let nominal = wave()
 let stiff = wave(young: 4e6)
 let repeatRun = wave()
@@ -131,4 +137,5 @@ puckStripCheck()
 try configurationCheck()
 try bondedBarCheck()
 try plasticityCheck()
+try materialImpactCheck()
 try cohesiveCheck()

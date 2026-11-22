@@ -11,7 +11,8 @@ public struct SceneTrace: Sendable {
 
     public let preset: Preset
     public let samples: [TraceSample]
-    public let couponResponse: CouponResponse?
+    public let materialResponse: CouponResponse?
+    public var couponResponse: CouponResponse? { preset == .tensionCoupon ? materialResponse : nil }
     public let seamResponse: SeamResponse?
     public let residualLength: Double?
 
@@ -30,15 +31,20 @@ public struct SceneRun {
     public let horizon: Double
     public private(set) var simulation: Simulation
     public private(set) var samples: [TraceSample]
+    private let impactGauge: EndGauge?
+    public var gaugeLength: Double? { impactGauge?.length(of: simulation.body.position) ?? simulation.gaugeLength }
     public var finished: Bool { simulation.time >= horizon }
     public var trace: SceneTrace {
         SceneTrace(preset: configuration.preset, samples: samples,
-                   couponResponse: configuration.tension?.response, seamResponse: configuration.seam?.response,
-                   residualLength: residualLength)
+                   materialResponse: configuration.impactPlasticity?.response ?? configuration.tension?.response,
+                   seamResponse: configuration.seam?.response, residualLength: residualLength)
     }
     public var residualLength: Double? {
-        guard configuration.tension != nil, finished, simulation.failure == nil else { return nil }
+        guard configuration.tension != nil || impactGauge != nil, finished, simulation.failure == nil else { return nil }
         let window = TensionLoad.measurementTransits * configuration.first.width / configuration.first.material.waveSpeed
+        if impactGauge != nil {
+            guard let lastContact = simulation.lastWallContactTime, lastContact <= horizon - window else { return nil }
+        }
         let unloaded = samples.reversed().prefix { $0.time >= horizon - window }
         guard !unloaded.isEmpty else { return nil }
         return configuration.first.width + unloaded.reduce(0) { $0 + $1.values.x } / (1000 * Double(unloaded.count))
@@ -52,7 +58,11 @@ public struct SceneRun {
         self.configuration = configuration
         self.simulation = simulation
         horizon = configuration.duration
-        samples = [TraceSample(time: 0, values: Self.values(in: simulation, configuration: configuration))]
+        let gauge = configuration.impactPlasticity.map { _ in
+            EndGauge(body: simulation.body, length: configuration.first.width, height: configuration.first.height!)
+        }
+        impactGauge = gauge
+        samples = [TraceSample(time: 0, values: Self.values(in: simulation, configuration: configuration, impactGauge: gauge))]
     }
 
     @discardableResult public mutating func step() -> Bool {
@@ -60,10 +70,10 @@ public struct SceneRun {
         let timeBefore = simulation.time
         let nextSample = Double(samples.count) * Self.sampleInterval
         let crossesSample = timeBefore + simulation.dt >= nextSample && nextSample <= horizon
-        let before = crossesSample ? Self.values(in: simulation, configuration: configuration) : .zero
+        let before = crossesSample ? Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge) : .zero
         guard simulation.step() else { return false }
         if crossesSample {
-            let after = Self.values(in: simulation, configuration: configuration)
+            let after = Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge)
             var time = nextSample
             while time <= min(simulation.time, horizon) {
                 let fraction = (time - timeBefore) / (simulation.time - timeBefore)
@@ -74,14 +84,14 @@ public struct SceneRun {
         return true
     }
 
-    private static func values(in simulation: Simulation, configuration: SceneConfiguration) -> Point {
+    private static func values(in simulation: Simulation, configuration: SceneConfiguration, impactGauge: EndGauge?) -> Point {
         switch configuration.preset {
         case .bar, .bondedBar: Point(simulation.probeStrain * 100, 0)
         case .ring: simulation.body.diameters * 1000
         case .block: Point(simulation.body.orientation * 180 / .pi, 0)
         case .twoBars, .puckStrip: Point(simulation.body.centerVelocity.x, simulation.secondBody!.centerVelocity.x)
-        case .tensionCoupon:
-            Point(1000 * ((simulation.gaugeLength ?? configuration.first.width) - configuration.first.width),
+        case .tensionCoupon, .materialImpact:
+            Point(1000 * ((impactGauge?.length(of: simulation.body.position) ?? simulation.gaugeLength!) - configuration.first.width),
                   100 * simulation.meanPlasticStrain)
         case .layeredSeam:
             Point(1000 * (simulation.seamReadings?.opening ?? 0), simulation.seamReadings?.dissipatedPerArea ?? 0)

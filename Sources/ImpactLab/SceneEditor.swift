@@ -41,6 +41,10 @@ struct SceneEditor: View {
             }
             DisclosureGroup(scene.second == nil ? "Material and dimensions" : firstLabel) {
                 specimenControls(second: false)
+                if let plasticity = scene.impactPlasticity, plasticity.response == .elastoplastic {
+                    impactControl("Yield stress / E", plasticity, key: \.yieldFraction, range: ImpactPlasticity.yieldRange)
+                    impactControl("Hardening / E", plasticity, key: \.hardeningFraction, range: ImpactPlasticity.hardeningRange)
+                }
             }
             if scene.second != nil {
                 DisclosureGroup(secondLabel) {
@@ -104,7 +108,7 @@ struct SceneEditor: View {
         let diameter = !second && (scene.preset == .puckStrip || scene.preset == .ring)
         let sharedHeight = scene.sharesHeight ? "Shared height" : "Height"
         return VStack(alignment: .leading, spacing: 9) {
-            let widthLabel = scene.tension != nil ? "Length" : (diameter ? "Diameter" : "Width")
+            let widthLabel = (scene.tension != nil || scene.impactPlasticity != nil) ? "Length" : (diameter ? "Diameter" : "Width")
             specimenControl(widthLabel, unit: "mm", second: second,
                             range: SceneConfiguration.sizeRange(nominal.width), scale: 1000, digits: 1,
                             read: { $0.width }, write: { $0.width = $1 })
@@ -134,6 +138,15 @@ struct SceneEditor: View {
                             read: { $0.material.poisson }, write: { $0.material.poisson = $1 })
         }
         .padding(.top, 8)
+    }
+
+    private func impactControl(_ label: String, _ plasticity: ImpactPlasticity,
+                               key: WritableKeyPath<ImpactPlasticity, Double>, range: ClosedRange<Double>) -> some View {
+        slider(label, unit: "%", value: plasticity[keyPath: key], range: range, scale: 100, digits: 1) { value in
+            var draft = scene
+            draft.impactPlasticity?[keyPath: key] = value
+            experiment.edit(draft)
+        }
     }
 
     private func tensionControl(_ label: String, _ tension: TensionSettings, key: WritableKeyPath<TensionSettings, Double>,

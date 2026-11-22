@@ -123,3 +123,64 @@ func plasticityCheck() throws {
     print(String(format: "Residual extension changed %.3f%% with timestep refinement and %.3f%% with mesh refinement",
                  100 * timeChange, 100 * meshChange))
 }
+
+func materialImpactCheck() throws {
+    let plastic = SceneConfiguration.standard(.materialImpact)
+    var elastic = plastic
+    elastic.impactPlasticity?.response = .elastic
+
+    func measure(_ label: String, _ initial: SceneRun) -> (residual: Double, run: SceneRun) {
+        var run = initial
+        var peakError = 0.0
+        var dissipation = 0.0
+        var steps = 0
+        let start = ProcessInfo.processInfo.systemUptime
+        let initialMomentum = run.simulation.diagnostics.momentum.x
+        while run.step() {
+            steps += 1
+            let d = run.simulation.diagnostics
+            peakError = max(peakError, abs(d.relativeEnergyError))
+            require(d.plasticDissipation >= dissipation, "\(label) lost plastic dissipation")
+            dissipation = d.plasticDissipation
+        }
+        let sim = run.simulation
+        require(run.finished && sim.failure == nil, sim.failure ?? "\(label) did not finish")
+        require(sim.wallImpulse > 0 && sim.diagnostics.contact == 0 && sim.body.centerVelocity.x < 0,
+                "\(label) did not hit and rebound from the wall")
+        require(abs(sim.diagnostics.momentum.x + sim.wallImpulse - initialMomentum) < 1e-9,
+                "\(label) violated wall impulse balance")
+        let residual = 1000 * ((run.residualLength ?? .nan) - run.configuration.first.width)
+        let measurementWindow = 6 * run.configuration.first.width / run.configuration.first.material.waveSpeed
+        let tail = run.samples.reversed().prefix { $0.time >= run.horizon - measurementWindow }
+        let span = tail.map(\.values.x).max()! - tail.map(\.values.x).min()!
+        let timePerStep = (ProcessInfo.processInfo.systemUptime - start) * 1e6 / Double(steps)
+        print(String(format: "%@: residual length change %+.4f mm (tail span %.4f mm), mean / peak plastic strain %.3f%% / %.3f%%, dissipated %.4f J/m, peak imbalance %.4f%%, %.1f µs/step",
+                     label, residual, span, 100 * sim.meanPlasticStrain, 100 * sim.peakPlasticStrain,
+                     dissipation, 100 * peakError, timePerStep))
+        require(residual.isFinite, "\(label) did not have a full unloaded measurement window")
+        require(peakError < 0.01, "\(label) exceeded 1% peak energy imbalance")
+        return (residual, run)
+    }
+
+    let baseline = measure("Elastic impact", try SceneRun(elastic))
+    let nominal = measure("Elastoplastic impact", try SceneRun(plastic))
+    let fine = try plastic.refinedImpact(columns: 96, rows: 16, stepScale: 1)
+    let commonStep = min(nominal.run.simulation.dt / 2, fine.dt)
+    let smallerStep = try plastic.refinedImpact(columns: 48, rows: 8, stepScale: commonStep / nominal.run.simulation.dt)
+    let fineStep = try plastic.refinedImpact(columns: 96, rows: 16, stepScale: commonStep / fine.dt)
+    let temporal = measure("Elastoplastic impact, smaller timestep", SceneRun(plastic, simulation: smallerStep))
+    let spatial = measure("Elastoplastic impact, finer mesh at same step", SceneRun(plastic, simulation: fineStep))
+    require(abs(baseline.residual) < 0.1 && baseline.run.simulation.peakPlasticStrain == 0,
+            "Elastic impact did not recover")
+    require(nominal.residual < -1 && nominal.run.simulation.meanPlasticStrain > 0
+            && nominal.run.simulation.diagnostics.plasticDissipation > 0,
+            "Elastoplastic impact did not retain a measurable set and plastic history")
+    let timeChange = abs(temporal.residual / nominal.residual - 1)
+    let meshChange = abs(spatial.residual / temporal.residual - 1)
+    print(String(format: "Impact residual refinement: timestep %.3f%%, mesh %.3f%%", 100 * timeChange, 100 * meshChange))
+    require(timeChange < 0.05 && meshChange < 0.05, "Impact residual failed 5% independent refinement gate")
+    let matches = nominal.run.trace.matching(baseline.run.trace)
+    require(matches.count == nominal.run.samples.count
+            && matches.last?.reference.y == 0 && (matches.last?.current.y ?? 0) > 0,
+            "Impact references did not compare on the shared time grid")
+}

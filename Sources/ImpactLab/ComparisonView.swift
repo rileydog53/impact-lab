@@ -4,6 +4,7 @@ import SwiftUI
 struct ComparisonView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var cursor: Double
+    @State private var comparePlasticStrain = false
     let reference: SceneTrace
     let current: SceneTrace
     let samples: [SceneTrace.Match]
@@ -23,7 +24,7 @@ struct ComparisonView: View {
         case .ring: [("Horizontal diameter", "mm", \.x, .mint), ("Vertical diameter", "mm", \.y, .orange)]
         case .twoBars: [("Left bar", "m/s", \.x, .mint), ("Right bar", "m/s", \.y, .orange)]
         case .puckStrip: [("Puck", "m/s", \.x, .mint), ("Strip", "m/s", \.y, .orange)]
-        case .tensionCoupon:
+        case .tensionCoupon, .materialImpact:
             [("Length change", "mm", \.x, .mint), ("Mean plastic strain", "%", \.y, .orange)]
         case .layeredSeam:
             [("Opening", "mm", \.x, .mint), ("Dissipated fracture energy", "J/m²", \.y, .orange)]
@@ -43,14 +44,19 @@ struct ComparisonView: View {
             if samples.count > 1 {
                 let selected = samples[Int(cursor)]
                 HStack(spacing: 18) {
-                    Label("\(reference.seamResponse?.rawValue ?? reference.couponResponse?.rawValue ?? "Reference") · dashed",
+                    Label("\(reference.seamResponse?.rawValue ?? reference.materialResponse?.rawValue ?? "Reference") · dashed",
                           systemImage: "line.diagonal")
-                    Label("\(current.seamResponse?.rawValue ?? current.couponResponse?.rawValue ?? "Current") · solid",
+                    Label("\(current.seamResponse?.rawValue ?? current.materialResponse?.rawValue ?? "Current") · solid",
                           systemImage: "line.horizontal")
                 }
                 .font(.caption).foregroundStyle(.secondary)
-                if preset == .tensionCoupon {
-                    Text("Length change (mm)").font(.caption).foregroundStyle(.secondary)
+                if current.materialResponse != nil {
+                    Picker("Comparison signal", selection: $comparePlasticStrain) {
+                        Text("Length change (mm)").tag(false)
+                        Text("Mean plastic strain (%)").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                 } else if preset == .layeredSeam {
                     Text("Mean opening (mm)").font(.caption).foregroundStyle(.secondary)
                 }
@@ -106,7 +112,14 @@ struct ComparisonView: View {
 
     private var chart: some View {
         Canvas { context, size in
-            let signals = preset == .tensionCoupon || preset == .layeredSeam ? Array(series.prefix(1)) : series
+            let signals: [(name: String, unit: String, value: KeyPath<Point, Double>, color: Color)]
+            if current.materialResponse != nil {
+                signals = [series[comparePlasticStrain ? 1 : 0]]
+            } else if preset == .layeredSeam {
+                signals = [series[0]]
+            } else {
+                signals = series
+            }
             let time = samples.last!.time
             var low = Double.infinity
             var high = -Double.infinity

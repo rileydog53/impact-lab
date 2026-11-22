@@ -316,6 +316,7 @@ public struct Simulation: Sendable {
     private var primaryEnergy = ElementEnergy()
     private var secondaryEnergy = ElementEnergy()
     private var contactEnergy = 0.0
+    public private(set) var lastWallContactTime: Double?
     private var bondEnergy = 0.0
     private var appliedWork = 0.0
     private var primary: BodyStep
@@ -492,6 +493,7 @@ public struct Simulation: Sendable {
         primaryEnergy = firstEnergy
         secondaryEnergy = secondEnergy
         contactEnergy = contact.energy
+        if primary.body.hasWall && contact.penetration > 0 { lastWallContactTime = time }
         if let trial = seamTrial {
             seamReadings = trial.readings
             seamMaxima = trial.maxima
