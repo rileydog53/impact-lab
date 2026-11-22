@@ -25,6 +25,8 @@ struct ComparisonView: View {
         case .puckStrip: [("Puck", "m/s", \.x, .mint), ("Strip", "m/s", \.y, .orange)]
         case .tensionCoupon:
             [("Length change", "mm", \.x, .mint), ("Mean plastic strain", "%", \.y, .orange)]
+        case .layeredSeam:
+            [("Opening", "mm", \.x, .mint), ("Dissipated fracture energy", "J/m²", \.y, .orange)]
         }
     }
 
@@ -41,12 +43,16 @@ struct ComparisonView: View {
             if samples.count > 1 {
                 let selected = samples[Int(cursor)]
                 HStack(spacing: 18) {
-                    Label("\(reference.couponResponse?.rawValue ?? "Reference") · dashed", systemImage: "line.diagonal")
-                    Label("\(current.couponResponse?.rawValue ?? "Current") · solid", systemImage: "line.horizontal")
+                    Label("\(reference.seamResponse?.rawValue ?? reference.couponResponse?.rawValue ?? "Reference") · dashed",
+                          systemImage: "line.diagonal")
+                    Label("\(current.seamResponse?.rawValue ?? current.couponResponse?.rawValue ?? "Current") · solid",
+                          systemImage: "line.horizontal")
                 }
                 .font(.caption).foregroundStyle(.secondary)
                 if preset == .tensionCoupon {
                     Text("Length change (mm)").font(.caption).foregroundStyle(.secondary)
+                } else if preset == .layeredSeam {
+                    Text("Mean opening (mm)").font(.caption).foregroundStyle(.secondary)
                 }
                 chart.frame(height: 190)
                 HStack {
@@ -100,7 +106,7 @@ struct ComparisonView: View {
 
     private var chart: some View {
         Canvas { context, size in
-            let signals = preset == .tensionCoupon ? Array(series.prefix(1)) : series
+            let signals = preset == .tensionCoupon || preset == .layeredSeam ? Array(series.prefix(1)) : series
             let time = samples.last!.time
             var low = Double.infinity
             var high = -Double.infinity

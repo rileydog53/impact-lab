@@ -9,6 +9,7 @@ public enum Preset: String, CaseIterable, Codable, Identifiable, Sendable {
     case puckStrip = "Puck and strip"
     case bondedBar = "Bonded bar"
     case tensionCoupon = "Tension coupon"
+    case layeredSeam = "Layered seam"
 
     public var id: Self { self }
 
@@ -32,8 +33,8 @@ public enum Preset: String, CaseIterable, Codable, Identifiable, Sendable {
             scene.first.material = material
             scene.speed = speed ?? scene.speed
             return Simulation.bondedBar(scene: scene)
-        case .tensionCoupon:
-            return SceneConfiguration.standard(.tensionCoupon).buildSimulation()
+        case .tensionCoupon, .layeredSeam:
+            return SceneConfiguration.standard(self).buildSimulation()
         }
     }
 }

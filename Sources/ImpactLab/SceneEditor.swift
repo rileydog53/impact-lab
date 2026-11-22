@@ -19,6 +19,18 @@ struct SceneEditor: View {
                     }
                     .padding(.top, 8)
                 }
+            } else if let seam = scene.seam {
+                DisclosureGroup("Seam settings") {
+                    VStack(alignment: .leading, spacing: 9) {
+                        seamControl("Peak stress / softer E", unit: "%", \.strengthFraction,
+                                    range: SeamSettings.strengthRange, scale: 100, digits: 2, seam: seam)
+                        seamControl("Critical opening", unit: "mm", \.criticalOpening,
+                                    range: SeamSettings.openingRange, scale: 1000, digits: 2, seam: seam)
+                        Text("The grips move the layers along the seam normal. Transverse motion is guided.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 8)
+                }
             } else {
                 DisclosureGroup("Initial conditions") {
                     VStack(alignment: .leading, spacing: 9) {
@@ -43,11 +55,18 @@ struct SceneEditor: View {
         switch scene.preset {
         case .twoBars, .bondedBar: "Left bar"
         case .puckStrip: "Puck"
+        case .layeredSeam: "Left layer"
         default: "Specimen"
         }
     }
 
-    private var secondLabel: String { scene.preset == .puckStrip ? "Strip" : "Right bar" }
+    private var secondLabel: String {
+        switch scene.preset {
+        case .puckStrip: "Strip"
+        case .layeredSeam: "Right layer"
+        default: "Right bar"
+        }
+    }
 
     @ViewBuilder
     private var initialControls: some View {
@@ -122,6 +141,15 @@ struct SceneEditor: View {
         slider(label, unit: "%", value: tension[keyPath: key], range: range, scale: 100, digits: 1) { value in
             var draft = scene
             draft.tension?[keyPath: key] = value
+            experiment.edit(draft)
+        }
+    }
+
+    private func seamControl(_ label: String, unit: String, _ key: WritableKeyPath<SeamSettings, Double>,
+                             range: ClosedRange<Double>, scale: Double, digits: Int, seam: SeamSettings) -> some View {
+        slider(label, unit: unit, value: seam[keyPath: key], range: range, scale: scale, digits: digits) { value in
+            var draft = scene
+            draft.seam?[keyPath: key] = value
             experiment.edit(draft)
         }
     }

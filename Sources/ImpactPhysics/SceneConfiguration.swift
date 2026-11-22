@@ -23,6 +23,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public var velocityY = 0.0
     public var mirrored = false
     public var tension: TensionSettings?
+    public var seam: SeamSettings?
 
     public static let youngRange = 0.5e6...4e6
     public static let densityRange = 500.0...2500.0
@@ -51,12 +52,17 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .tensionCoupon:
             SceneConfiguration(preset: preset, first: .init(width: 0.30, height: 0.06, material: Material(poisson: 0.25)),
                                gap: 0, speed: 0, tension: TensionSettings())
+        case .layeredSeam:
+            SceneConfiguration(preset: preset,
+                               first: .init(width: 0.09, height: 0.065, material: Material(young: 1.8e6)),
+                               second: .init(width: 0.09, height: 0.065, material: Material(young: 2.6e6)),
+                               gap: 0, speed: 0, seam: SeamSettings())
         }
     }
 
     public var isPair: Bool { preset == .twoBars || preset == .puckStrip }
     public var isBonded: Bool { preset == .bondedBar }
-    public var sharesHeight: Bool { preset == .twoBars || isBonded }
+    public var sharesHeight: Bool { preset == .twoBars || isBonded || preset == .layeredSeam }
     public var gapRange: ClosedRange<Double> {
         let standardGap = Self.standard(preset).gap
         return standardGap * 0.5...standardGap * 2
@@ -68,7 +74,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public var targetVelocityXRange: ClosedRange<Double> { isPair || isBonded ? -0.15...0.15 : 0...0 }
     public var speedRange: ClosedRange<Double> {
         switch preset {
-        case .tensionCoupon: 0...0
+        case .tensionCoupon, .layeredSeam: 0...0
         case .bondedBar: 0.01...0.10
         default: 0.10...1.0
         }
@@ -77,6 +83,12 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
 
     public static func sizeRange(_ nominal: Double) -> ClosedRange<Double> {
         nominal * 0.9...nominal * 1.1
+    }
+
+    var seamPhaseDuration: Double {
+        let right = second!
+        let transit = first.width / first.material.waveSpeed + right.width / right.material.waveSpeed
+        return CohesiveSeam.transitsPerPhase * transit
     }
 
     public var duration: Double {
@@ -91,6 +103,8 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .bondedBar: return 1.05 * first.width / first.material.waveSpeed
         case .tensionCoupon:
             return (2 * TensionLoad.rampTransits + TensionLoad.settleTransits) * first.width / first.material.waveSpeed
+        case .layeredSeam:
+            return (3 + CohesiveSeam.transitsToSettle / CohesiveSeam.transitsPerPhase) * seamPhaseDuration
         }
         let firstWidth = first.width / reference.first.width
         let firstHeight = (first.height ?? 1) / (reference.first.height ?? 1)
@@ -129,6 +143,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
               targetVelocityXRange.contains(targetVelocityX), puckOffsetRange.contains(puckOffsetY),
               Self.centerYRange.contains(centerY), Self.velocityYRange.contains(velocityY),
               preset == .tensionCoupon ? tension?.isValid == true && velocityY == 0 : tension == nil,
+              preset == .layeredSeam ? seam?.isValid == true && velocityY == 0 : seam == nil,
               !mirrored || preset == .block else {
             throw SceneFileError.invalidConfiguration
         }
@@ -145,6 +160,12 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         return Simulation.tensionCoupon(scene: self, columns: columns, rows: rows, stepScale: stepScale)
     }
 
+    package func refinedSeam(rows: Int, stepScale: Double) throws -> Simulation {
+        try validate()
+        precondition(preset == .layeredSeam)
+        return Simulation.layeredSeam(scene: self, rows: rows, stepScale: stepScale)
+    }
+
     func buildSimulation() -> Simulation {
         let mesh: Mesh
         switch preset {
@@ -155,6 +176,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .puckStrip: return Simulation.puckAndStrip(scene: self)
         case .bondedBar: return Simulation.bondedBar(scene: self)
         case .tensionCoupon: return Simulation.tensionCoupon(scene: self, columns: 32, rows: 6, stepScale: 1)
+        case .layeredSeam: return Simulation.layeredSeam(scene: self, rows: 8, stepScale: 1)
         }
         let body = Body(mesh: mesh, material: first.material, velocity: Point(speed, velocityY),
                         gap: gap, penalty: 2500, tilt: preset == .block ? (mirrored ? -Preset.blockTilt : Preset.blockTilt) : 0,

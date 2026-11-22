@@ -14,13 +14,14 @@ private extension Preset {
         switch self {
         case .twoBars: ("Left bar", "Right bar")
         case .puckStrip: ("Puck", "Strip")
+        case .layeredSeam: ("Left layer", "Right layer")
         default: nil
         }
     }
 }
 
 @MainActor @Observable final class Experiment {
-    static let initialPreset = Preset.tensionCoupon
+    static let initialPreset = Preset.layeredSeam
     private var run = try! SceneRun(.standard(initialPreset))
     private var drafts: [Preset: SceneConfiguration] = [:]
     private(set) var reference: SceneTrace?
@@ -64,6 +65,13 @@ private extension Preset {
         var draft = configuration
         guard draft.tension?.response != response else { return }
         draft.tension?.response = response
+        edit(draft)
+    }
+
+    func setSeamResponse(_ response: SeamResponse) {
+        var draft = configuration
+        guard draft.seam?.response != response else { return }
+        draft.seam?.response = response
         edit(draft)
     }
 
@@ -120,6 +128,7 @@ private extension Preset {
         case .twoBars: 0.065
         case .puckStrip: 0.075
         case .tensionCoupon: 0.105
+        case .layeredSeam: 0.065
         }
     }
 
@@ -148,7 +157,9 @@ struct LabView: View {
     @State private var experiment = Experiment()
     @State private var showComparison = false
     @State private var showPlasticStrain = false
+    @State private var showFractureEnergy = false
     private var isCoupon: Bool { experiment.preset == .tensionCoupon }
+    private var isSeam: Bool { experiment.preset == .layeredSeam }
     private var showingPlastic: Bool { isCoupon && showPlasticStrain }
     private let refresh = Timer.publish(every: 1.0 / 60, on: .main, in: .common).autoconnect()
 
@@ -165,6 +176,15 @@ struct LabView: View {
                         Picker("Color field", selection: $showPlasticStrain) {
                             Text("Axial strain").tag(false)
                             Text("Plastic strain").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 205)
+                    }
+                    if isSeam {
+                        Picker("Trace", selection: $showFractureEnergy) {
+                            Text("Opening").tag(false)
+                            Text("Dissipation").tag(true)
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
@@ -215,6 +235,16 @@ struct LabView: View {
                             Text("Length \(1000 * length, specifier: "%.2f") mm")
                                 .foregroundStyle(.secondary).monospacedDigit()
                         }
+                    case .layeredSeam:
+                        Text(showFractureEnergy ? "Dissipated fracture energy" : "Mean seam opening")
+                            .font(.headline)
+                        Spacer()
+                        if let seam = experiment.simulation.seamReadings {
+                            Text(showFractureEnergy
+                                 ? String(format: "%.2f J/m²", seam.dissipatedPerArea)
+                                 : String(format: "%+.3f mm", 1000 * seam.opening))
+                                .foregroundStyle(mint).monospacedDigit()
+                        }
                     }
                 }
                 traceCanvas
@@ -238,6 +268,17 @@ struct LabView: View {
                             set: { experiment.setCouponResponse($0) }
                         )) {
                             ForEach(CouponResponse.allCases, id: \.self) { response in
+                                Text(response.rawValue).tag(response)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    if isSeam {
+                        Picker("Bond response", selection: Binding(
+                            get: { experiment.configuration.seam?.response ?? .separating },
+                            set: { experiment.setSeamResponse($0) }
+                        )) {
+                            ForEach(SeamResponse.allCases, id: \.self) { response in
                                 Text(response.rawValue).tag(response)
                             }
                         }
@@ -273,7 +314,7 @@ struct LabView: View {
                         .disabled(!experiment.canCompare)
                     }
                     if let reference = experiment.reference {
-                        Text("Reference · \(reference.couponResponse?.rawValue ?? reference.preset.rawValue)")
+                        Text("Reference · \(reference.seamResponse?.rawValue ?? reference.couponResponse?.rawValue ?? reference.preset.rawValue)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Divider()
@@ -356,6 +397,14 @@ struct LabView: View {
                 reading("Plastic dissipation", d.plasticDissipation, "J/m", "%.3f")
                 reading("Stored hardening energy", d.hardening, "J/m", "%.3f")
                 reading("Applied work", d.appliedWork, "J/m", "%.3f")
+            } else if let seam = simulation.seamReadings {
+                reading("Seam force", seam.force, "N/m", "%+.2f")
+                reading("Fully separated", 100 * seam.separatedFraction, "%", "%.1f")
+                reading("Dissipated / area", seam.dissipatedPerArea, "J/m²", "%.3f")
+                reading("Fracture energy Gc", seam.criticalEnergy, "J/m²", "%.3f")
+                reading("Stored bond energy", d.bondEnergy, "J/m", "%.3f")
+                reading("Closure contact energy", d.contact, "J/m", "%.3f")
+                reading("Grip work", d.appliedWork, "J/m", "%.3f")
             } else {
                 if !experiment.configuration.isBonded {
                     reading("Peak penetration", simulation.peakPenetration * 1000, "mm", "%.3f")
@@ -374,7 +423,7 @@ struct LabView: View {
             }
             reading("Kinetic energy", d.kinetic, "J/m", "%.3f")
             reading("Elastic energy", d.elastic, "J/m", "%.3f")
-            reading(isCoupon ? "Work balance error" : "Energy imbalance", 100 * d.relativeEnergyError, "%", "%+.3f")
+            reading(isCoupon || isSeam ? "Work balance error" : "Energy imbalance", 100 * d.relativeEnergyError, "%", "%+.3f")
         }
     }
 
@@ -401,11 +450,11 @@ struct LabView: View {
             let farthestRight = max(primary.map(\.x).max() ?? 0, second?.position.map(\.x).max() ?? -.infinity)
             let farthestVertical = max(primary.map { abs($0.y - scene.centerY) }.max() ?? 0,
                                        second?.position.map { abs($0.y - scene.centerY) }.max() ?? 0)
-            let sceneCenter = scene.targetX + (coupon ? 0 : (puckStrip ? -0.045 : (scene.isBonded ? -0.10 : 0.054)))
-            let minimumHalfWidth = coupon ? 0.24 : (puckStrip ? 0.16 : (scene.isBonded ? 0.99 : 0.63))
+            let sceneCenter = scene.targetX + (coupon || isSeam ? 0 : (puckStrip ? -0.045 : (scene.isBonded ? -0.10 : 0.054)))
+            let minimumHalfWidth = isSeam ? 0.13 : (coupon ? 0.24 : (puckStrip ? 0.16 : (scene.isBonded ? 0.99 : 0.63)))
             let sceneWidth = free ? 2 * max(minimumHalfWidth, sceneCenter - farthestLeft, farthestRight - sceneCenter)
                 : max(initialWidth, -farthestLeft + 0.1)
-            let sceneHeight = max(coupon ? 0.17 : 0.52, 2 * farthestVertical + (puckStrip ? 0.12 : 0.08))
+            let sceneHeight = max(coupon || isSeam ? 0.17 : 0.52, 2 * farthestVertical + (puckStrip ? 0.12 : 0.08))
             let scale = min((size.width - 65) / sceneWidth, (size.height - 60) / sceneHeight)
             let wall = size.width - 32
             let origin = free ? size.width / 2 - sceneCenter * scale : wall
@@ -414,7 +463,7 @@ struct LabView: View {
                 CGPoint(x: origin + scale * p.x, y: middle - scale * (p.y - scene.centerY))
             }
             var grid = Path()
-            let gridsPerMetre = puckStrip || coupon ? 20.0 : 10.0
+            let gridsPerMetre = puckStrip || coupon || isSeam ? 20.0 : 10.0
             let firstGrid = !free ? -Int(sceneWidth * gridsPerMetre)
                 : Int(ceil((sceneCenter - sceneWidth / 2) * gridsPerMetre))
             let lastGrid = !free ? 0 : Int(floor((sceneCenter + sceneWidth / 2) * gridsPerMetre))
@@ -483,6 +532,20 @@ struct LabView: View {
                     context.draw(Text(label.uppercased()).font(.caption2.monospaced()).foregroundStyle(color),
                                  at: labelPosition)
                 }
+                if let faces = simulation.seamFaces, let readings = simulation.seamReadings {
+                    let faceColor = readings.force < 0 || readings.dissipated > 0 ? amber : mint
+                    for face in [faces.left, faces.right] {
+                        context.stroke(Path { path in
+                            path.move(to: project(face[0]))
+                            for node in face.dropFirst() { path.addLine(to: project(node)) }
+                        }, with: .color(faceColor), lineWidth: 2)
+                    }
+                    let caption = readings.force < 0 ? "RECLOSURE CONTACT"
+                        : (readings.separatedFraction > 1 - 1e-12 ? "SEPARATED" : "SEAM")
+                    context.draw(Text(caption).font(.caption2.monospaced()).foregroundStyle(faceColor),
+                                 at: project(Point((faces.left[0].x + faces.right[0].x) / 2,
+                                                   min(faces.left[0].y, faces.right[0].y) - 0.018)))
+                }
             } else if let tension = scene.tension {
                 let ratio = simulation.appliedTraction / (tension.peakFraction * scene.first.material.young)
                 if ratio > 0.02 {
@@ -531,15 +594,18 @@ struct LabView: View {
             let block = experiment.preset == .block
             let bonded = experiment.preset == .bondedBar
             let coupon = isCoupon
-            let velocityTrace = experiment.preset.pairLabels != nil
+            let velocityTrace = experiment.configuration.isPair
+            let seamEnergy = isSeam && showFractureEnergy
+            let signal: KeyPath<Point, Double> = seamEnergy ? \.y : \.x
             let initial = trace.first?.values.x ?? 0
             let initialTargetSpeed = trace.first?.values.y ?? 0
-            let center = velocityTrace ? (initial + initialTargetSpeed) / 2 : initial
+            let fractureScale = experiment.simulation.seamReadings?.criticalEnergy ?? 1
+            let center = seamEnergy ? fractureScale / 2 : (velocityTrace ? (initial + initialTargetSpeed) / 2 : initial)
             var peak = velocityTrace ? abs(initial - initialTargetSpeed) * 0.5
-                : (coupon ? 4 : (ring || block ? 1.0 : (bonded ? 0.01 : 0.1)))
+                : (seamEnergy ? fractureScale / 2 : (coupon || isSeam ? 4 : (ring || block ? 1.0 : (bonded ? 0.01 : 0.1))))
             for sample in trace {
-                let padding = velocityTrace ? 1.0 : 1.12
-                peak = max(peak, abs(sample.values.x - center) * padding)
+                let padding = velocityTrace || seamEnergy ? 1.0 : 1.12
+                peak = max(peak, abs(sample.values[keyPath: signal] - center) * padding)
                 if ring || velocityTrace { peak = max(peak, abs(sample.values.y - center) * padding) }
             }
             let left = 67.0, right = size.width - 29
@@ -552,7 +618,8 @@ struct LabView: View {
                 }, with: .color(ink.opacity(0.18)))
                 let value = center + fraction * peak
                 let label: String
-                if ring || coupon { label = String(format: "%.1f mm", value) }
+                if seamEnergy { label = String(format: "%.1f J/m²", value) }
+                else if isSeam || ring || coupon { label = String(format: "%.1f mm", value) }
                 else if block { label = String(format: "%+.1f°", value) }
                 else if velocityTrace { label = String(format: "%.2f m/s", value) }
                 else { label = String(format: bonded ? "%+.3f%%" : "%+.2f%%", value) }
@@ -573,7 +640,7 @@ struct LabView: View {
                     }
                 }
             }
-            context.stroke(line(\.x), with: .color(mint), lineWidth: 1.8)
+            context.stroke(line(signal), with: .color(seamEnergy ? amber : mint), lineWidth: 1.8)
             if ring || velocityTrace { context.stroke(line(\.y), with: .color(amber), lineWidth: 1.8) }
             if let release = experiment.simulation.loadReleaseTime {
                 let x = left + (right - left) * release / end
@@ -584,6 +651,17 @@ struct LabView: View {
                 context.draw(Text("LOAD OFF").font(.caption2.monospaced()).foregroundStyle(ink),
                              at: CGPoint(x: x, y: 12))
             }
+            if let phase = experiment.simulation.seamFirstOpeningTime {
+                for (time, label) in [(phase, "CLOSE"), (2 * phase, "REOPEN")] {
+                    let x = left + (right - left) * time / end
+                    context.stroke(Path { path in
+                        path.move(to: CGPoint(x: x, y: 22))
+                        path.addLine(to: CGPoint(x: x, y: size.height - 18))
+                    }, with: .color(ink.opacity(0.45)), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    context.draw(Text(label).font(.caption2.monospaced()).foregroundStyle(ink),
+                                 at: CGPoint(x: x, y: 12))
+                }
+            }
         }
         .accessibilityLabel("Time trace for " + experiment.preset.rawValue)
     }
@@ -593,19 +671,26 @@ struct LabView: View {
         guard let flag = args.firstIndex(of: "--smoke"), args.indices.contains(flag + 1) else { return }
         try? await Task.sleep(for: .milliseconds(250))
         let windowVisible = NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" }
-        var results = ["window=\(windowVisible)", "opens on tension coupon=\(experiment.preset == .tensionCoupon)"]
+        var results = ["window=\(windowVisible)", "opens on layered seam=\(experiment.preset == .layeredSeam)"]
         for preset in Preset.allCases {
-            let isPair = preset.pairLabels != nil
-            let isCoupon = preset == .tensionCoupon
             experiment.select(preset)
+            let isPair = experiment.configuration.isPair
+            let isCoupon = preset == .tensionCoupon
+            let isSeam = preset == .layeredSeam
             let selected = experiment.preset == preset && experiment.simulation.time == 0
             let topology = experiment.simulation.body.mesh.elements.count
                 + (experiment.simulation.secondBody?.mesh.elements.count ?? 0)
             experiment.toggle()
             let start = ProcessInfo.processInfo.systemUptime
             try? await Task.sleep(for: .milliseconds(isPair ? 1300 : 1400))
+            if isSeam, let firstOpening = experiment.simulation.seamFirstOpeningTime {
+                // Observe actual timer-driven progress before pausing the guided cycle.
+                for _ in 0..<50 where experiment.running && experiment.simulation.time < firstOpening {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
             let playbackRate = experiment.simulation.time / (ProcessInfo.processInfo.systemUptime - start)
-            experiment.toggle()
+            experiment.pause()
             let pausedTime = experiment.simulation.time
             try? await Task.sleep(for: .milliseconds(100))
             let paused = pausedTime > 0 && experiment.simulation.time == pausedTime
@@ -616,6 +701,8 @@ struct LabView: View {
             case .bondedBar: inspected = experiment.simulation.body.mesh.interfaceNodes.count == 5
             case .tensionCoupon: inspected = experiment.simulation.appliedTraction > 0
                 && experiment.simulation.gaugeLength != nil
+            case .layeredSeam: inspected = experiment.simulation.seamFaces != nil
+                && (experiment.simulation.seamReadings?.dissipated ?? 0) > 0
             default: inspected = experiment.simulation.peakPenetration > 0 && (isPair || experiment.simulation.wallImpulse > 0)
             }
             let traceAdvanced = experiment.trace.count > 2 && inspected
@@ -651,15 +738,26 @@ struct LabView: View {
                     && experiment.simulation.failure == nil && residual > 0.001
                 let field = experiment.simulation.plasticStrain.contains { $0 > 0 }
                 results.append("Tension coupon playback: unloaded permanent set=\(unloaded) plastic field=\(field)")
+            } else if isSeam {
+                experiment.toggle()
+                for _ in 0..<110 where experiment.running {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                let sim = experiment.simulation
+                let seam = sim.seamReadings!
+                let broken = experiment.finished && seam.separatedFraction > 1 - 1e-12
+                    && abs(seam.dissipatedPerArea - seam.criticalEnergy) < 1e-8
+                let reclosed = sim.peakPenetration > 0 && seam.opening > 0 && abs(seam.force) < 1e-8
+                results.append("Layered seam playback: full separation=\(broken) compressive reclosure and free reopening=\(reclosed)")
             }
             var edited = experiment.configuration
-            if !isCoupon { edited.speed = preset == .bondedBar ? 0.07 : 0.6 }
+            if !isCoupon && !isSeam { edited.speed = preset == .bondedBar ? 0.07 : 0.6 }
             edited.first.material = Material(young: 4e6, density: 1500, poisson: 0.2)
             edited.first.width *= 1.05
             edited.second?.material = Material(young: 2e6)
             edited.mirrored = preset == .block
             experiment.edit(edited)
-            let resetSecond = !isPair || experiment.simulation.secondBody?.material == edited.second?.material
+            let resetSecond = !(isPair || isSeam) || experiment.simulation.secondBody?.material == edited.second?.material
             let reset = experiment.simulation.time == 0 && experiment.trace.count == 1
                 && experiment.configuration == edited
                 && experiment.simulation.body.material == edited.first.material
@@ -746,8 +844,47 @@ struct LabView: View {
         } catch {
             results.append("Coupon comparison: save/reopen=false error=\(error.localizedDescription)")
         }
-        try? (results.joined(separator: "\n") + "\n").write(
-            toFile: args[flag + 1], atomically: true, encoding: .utf8)
-        NSApplication.shared.terminate(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        do {
+            let url = URL(fileURLWithPath: args[flag + 1]).deletingLastPathComponent()
+                .appendingPathComponent(UUID().uuidString + ".impact.json")
+            defer { try? FileManager.default.removeItem(at: url) }
+            var intact = SceneConfiguration.standard(.layeredSeam)
+            intact.seam?.response = .intact
+            try experiment.configure(intact)
+            while experiment.advance() {}
+            let intactCarriesTension = (experiment.simulation.seamReadings?.force ?? 0) > 0
+            experiment.pinReference()
+            experiment.setSeamResponse(.separating)
+            let separating = experiment.configuration
+            try experiment.save(to: url)
+            while experiment.advance() {}
+            let firstTrace = experiment.trace
+            try experiment.open(url)
+            let restored = experiment.configuration == separating
+            while experiment.advance() {}
+            let comparison = experiment.comparison()
+            let matched = comparison.count == experiment.trace.count && comparison.count > 100
+                && comparison.last?.reference.y == 0 && (comparison.last?.current.y ?? 0) > 0
+            let replay = experiment.finished && firstTrace == experiment.trace
+            showFractureEnergy = true
+            try? await Task.sleep(for: .milliseconds(150))
+            showComparison = true
+            try? await Task.sleep(for: .milliseconds(450))
+            let sheet = NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true }
+            showComparison = false
+            results.append("Seam comparison: intact tension=\(intactCarriesTension) save/reopen=\(restored) identical replay=\(replay) matched times=\(matched) comparison sheet=\(sheet)")
+        } catch {
+            results.append("Seam comparison: save/reopen=false error=\(error.localizedDescription)")
+        }
+        do {
+            try (results.joined(separator: "\n") + "\n").write(
+                toFile: args[flag + 1], atomically: true, encoding: .utf8)
+        } catch {
+            FileHandle.standardError.write(Data("Smoke report write failed: \(error.localizedDescription)\n".utf8))
+            exit(EXIT_FAILURE)
+        }
+        // This dedicated process can exit even if a comparison sheet is still being dismissed.
+        exit(results.contains { $0.contains("=false") } ? EXIT_FAILURE : EXIT_SUCCESS)
     }
 }

@@ -12,6 +12,7 @@ public struct SceneTrace: Sendable {
     public let preset: Preset
     public let samples: [TraceSample]
     public let couponResponse: CouponResponse?
+    public let seamResponse: SeamResponse?
     public let residualLength: Double?
 
     public func matching(_ reference: SceneTrace) -> [Match] {
@@ -32,7 +33,8 @@ public struct SceneRun {
     public var finished: Bool { simulation.time >= horizon }
     public var trace: SceneTrace {
         SceneTrace(preset: configuration.preset, samples: samples,
-                   couponResponse: configuration.tension?.response, residualLength: residualLength)
+                   couponResponse: configuration.tension?.response, seamResponse: configuration.seam?.response,
+                   residualLength: residualLength)
     }
     public var residualLength: Double? {
         guard configuration.tension != nil, finished, simulation.failure == nil else { return nil }
@@ -81,6 +83,8 @@ public struct SceneRun {
         case .tensionCoupon:
             Point(1000 * ((simulation.gaugeLength ?? configuration.first.width) - configuration.first.width),
                   100 * simulation.meanPlasticStrain)
+        case .layeredSeam:
+            Point(1000 * (simulation.seamReadings?.opening ?? 0), simulation.seamReadings?.dissipatedPerArea ?? 0)
         }
     }
 }
