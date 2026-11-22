@@ -97,6 +97,12 @@ func patchCheck() {
             "Inverted elements must be rejected")
 }
 
+if CommandLine.arguments.dropFirst().contains("--layered-impact") {
+    try layeredImpactCheck()
+    try layeredImpactEnvelopeCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--plasticity") {
     try plasticityCheck()
     try materialImpactCheck()
@@ -139,3 +145,5 @@ try bondedBarCheck()
 try plasticityCheck()
 try materialImpactCheck()
 try cohesiveCheck()
+try layeredImpactCheck()
+try layeredImpactEnvelopeCheck()

@@ -8,6 +8,11 @@ public struct ImpactPlasticity: Codable, Equatable, Sendable {
     public static let yieldRange = 0.010...0.035
     public static let hardeningRange = TensionSettings.hardeningRange
 
+    func model(for material: Material) -> J2Model {
+        J2Model(material: material, yieldStress: response == .elastoplastic ? material.young * yieldFraction : nil,
+                hardening: material.young * hardeningFraction)
+    }
+
     var isValid: Bool {
         Self.yieldRange.contains(yieldFraction) && Self.hardeningRange.contains(hardeningFraction)
     }
@@ -20,10 +25,7 @@ extension Simulation {
         let mesh = Mesh.bar(columns: columns, rows: rows, width: scene.first.width, height: scene.first.height!)
         let body = Body(mesh: mesh, material: material, velocity: Point(scene.speed, scene.velocityY),
                         gap: scene.gap, penalty: 2500, tilt: 0, centerY: scene.centerY)
-        let model = J2Model(material: material,
-                            yieldStress: settings.response == .elastoplastic ? material.young * settings.yieldFraction : nil,
-                            hardening: material.young * settings.hardeningFraction)
-        return Simulation(primary: body, gap: scene.gap, stepScale: stepScale, j2: model)
+        return Simulation(primary: body, gap: scene.gap, stepScale: stepScale, j2: settings.model(for: material))
     }
 }
 

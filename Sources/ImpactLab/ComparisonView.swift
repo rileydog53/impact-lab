@@ -4,7 +4,7 @@ import SwiftUI
 struct ComparisonView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var cursor: Double
-    @State private var comparePlasticStrain = false
+    @State private var selectedSignal = 0
     let reference: SceneTrace
     let current: SceneTrace
     let samples: [SceneTrace.Match]
@@ -17,17 +17,21 @@ struct ComparisonView: View {
         _cursor = State(initialValue: Double(max(0, samples.count - 1)))
     }
 
-    private var series: [(name: String, unit: String, value: KeyPath<Point, Double>, color: Color)] {
+    private typealias Signal = (name: String, unit: String, value: KeyPath<TraceSample, Double>, color: Color)
+    private var series: [Signal] {
         switch preset {
-        case .bar, .bondedBar: [("Axial strain", "%", \.x, .mint)]
-        case .block: [("Orientation", "°", \.x, .mint)]
-        case .ring: [("Horizontal diameter", "mm", \.x, .mint), ("Vertical diameter", "mm", \.y, .orange)]
-        case .twoBars: [("Left bar", "m/s", \.x, .mint), ("Right bar", "m/s", \.y, .orange)]
-        case .puckStrip: [("Puck", "m/s", \.x, .mint), ("Strip", "m/s", \.y, .orange)]
+        case .bar, .bondedBar: [("Axial strain", "%", \.values.x, .mint)]
+        case .block: [("Orientation", "°", \.values.x, .mint)]
+        case .ring: [("Horizontal diameter", "mm", \.values.x, .mint), ("Vertical diameter", "mm", \.values.y, .orange)]
+        case .twoBars: [("Left bar", "m/s", \.values.x, .mint), ("Right bar", "m/s", \.values.y, .orange)]
+        case .puckStrip: [("Puck", "m/s", \.values.x, .mint), ("Strip", "m/s", \.values.y, .orange)]
         case .tensionCoupon, .materialImpact:
-            [("Length change", "mm", \.x, .mint), ("Mean plastic strain", "%", \.y, .orange)]
+            [("Length change", "mm", \.values.x, .mint), ("Mean plastic strain", "%", \.values.y, .orange)]
         case .layeredSeam:
-            [("Opening", "mm", \.x, .mint), ("Dissipated fracture energy", "J/m²", \.y, .orange)]
+            [("Mean opening", "mm", \.values.x, .mint), ("Fracture dissipation", "J/m²", \.values.y, .orange)]
+        case .layeredImpact:
+            [("Mean opening", "mm", \.values.x, .mint), ("Fracture dissipation", "J/m²", \.values.y, .orange),
+             ("Plastic dissipation", "J/m", \.plasticDissipation, .yellow)]
         }
     }
 
@@ -44,21 +48,19 @@ struct ComparisonView: View {
             if samples.count > 1 {
                 let selected = samples[Int(cursor)]
                 HStack(spacing: 18) {
-                    Label("\(reference.seamResponse?.rawValue ?? reference.materialResponse?.rawValue ?? "Reference") · dashed",
-                          systemImage: "line.diagonal")
-                    Label("\(current.seamResponse?.rawValue ?? current.materialResponse?.rawValue ?? "Current") · solid",
-                          systemImage: "line.horizontal")
+                    runLegend("Reference", trace: reference, symbol: "line.diagonal")
+                    runLegend("Current", trace: current, symbol: "line.horizontal")
                 }
                 .font(.caption).foregroundStyle(.secondary)
-                if current.materialResponse != nil {
-                    Picker("Comparison signal", selection: $comparePlasticStrain) {
-                        Text("Length change (mm)").tag(false)
-                        Text("Mean plastic strain (%)").tag(true)
+                if choosesSignal {
+                    Picker("Comparison signal", selection: $selectedSignal) {
+                        ForEach(series.indices, id: \.self) { index in
+                            let signal = series[index]
+                            Text("\(signal.name) (\(signal.unit))").tag(index)
+                        }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                } else if preset == .layeredSeam {
-                    Text("Mean opening (mm)").font(.caption).foregroundStyle(.secondary)
                 }
                 chart.frame(height: 190)
                 HStack {
@@ -79,8 +81,8 @@ struct ComparisonView: View {
                     .font(.subheadline.weight(.medium))
                     ForEach(series.indices, id: \.self) { index in
                         let signal = series[index]
-                        let reference = selected.reference[keyPath: signal.value]
-                        let current = selected.current[keyPath: signal.value]
+                        let reference = selected.referenceSample[keyPath: signal.value]
+                        let current = selected.currentSample[keyPath: signal.value]
                         GridRow {
                             Label(signal.name, systemImage: "circle.fill")
                                 .foregroundStyle(signal.color)
@@ -104,6 +106,17 @@ struct ComparisonView: View {
         .frame(width: 570)
     }
 
+    private var choosesSignal: Bool { current.materialResponse != nil || current.seamResponse != nil }
+
+    private func runLegend(_ title: String, trace: SceneTrace, symbol: String) -> some View {
+        let stop = trace.preset == .layeredImpact ? (trace.hasBackstop ? "Backstop" : "Free specimen") : nil
+        let details = [trace.seamResponse?.rawValue, trace.materialResponse?.rawValue, stop].compactMap { $0 }
+        return VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: symbol)
+            if !details.isEmpty { Text(details.joined(separator: " · ")) }
+        }
+    }
+
     private func reading(_ value: Double, unit: String) -> some View {
         Text(String(format: "%.4f", value) + (unit == "%" || unit == "°" ? "" : " ") + unit)
             .monospacedDigit()
@@ -112,21 +125,14 @@ struct ComparisonView: View {
 
     private var chart: some View {
         Canvas { context, size in
-            let signals: [(name: String, unit: String, value: KeyPath<Point, Double>, color: Color)]
-            if current.materialResponse != nil {
-                signals = [series[comparePlasticStrain ? 1 : 0]]
-            } else if preset == .layeredSeam {
-                signals = [series[0]]
-            } else {
-                signals = series
-            }
+            let signals = choosesSignal ? [series[selectedSignal]] : series
             let time = samples.last!.time
             var low = Double.infinity
             var high = -Double.infinity
             for sample in samples {
                 for signal in signals {
-                    low = min(low, sample.reference[keyPath: signal.value], sample.current[keyPath: signal.value])
-                    high = max(high, sample.reference[keyPath: signal.value], sample.current[keyPath: signal.value])
+                    low = min(low, sample.referenceSample[keyPath: signal.value], sample.currentSample[keyPath: signal.value])
+                    high = max(high, sample.referenceSample[keyPath: signal.value], sample.currentSample[keyPath: signal.value])
                 }
             }
             let pad = max(1e-6, (high - low) * 0.07)
@@ -148,7 +154,7 @@ struct ComparisonView: View {
                 for isReference in [true, false] {
                     let path = Path { p in
                         for (i, sample) in samples.enumerated() {
-                            let value = (isReference ? sample.reference : sample.current)[keyPath: signal.value]
+                            let value = (isReference ? sample.referenceSample : sample.currentSample)[keyPath: signal.value]
                             let point = CGPoint(x: x(sample.time), y: y(value))
                             if i == 0 { p.move(to: point) } else { p.addLine(to: point) }
                         }

@@ -248,16 +248,24 @@ private struct BodyStep: Sendable {
         return true
     }
 
+    mutating func guideTransversePositions() {
+        for i in nextPosition.indices { nextPosition[i].y = body.position[i].y }
+    }
+
     mutating func guidePositions(grip: CohesiveSeam.Grip, motion: CohesiveSeam.Motion) {
         // The seam experiment uses lateral guides for pure normal opening.
-        for i in nextPosition.indices { nextPosition[i].y = body.position[i].y }
+        guideTransversePositions()
         let position = grip.initialX + grip.direction * motion.displacement
         for i in grip.nodes { nextPosition[i].x = position }
     }
 
+    mutating func guideTransverseVelocities() {
+        for i in nextVelocity.indices { nextVelocity[i].y = 0 }
+    }
+
     mutating func guideVelocitiesAndWork(grip: CohesiveSeam.Grip, before: CohesiveSeam.Motion,
                                          after: CohesiveSeam.Motion) -> Double {
-        for i in nextVelocity.indices { nextVelocity[i].y = 0 }
+        guideTransverseVelocities()
         var work = 0.0
         for i in grip.nodes {
             nextVelocity[i].x = grip.direction * after.velocity
@@ -269,6 +277,24 @@ private struct BodyStep: Sendable {
             work += 0.5 * (oldReaction + newReaction) * (nextPosition[i].x - body.position[i].x)
         }
         return work
+    }
+
+    mutating func wallContact(at planeX: Double, dt: Double) -> ContactResult {
+        var result = ContactResult()
+        for i in body.boundaryNodes {
+            let overlap = max(0, nextPosition[i].x - planeX)
+            let reaction = body.wallStiffness[i] * overlap
+            let previousReaction = -body.wallStiffness[i] * max(0, body.position[i].x - planeX)
+            nextApplied[i] = Point(-reaction, 0)
+            result.penetration = max(result.penetration, overlap)
+            result.energy += 0.5 * reaction * overlap
+            // Trapezoidal wall kicks match the velocity updates. Torque is
+            // evaluated about the wall origin at each kick's own position.
+            result.wallImpulse += 0.5 * dt * (reaction - previousReaction)
+            result.wallAngularImpulse += 0.5 * dt * (nextPosition[i].y * reaction
+                                                    - body.position[i].y * previousReaction)
+        }
+        return result
     }
 
     mutating func accept() {
@@ -288,22 +314,42 @@ public struct Simulation: Sendable {
     public var strain: [Double] { primary.strain }
     public var secondBody: Body? { secondary?.body }
     public var secondStrain: [Double]? { secondary?.strain }
+    public var thirdBody: Body? { tertiary?.body }
+    public var thirdStrain: [Double]? { tertiary?.strain }
+    public var secondPlasticStrain: [Double] { secondary?.history?.current.map(\.equivalentStrain) ?? [] }
+    public var plasticDissipation: Double { primaryEnergy.dissipation + secondaryEnergy.dissipation }
+    public var facingMeanPlasticStrain: Double { secondaryEnergy.meanPlasticStrain }
     public var plasticStrain: [Double] { primary.history?.current.map(\.equivalentStrain) ?? [] }
     public var meanPlasticStrain: Double { primaryEnergy.meanPlasticStrain }
-    public var peakPlasticStrain: Double { primaryEnergy.peakPlasticStrain }
+    public var peakPlasticStrain: Double { max(primaryEnergy.peakPlasticStrain, secondaryEnergy.peakPlasticStrain) }
     public var gaugeLength: Double? { tension?.length(of: body.position) }
     public var appliedTraction: Double { tension?.traction(at: time) ?? 0 }
     public var loadReleaseTime: Double? { tension?.releaseTime }
-    public var seamFirstOpeningTime: Double? { seam?.phaseDuration }
+    public var seamFirstOpeningTime: Double? { seam?.grips == nil ? nil : seam?.phaseDuration }
     public private(set) var seamReadings: SeamReadings?
+    public private(set) var impactEvents: LayeredImpactEvents?
+    public private(set) var strikerInContact = false
+    public private(set) var seamInCompression = false
+    public private(set) var backstopInContact = false
+
+    public var seamDamage: [Double] {
+        guard let seam else { return [] }
+        return seamMaxima.map { seam.law.damage(at: $0) }
+    }
+
+    private var leftSeamBody: Body { tertiary == nil ? body : secondary!.body }
+    private var rightSeamBody: Body? { thirdBody ?? secondBody }
+
     public var seamFaces: (left: [Point], right: [Point])? {
-        guard let seam, let right = secondBody else { return nil }
-        return (seam.pairs.map { body.position[$0.left] }, seam.pairs.map { right.position[$0.right] })
+        guard let seam, let right = rightSeamBody else { return nil }
+        return (seam.pairs.map { leftSeamBody.position[$0.left] }, seam.pairs.map { right.position[$0.right] })
     }
     package var seamLinkReadings: [(opening: Double, force: Double)] {
-        guard let seam, let right = secondBody else { return [] }
-        return seam.pairs.map {
-            (right.position[$0.right].x - body.position[$0.left].x, primary.appliedForce[$0.left].x)
+        guard let seam, let right = rightSeamBody else { return [] }
+        return zip(seam.pairs, seamMaxima).map { pair, maximum in
+            let opening = right.position[pair.right].x - leftSeamBody.position[pair.left].x
+            return (opening, pair.weight * seam.law.evaluate(opening: opening, previousMaximum: maximum,
+                                                              canSeparate: seam.canSeparate).traction)
         }
     }
     public private(set) var time = 0.0
@@ -315,12 +361,15 @@ public struct Simulation: Sendable {
     private let initialKinetic: Double
     private var primaryEnergy = ElementEnergy()
     private var secondaryEnergy = ElementEnergy()
+    private var tertiaryEnergy = ElementEnergy()
     private var contactEnergy = 0.0
     public private(set) var lastWallContactTime: Double?
     private var bondEnergy = 0.0
     private var appliedWork = 0.0
     private var primary: BodyStep
     private var secondary: BodyStep?
+    private var tertiary: BodyStep?
+    private let rearStopX: Double?
     private let pairContact: BoundaryContact?
     private let tension: TensionLoad?
     private let seam: CohesiveSeam?
@@ -335,15 +384,19 @@ public struct Simulation: Sendable {
 
     init(primary: Body, secondary: Body? = nil, pairContact: BoundaryContact? = nil,
          gap: Double, stepScale: Double, tension: TensionLoad? = nil, j2: J2Model? = nil,
-         seam: CohesiveSeam? = nil) {
+         seam: CohesiveSeam? = nil, tertiary: Body? = nil, secondaryJ2: J2Model? = nil,
+         rearStopX: Double? = nil) {
         let material = primary.material
         precondition(material.young > 0 && material.density > 0 && abs(material.poisson) < 0.5)
         precondition(stepScale > 0 && stepScale <= 1)
         precondition((secondary == nil) == (pairContact == nil && seam == nil))
-        precondition(pairContact == nil || seam == nil)
+        precondition((tertiary != nil) == (pairContact != nil && seam != nil))
         self.primary = BodyStep(primary, j2: j2)
-        self.secondary = secondary.map { BodyStep($0) }
+        self.secondary = secondary.map { BodyStep($0, j2: secondaryJ2) }
+        self.tertiary = tertiary.map { BodyStep($0) }
+        impactEvents = tertiary.map { _ in LayeredImpactEvents() }
         self.pairContact = pairContact
+        self.rearStopX = rearStopX
         self.gap = gap
         self.tension = tension
         self.seam = seam
@@ -352,20 +405,23 @@ public struct Simulation: Sendable {
         func kineticEnergy(_ body: Body) -> Double {
             zip(body.mass, body.velocity).reduce(0) { $0 + 0.5 * $1.0 * simd_length_squared($1.1) }
         }
-        initialKinetic = kineticEnergy(primary) + (secondary.map(kineticEnergy) ?? 0)
+        initialKinetic = kineticEnergy(primary) + (secondary.map(kineticEnergy) ?? 0) + (tertiary.map(kineticEnergy) ?? 0)
         // Budget both the node's own contact spring and reactions to opposing springs.
         let allowance = 8 * (pairContact?.maximumStiffness ?? 0)
         let seamStiffness = 2 * (seam?.law.contactStiffness ?? 0)
         let firstSprings = seam?.pairs.map { ($0.left, seamStiffness * $0.weight) } ?? []
         let secondSprings = seam?.pairs.map { ($0.right, seamStiffness * $0.weight) } ?? []
         let firstOmega = Self.squaredFrequency(of: primary, contact: pairContact?.left,
-                                               allowance: allowance, springs: firstSprings)
+                                               allowance: allowance, springs: tertiary == nil ? firstSprings : [])
         let secondOmega = secondary.map {
-            Self.squaredFrequency(of: $0, contact: pairContact?.right, allowance: allowance, springs: secondSprings)
+            Self.squaredFrequency(of: $0, contact: pairContact?.right, allowance: allowance, springs: tertiary == nil ? secondSprings : firstSprings)
+        } ?? 0
+        let thirdOmega = tertiary.map {
+            Self.squaredFrequency(of: $0, contact: nil, allowance: 0, springs: secondSprings)
         } ?? 0
         // Central difference is linearly stable for dt * omega < 2.
         // The margin also accommodates changes in the tangent during impact.
-        dt = stepScale * 0.8 / sqrt(max(firstOmega, secondOmega))
+        dt = stepScale * 0.8 / sqrt(max(firstOmega, secondOmega, thirdOmega))
     }
 
     private static func squaredFrequency(of body: Body, contact: ContactSurface?, allowance: Double,
@@ -408,15 +464,17 @@ public struct Simulation: Sendable {
         }
         accumulate(body)
         if let secondBody { accumulate(secondBody) }
+        if let thirdBody { accumulate(thirdBody) }
         let fracture = seamReadings?.dissipated ?? 0
-        let energy = kinetic + primaryEnergy.total + secondaryEnergy.total + contactEnergy + bondEnergy + fracture
-        let seamScale = seam.map { $0.height * $0.law.fractureEnergy }
+        let energy = kinetic + primaryEnergy.total + secondaryEnergy.total + tertiaryEnergy.total + contactEnergy + bondEnergy + fracture
+        let seamScale = seam?.grips == nil ? nil : seam.map { $0.height * $0.law.fractureEnergy }
         let relativeError = (energy - initialKinetic - appliedWork)
             / max(seamScale ?? tension?.referenceEnergy ?? initialKinetic, Double.leastNormalMagnitude)
-        return Diagnostics(kinetic: kinetic, elastic: primaryEnergy.elastic + secondaryEnergy.elastic, contact: contactEnergy,
+        return Diagnostics(kinetic: kinetic, elastic: primaryEnergy.elastic + secondaryEnergy.elastic + tertiaryEnergy.elastic, contact: contactEnergy,
                            hardening: primaryEnergy.hardening + secondaryEnergy.hardening,
-                           plasticDissipation: primaryEnergy.dissipation + secondaryEnergy.dissipation,
-                           appliedWork: appliedWork, peakOutOfPlaneStress: primaryEnergy.peakOutOfPlaneStress,
+                           plasticDissipation: plasticDissipation,
+                           appliedWork: appliedWork,
+                           peakOutOfPlaneStress: max(primaryEnergy.peakOutOfPlaneStress, secondaryEnergy.peakOutOfPlaneStress),
                            bondEnergy: bondEnergy, fractureDissipation: fracture,
                            relativeEnergyError: relativeError, momentum: momentum,
                            angularMomentum: angularMomentum)
@@ -435,53 +493,87 @@ public struct Simulation: Sendable {
 
     @discardableResult public mutating func step() -> Bool {
         guard failure == nil else { return false }
-        guard primary.drift(dt), secondary?.drift(dt) ?? true else {
+        guard primary.drift(dt), secondary?.drift(dt) ?? true, tertiary?.drift(dt) ?? true else {
             failure = "Position became non-finite."
             return false
         }
-        let motion = seam?.motion(at: time + dt)
-        if let seam, let motion {
-            primary.guidePositions(grip: seam.leftGrip, motion: motion)
-            secondary!.guidePositions(grip: seam.rightGrip, motion: motion)
+        let grips = seam?.grips
+        let motion = grips.map { _ in seam!.motion(at: time + dt) }
+        if let grips, let motion {
+            primary.guidePositions(grip: grips.left, motion: motion)
+            secondary!.guidePositions(grip: grips.right, motion: motion)
+        } else if tertiary != nil {
+            primary.guideTransversePositions()
+            secondary!.guideTransversePositions()
+            tertiary!.guideTransversePositions()
         }
         guard let firstEnergy = primary.assemble(),
-              let secondEnergy = secondary == nil ? ElementEnergy() : secondary?.assemble() else {
+              let secondEnergy = secondary == nil ? ElementEnergy() : secondary?.assemble(),
+              let thirdEnergy = tertiary == nil ? ElementEnergy() : tertiary?.assemble() else {
             failure = "An element inverted or its stress became non-finite."
             return false
         }
         var contact = ContactResult()
         var work = 0.0
         var seamTrial: CohesiveSeam.Trial?
+        var impactContact = ContactResult()
+        var stopContact = ContactResult()
+        if let pairContact {
+            impactContact = pairContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
+                                                 leftForce: &primary.nextApplied, rightForce: &secondary!.nextApplied)
+            contact = impactContact
+        }
         if let seam {
-            let trial = seam.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
+            let trial: CohesiveSeam.Trial
+            if tertiary != nil {
+                if let rearStopX {
+                    stopContact = tertiary!.wallContact(at: rearStopX, dt: dt)
+                } else {
+                    for pair in seam.pairs { tertiary!.nextApplied[pair.right] = .zero }
+                }
+                trial = seam.assemble(left: secondary!.nextPosition, right: tertiary!.nextPosition,
+                                      maxima: seamMaxima, leftForce: &secondary!.nextApplied,
+                                      rightForce: &tertiary!.nextApplied)
+            } else {
+                for pair in seam.pairs {
+                    primary.nextApplied[pair.left] = .zero
+                    secondary!.nextApplied[pair.right] = .zero
+                }
+                trial = seam.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
                                       maxima: seamMaxima, leftForce: &primary.nextApplied,
                                       rightForce: &secondary!.nextApplied)
-            contact = trial.contact
+            }
+            contact.energy += trial.contact.energy + stopContact.energy
+            contact.penetration = max(contact.penetration, trial.contact.penetration, stopContact.penetration)
+            contact.wallImpulse = stopContact.wallImpulse
+            contact.wallAngularImpulse = stopContact.wallAngularImpulse
+            contact.relativePenetration = max(contact.relativePenetration, trial.contact.relativePenetration)
             seamTrial = trial
-        } else if let pairContact {
-            contact = pairContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
-                                           leftForce: &primary.nextApplied, rightForce: &secondary!.nextApplied)
         } else if primary.body.hasWall {
-            contact = wallContact()
+            contact = primary.wallContact(at: 0, dt: dt)
         } else if let tension {
             work = tension.apply(from: primary.body.position, to: primary.nextPosition, time: time,
                                  dt: dt, forces: &primary.nextApplied)
         }
         let seamEnergy = (seamTrial?.bondEnergy ?? 0) + (seamTrial?.readings.dissipated ?? 0)
-        guard (contact.energy + firstEnergy.total + secondEnergy.total + seamEnergy).isFinite,
+        guard (contact.energy + firstEnergy.total + secondEnergy.total + thirdEnergy.total + seamEnergy).isFinite,
               (wallImpulse + contact.wallImpulse).isFinite,
               (wallAngularImpulse + contact.wallAngularImpulse).isFinite else {
             failure = "Contact energy or impulse became non-finite."
             return false
         }
-        guard primary.kick(dt), secondary?.kick(dt) ?? true else {
+        guard primary.kick(dt), secondary?.kick(dt) ?? true, tertiary?.kick(dt) ?? true else {
             failure = "Velocity became non-finite."
             return false
         }
-        if let seam, let motion {
+        if let seam, let grips, let motion {
             let before = seam.motion(at: time)
-            work = primary.guideVelocitiesAndWork(grip: seam.leftGrip, before: before, after: motion)
-            work += secondary!.guideVelocitiesAndWork(grip: seam.rightGrip, before: before, after: motion)
+            work = primary.guideVelocitiesAndWork(grip: grips.left, before: before, after: motion)
+            work += secondary!.guideVelocitiesAndWork(grip: grips.right, before: before, after: motion)
+        } else if tertiary != nil {
+            primary.guideTransverseVelocities()
+            secondary!.guideTransverseVelocities()
+            tertiary!.guideTransverseVelocities()
         }
         guard (appliedWork + work).isFinite else {
             failure = "Applied work became non-finite."
@@ -489,9 +581,14 @@ public struct Simulation: Sendable {
         }
         primary.accept()
         secondary?.accept()
+        tertiary?.accept()
         time += dt
         primaryEnergy = firstEnergy
         secondaryEnergy = secondEnergy
+        tertiaryEnergy = thirdEnergy
+        strikerInContact = impactContact.penetration > 0
+        backstopInContact = stopContact.penetration > 0
+        seamInCompression = (seamTrial?.contact.penetration ?? 0) > 0
         contactEnergy = contact.energy
         if primary.body.hasWall && contact.penetration > 0 { lastWallContactTime = time }
         if let trial = seamTrial {
@@ -499,30 +596,21 @@ public struct Simulation: Sendable {
             seamMaxima = trial.maxima
             bondEnergy = trial.bondEnergy
         }
+        if var events = impactEvents {
+            if strikerInContact && events.strike == nil { events.strike = time }
+            if backstopInContact && events.backstop == nil { events.backstop = time }
+            if events.failure != nil && seamInCompression && events.reclosure == nil { events.reclosure = time }
+            if (seamReadings?.separatedFraction ?? 0) > 1 - 1e-12 && events.failure == nil {
+                events.failure = time
+            }
+            impactEvents = events
+        }
         appliedWork += work
         wallImpulse += contact.wallImpulse
         wallAngularImpulse += contact.wallAngularImpulse
         peakPenetration = max(peakPenetration, contact.penetration)
         peakRelativePenetration = max(peakRelativePenetration, contact.relativePenetration)
         return true
-    }
-
-    private mutating func wallContact() -> ContactResult {
-        var result = ContactResult()
-        for i in primary.body.boundaryNodes {
-            let overlap = max(0, primary.nextPosition[i].x)
-            let reaction = primary.body.wallStiffness[i] * overlap
-            let previousReaction = primary.appliedForce[i].x
-            primary.nextApplied[i] = Point(-reaction, 0)
-            result.penetration = max(result.penetration, overlap)
-            result.energy += 0.5 * reaction * overlap
-            // Trapezoidal wall kicks match the velocity updates. Torque is
-            // evaluated about the wall origin at each kick's own position.
-            result.wallImpulse += 0.5 * dt * (reaction - previousReaction)
-            result.wallAngularImpulse += 0.5 * dt * (primary.nextPosition[i].y * reaction
-                                                    - primary.body.position[i].y * previousReaction)
-        }
-        return result
     }
 
     fileprivate static func assemble(body: Body, position: [Point], forces: inout [Point],

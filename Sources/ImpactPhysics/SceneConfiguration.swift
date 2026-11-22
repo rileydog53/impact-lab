@@ -13,6 +13,8 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public let preset: Preset
     public var first: SpecimenConfiguration
     public var second: SpecimenConfiguration?
+    public var third: SpecimenConfiguration?
+    public var backstopGap: Double?
     public var gap: Double
     public var targetX = 0.0
     public var centerY = 0.0
@@ -56,6 +58,12 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .tensionCoupon:
             SceneConfiguration(preset: preset, first: .init(width: 0.30, height: 0.06, material: Material(poisson: 0.25)),
                                gap: 0, speed: 0, tension: TensionSettings())
+        case .layeredImpact:
+            SceneConfiguration(preset: preset, first: .init(width: 0.065, height: 0.050),
+                               second: .init(width: 0.090, height: 0.065, material: Material(young: 1.2e6)),
+                               third: .init(width: 0.090, height: 0.065, material: Material(young: 2.6e6)),
+                               backstopGap: 0.012, gap: 0.006, speed: 1.3, impactPlasticity: ImpactPlasticity(),
+                               seam: SeamSettings(strengthFraction: 0.003, criticalOpening: 0.00065))
         case .layeredSeam:
             SceneConfiguration(preset: preset,
                                first: .init(width: 0.09, height: 0.065, material: Material(young: 1.8e6)),
@@ -64,8 +72,16 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         }
     }
 
+    public static let backstopGapRange = 0.006...0.022
+
+    public var backstopX: Double? {
+        guard let backstopGap, let second, let third else { return nil }
+        return second.width + third.width + backstopGap
+    }
+
     public var isPair: Bool { preset == .twoBars || preset == .puckStrip }
     public var isBonded: Bool { preset == .bondedBar }
+    public var isLayeredImpact: Bool { preset == .layeredImpact }
     public var sharesHeight: Bool { preset == .twoBars || isBonded || preset == .layeredSeam }
     public var gapRange: ClosedRange<Double> {
         let standardGap = Self.standard(preset).gap
@@ -75,11 +91,11 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         let x = Self.standard(preset).targetX
         return isPair || isBonded ? (x - 0.025)...(x + 0.025) : 0...0
     }
-    public var targetVelocityXRange: ClosedRange<Double> { isPair || isBonded ? -0.15...0.15 : 0...0 }
+    public var targetVelocityXRange: ClosedRange<Double> { isPair || isBonded || isLayeredImpact ? -0.15...0.15 : 0...0 }
     public var speedRange: ClosedRange<Double> {
         switch preset {
         case .tensionCoupon, .layeredSeam: 0...0
-        case .materialImpact: 0.25...1.5
+        case .materialImpact, .layeredImpact: 0.25...1.5
         case .bondedBar: 0.01...0.10
         default: 0.10...1.0
         }
@@ -109,6 +125,10 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .bondedBar: return 1.05 * first.width / first.material.waveSpeed
         case .tensionCoupon:
             return (2 * TensionLoad.rampTransits + TensionLoad.settleTransits) * first.width / first.material.waveSpeed
+        case .layeredImpact:
+            return gap / speed + 10 * (first.width / first.material.waveSpeed
+                                        + second!.width / second!.material.waveSpeed
+                                        + third!.width / third!.material.waveSpeed)
         case .layeredSeam:
             return (3 + CohesiveSeam.transitsToSettle / CohesiveSeam.transitsPerPhase) * seamPhaseDuration
         }
@@ -144,13 +164,16 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
                 && Self.poissonRange.contains(part.material.poisson)
         }
         guard validSpecimen(first, standard.first), validSpecimen(second, standard.second),
+              validSpecimen(third, standard.third),
+              backstopGap.map({ isLayeredImpact && Self.backstopGapRange.contains($0) }) ?? true,
+              !isLayeredImpact || (second?.height == third?.height && velocityY == 0),
               !sharesHeight || first.height == second?.height,
               gapRange.contains(gap), speedRange.contains(speed), targetXRange.contains(targetX),
               targetVelocityXRange.contains(targetVelocityX), puckOffsetRange.contains(puckOffsetY),
               Self.centerYRange.contains(centerY), Self.velocityYRange.contains(velocityY),
-              preset == .materialImpact ? impactPlasticity?.isValid == true : impactPlasticity == nil,
+              (preset == .materialImpact || isLayeredImpact) ? impactPlasticity?.isValid == true : impactPlasticity == nil,
               preset == .tensionCoupon ? tension?.isValid == true && velocityY == 0 : tension == nil,
-              preset == .layeredSeam ? seam?.isValid == true && velocityY == 0 : seam == nil,
+              (preset == .layeredSeam || isLayeredImpact) ? seam?.isValid(impact: isLayeredImpact) == true && velocityY == 0 : seam == nil,
               !mirrored || preset == .block else {
             throw SceneFileError.invalidConfiguration
         }
@@ -179,9 +202,16 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         return Simulation.layeredSeam(scene: self, rows: rows, stepScale: stepScale)
     }
 
+    package func refinedLayeredImpact(refinement: Int, stepScale: Double) throws -> Simulation {
+        try validate()
+        precondition(isLayeredImpact)
+        return Simulation.layeredImpact(scene: self, refinement: refinement, stepScale: stepScale)
+    }
+
     func buildSimulation() -> Simulation {
         let mesh: Mesh
         switch preset {
+        case .layeredImpact: return Simulation.layeredImpact(scene: self, refinement: 1, stepScale: 1)
         case .materialImpact: return Simulation.materialImpact(scene: self, columns: 48, rows: 8, stepScale: 1)
         case .bar: mesh = .bar(width: first.width, height: first.height!)
         case .ring: mesh = .ring(diameter: first.width, thickness: first.wallThickness!)

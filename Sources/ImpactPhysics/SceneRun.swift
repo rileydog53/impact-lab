@@ -1,12 +1,15 @@
 public struct TraceSample: Equatable, Sendable {
     public let time: Double
     public let values: Point
+    public let plasticDissipation: Double
 }
 
 public struct SceneTrace: Sendable {
     public struct Match: Sendable {
         public let time: Double
-        public let reference, current: Point
+        public let referenceSample, currentSample: TraceSample
+        public var reference: Point { referenceSample.values }
+        public var current: Point { currentSample.values }
     }
 
     public let preset: Preset
@@ -14,13 +17,14 @@ public struct SceneTrace: Sendable {
     public let materialResponse: CouponResponse?
     public var couponResponse: CouponResponse? { preset == .tensionCoupon ? materialResponse : nil }
     public let seamResponse: SeamResponse?
+    public let hasBackstop: Bool
     public let residualLength: Double?
 
     public func matching(_ reference: SceneTrace) -> [Match] {
         guard preset == reference.preset else { return [] }
         return zip(reference.samples, samples).map {
             // Both traces record the same simulation-time grid.
-            Match(time: $0.time, reference: $0.values, current: $1.values)
+            Match(time: $0.time, referenceSample: $0, currentSample: $1)
         }
     }
 }
@@ -37,7 +41,8 @@ public struct SceneRun {
     public var trace: SceneTrace {
         SceneTrace(preset: configuration.preset, samples: samples,
                    materialResponse: configuration.impactPlasticity?.response ?? configuration.tension?.response,
-                   seamResponse: configuration.seam?.response, residualLength: residualLength)
+                   seamResponse: configuration.seam?.response, hasBackstop: configuration.backstopGap != nil,
+                   residualLength: residualLength)
     }
     public var residualLength: Double? {
         guard configuration.tension != nil || impactGauge != nil, finished, simulation.failure == nil else { return nil }
@@ -58,11 +63,11 @@ public struct SceneRun {
         self.configuration = configuration
         self.simulation = simulation
         horizon = configuration.duration
-        let gauge = configuration.impactPlasticity.map { _ in
-            EndGauge(body: simulation.body, length: configuration.first.width, height: configuration.first.height!)
-        }
+        let gauge = configuration.preset == .materialImpact ?
+            EndGauge(body: simulation.body, length: configuration.first.width, height: configuration.first.height!) : nil
         impactGauge = gauge
-        samples = [TraceSample(time: 0, values: Self.values(in: simulation, configuration: configuration, impactGauge: gauge))]
+        samples = [TraceSample(time: 0, values: Self.values(in: simulation, configuration: configuration, impactGauge: gauge),
+                               plasticDissipation: 0)]
     }
 
     @discardableResult public mutating func step() -> Bool {
@@ -71,13 +76,16 @@ public struct SceneRun {
         let nextSample = Double(samples.count) * Self.sampleInterval
         let crossesSample = timeBefore + simulation.dt >= nextSample && nextSample <= horizon
         let before = crossesSample ? Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge) : .zero
+        let plasticBefore = crossesSample ? simulation.plasticDissipation : 0
         guard simulation.step() else { return false }
         if crossesSample {
             let after = Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge)
             var time = nextSample
             while time <= min(simulation.time, horizon) {
                 let fraction = (time - timeBefore) / (simulation.time - timeBefore)
-                samples.append(TraceSample(time: time, values: before + fraction * (after - before)))
+                let plastic = plasticBefore + fraction * (simulation.plasticDissipation - plasticBefore)
+                samples.append(TraceSample(time: time, values: before + fraction * (after - before),
+                                           plasticDissipation: plastic))
                 time = Double(samples.count) * Self.sampleInterval
             }
         }
@@ -93,7 +101,7 @@ public struct SceneRun {
         case .tensionCoupon, .materialImpact:
             Point(1000 * ((impactGauge?.length(of: simulation.body.position) ?? simulation.gaugeLength!) - configuration.first.width),
                   100 * simulation.meanPlasticStrain)
-        case .layeredSeam:
+        case .layeredSeam, .layeredImpact:
             Point(1000 * (simulation.seamReadings?.opening ?? 0), simulation.seamReadings?.dissipatedPerArea ?? 0)
         }
     }

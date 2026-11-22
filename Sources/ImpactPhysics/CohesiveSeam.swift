@@ -13,12 +13,18 @@ public struct SeamSettings: Codable, Equatable, Sendable {
     public static let strengthRange = 0.009...0.014
     public static let openingRange = 0.008...0.010
 
-    var isValid: Bool {
-        Self.strengthRange.contains(strengthFraction) && Self.openingRange.contains(criticalOpening)
+    public static let impactStrengthRange = 0.001...0.016
+    public static let impactOpeningRange = 0.0002...0.003
+
+    func isValid(impact: Bool) -> Bool {
+        (impact ? Self.impactStrengthRange : Self.strengthRange).contains(strengthFraction)
+            && (impact ? Self.impactOpeningRange : Self.openingRange).contains(criticalOpening)
     }
 
-    func law(left: Material, right: Material) -> CohesiveLaw {
-        CohesiveLaw(strength: strengthFraction * min(left.young, right.young), finalOpening: criticalOpening)
+    func law(left: Material, right: Material, minimumCompressionFactor: Double = 0) -> CohesiveLaw {
+        let modulus = min(left.young, right.young)
+        return CohesiveLaw(strength: strengthFraction * modulus, finalOpening: criticalOpening,
+                           minimumCompressionStiffness: minimumCompressionFactor * modulus)
     }
 }
 
@@ -26,12 +32,20 @@ package struct CohesiveLaw: Sendable {
     package let strength, finalOpening: Double
     package var onset: Double { 0.25 * finalOpening }
     package var stiffness: Double { strength / onset }
-    package var contactStiffness: Double { 4 * stiffness }
+    private let minimumCompressionStiffness: Double
+    package var contactStiffness: Double { max(4 * stiffness, minimumCompressionStiffness) }
     package var fractureEnergy: Double { 0.5 * strength * finalOpening }
 
-    package init(strength: Double, finalOpening: Double) {
+    package init(strength: Double, finalOpening: Double, minimumCompressionStiffness: Double = 0) {
         self.strength = strength
         self.finalOpening = finalOpening
+        self.minimumCompressionStiffness = minimumCompressionStiffness
+    }
+
+    func damage(at maximum: Double) -> Double {
+        guard maximum > onset else { return 0 }
+        if maximum >= finalOpening { return 1 }
+        return finalOpening * (maximum - onset) / (maximum * (finalOpening - onset))
     }
 
     package struct Sample: Sendable {
@@ -41,7 +55,7 @@ package struct CohesiveLaw: Sendable {
     package func evaluate(opening: Double, previousMaximum: Double, canSeparate: Bool) -> Sample {
         let maximum = canSeparate ? max(previousMaximum, opening) : 0
         let softening = min(1, max(0, (maximum - onset) / (finalOpening - onset)))
-        let secant = softening > 0 ? strength * (1 - softening) / maximum : stiffness
+        let secant = (1 - damage(at: maximum)) * stiffness
         let tensile = max(0, opening)
         let compressive = min(0, opening)
         return Sample(maximumOpening: maximum,
@@ -92,7 +106,7 @@ struct CohesiveSeam: Sendable {
     let canSeparate: Bool
     let height, spacing, phaseDuration: Double
     let pairs: [Pair]
-    let leftGrip, rightGrip: Grip
+    let grips: (left: Grip, right: Grip)?
     var initialReadings: SeamReadings { SeamReadings(criticalEnergy: law.fractureEnergy, height: height) }
 
     func motion(at time: Double) -> Motion {
@@ -117,8 +131,8 @@ struct CohesiveSeam: Sendable {
             let sample = law.evaluate(opening: opening, previousMaximum: maxima[i], canSeparate: canSeparate)
             let weight = pair.weight
             let force = sample.traction * weight
-            leftForce[pair.left] = Point(force, 0)
-            rightForce[pair.right] = Point(-force, 0)
+            leftForce[pair.left].x += force
+            rightForce[pair.right].x -= force
             trial.maxima[i] = sample.maximumOpening
             trial.readings.opening += opening * weight / height
             trial.readings.force += force
@@ -160,10 +174,10 @@ extension Simulation {
                                 canSeparate: settings.response == .separating,
                                 height: height, spacing: spacing, phaseDuration: scene.seamPhaseDuration,
                                 pairs: pairs,
-                                leftGrip: .init(nodes: (0...rows).map { $0 * stride },
-                                                initialX: -scene.first.width, direction: -0.5),
-                                rightGrip: .init(nodes: (0...rows).map { $0 * stride + columns },
-                                                 initialX: rightPart.width, direction: 0.5))
+                                grips: (left: .init(nodes: (0...rows).map { $0 * stride },
+                                                    initialX: -scene.first.width, direction: -0.5),
+                                        right: .init(nodes: (0...rows).map { $0 * stride + columns },
+                                                     initialX: rightPart.width, direction: 0.5)))
         return Simulation(primary: left, secondary: right, gap: 0, stepScale: stepScale, seam: seam)
     }
 }
