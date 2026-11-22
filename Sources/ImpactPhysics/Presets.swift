@@ -10,6 +10,7 @@ public enum Preset: String, CaseIterable, Codable, Identifiable, Sendable {
     case puckStrip = "Puck and strip"
     case bondedBar = "Bonded bar"
     case tensionCoupon = "Tension coupon"
+    case offAxisImpact = "Off-axis impact"
     case layeredImpact = "Layered impact"
     case layeredSeam = "Layered seam"
 
@@ -40,7 +41,7 @@ public enum Preset: String, CaseIterable, Codable, Identifiable, Sendable {
             scene.first.material = material
             scene.speed = speed ?? scene.speed
             return scene.buildSimulation()
-        case .tensionCoupon, .layeredSeam, .layeredImpact:
+        case .tensionCoupon, .layeredSeam, .layeredImpact, .offAxisImpact:
             return SceneConfiguration.standard(self).buildSimulation()
         }
     }

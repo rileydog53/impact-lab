@@ -15,6 +15,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public var second: SpecimenConfiguration?
     public var third: SpecimenConfiguration?
     public var backstopGap: Double?
+    public var offAxis: OffAxisSettings?
     public var gap: Double
     public var targetX = 0.0
     public var centerY = 0.0
@@ -58,6 +59,13 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .tensionCoupon:
             SceneConfiguration(preset: preset, first: .init(width: 0.30, height: 0.06, material: Material(poisson: 0.25)),
                                gap: 0, speed: 0, tension: TensionSettings())
+        case .offAxisImpact:
+            SceneConfiguration(preset: preset, first: .init(width: 0.065, height: 0.050, cornerRadius: 0.009),
+                               second: .init(width: 0.075, height: 0.065, material: Material(young: 1.3e6)),
+                               third: .init(width: 0.055, height: 0.065, material: Material(young: 2.6e6)),
+                               offAxis: OffAxisSettings(), gap: 0.006, speed: 1.25,
+                               impactPlasticity: ImpactPlasticity(),
+                               seam: SeamSettings(strengthFraction: 0.0025, criticalOpening: 0.0006))
         case .layeredImpact:
             SceneConfiguration(preset: preset, first: .init(width: 0.065, height: 0.050),
                                second: .init(width: 0.090, height: 0.065, material: Material(young: 1.2e6)),
@@ -82,6 +90,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
     public var isPair: Bool { preset == .twoBars || preset == .puckStrip }
     public var isBonded: Bool { preset == .bondedBar }
     public var isLayeredImpact: Bool { preset == .layeredImpact }
+    public var hasImpactedLayers: Bool { isLayeredImpact || preset == .offAxisImpact }
     public var sharesHeight: Bool { preset == .twoBars || isBonded || preset == .layeredSeam }
     public var gapRange: ClosedRange<Double> {
         let standardGap = Self.standard(preset).gap
@@ -91,11 +100,12 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         let x = Self.standard(preset).targetX
         return isPair || isBonded ? (x - 0.025)...(x + 0.025) : 0...0
     }
-    public var targetVelocityXRange: ClosedRange<Double> { isPair || isBonded || isLayeredImpact ? -0.15...0.15 : 0...0 }
+    public var targetVelocityXRange: ClosedRange<Double> { isPair || isBonded || hasImpactedLayers ? -0.15...0.15 : 0...0 }
     public var speedRange: ClosedRange<Double> {
         switch preset {
         case .tensionCoupon, .layeredSeam: 0...0
         case .materialImpact, .layeredImpact: 0.25...1.5
+        case .offAxisImpact: 0.65...1.45
         case .bondedBar: 0.01...0.10
         default: 0.10...1.0
         }
@@ -125,6 +135,7 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         case .bondedBar: return 1.05 * first.width / first.material.waveSpeed
         case .tensionCoupon:
             return (2 * TensionLoad.rampTransits + TensionLoad.settleTransits) * first.width / first.material.waveSpeed
+        case .offAxisImpact: return offAxis!.duration
         case .layeredImpact:
             return gap / speed + 10 * (first.width / first.material.waveSpeed
                                         + second!.width / second!.material.waveSpeed
@@ -166,14 +177,15 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         guard validSpecimen(first, standard.first), validSpecimen(second, standard.second),
               validSpecimen(third, standard.third),
               backstopGap.map({ isLayeredImpact && Self.backstopGapRange.contains($0) }) ?? true,
-              !isLayeredImpact || (second?.height == third?.height && velocityY == 0),
+              !hasImpactedLayers || second?.height == third?.height,
+              preset == .offAxisImpact ? offAxis?.isValid == true && validSpecimen(offAxis?.receiver, standard.offAxis?.receiver) : offAxis == nil,
               !sharesHeight || first.height == second?.height,
               gapRange.contains(gap), speedRange.contains(speed), targetXRange.contains(targetX),
               targetVelocityXRange.contains(targetVelocityX), puckOffsetRange.contains(puckOffsetY),
-              Self.centerYRange.contains(centerY), Self.velocityYRange.contains(velocityY),
-              (preset == .materialImpact || isLayeredImpact) ? impactPlasticity?.isValid == true : impactPlasticity == nil,
+              Self.centerYRange.contains(centerY), (preset == .offAxisImpact ? OffAxisSettings.transverseRange : Self.velocityYRange).contains(velocityY),
+              (preset == .materialImpact || hasImpactedLayers) ? impactPlasticity?.isValid == true : impactPlasticity == nil,
               preset == .tensionCoupon ? tension?.isValid == true && velocityY == 0 : tension == nil,
-              (preset == .layeredSeam || isLayeredImpact) ? seam?.isValid(impact: isLayeredImpact) == true && velocityY == 0 : seam == nil,
+              (preset == .layeredSeam || hasImpactedLayers) ? seam?.isValid(impact: hasImpactedLayers) == true && (preset == .offAxisImpact || velocityY == 0) : seam == nil,
               !mirrored || preset == .block else {
             throw SceneFileError.invalidConfiguration
         }
@@ -208,9 +220,16 @@ public struct SceneConfiguration: Codable, Equatable, Sendable {
         return Simulation.layeredImpact(scene: self, refinement: refinement, stepScale: stepScale)
     }
 
+    package func refinedOffAxisImpact(refinement: Int, stepScale: Double) throws -> Simulation {
+        try validate()
+        precondition(preset == .offAxisImpact)
+        return Simulation.offAxisImpact(scene: self, refinement: refinement, stepScale: stepScale)
+    }
+
     func buildSimulation() -> Simulation {
         let mesh: Mesh
         switch preset {
+        case .offAxisImpact: return Simulation.offAxisImpact(scene: self, refinement: 1, stepScale: 1)
         case .layeredImpact: return Simulation.layeredImpact(scene: self, refinement: 1, stepScale: 1)
         case .materialImpact: return Simulation.materialImpact(scene: self, columns: 48, rows: 8, stepScale: 1)
         case .bar: mesh = .bar(width: first.width, height: first.height!)

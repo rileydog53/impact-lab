@@ -14,7 +14,7 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.shopping.impactlab</string>
 <key>CFBundleName</key><string>Impact Lab</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.4</string>
+<key>CFBundleShortVersionString</key><string>0.5</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST

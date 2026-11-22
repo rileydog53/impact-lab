@@ -297,6 +297,11 @@ private struct BodyStep: Sendable {
         return result
     }
 
+    mutating func contact(with other: inout Self, using pair: BoundaryContact) -> ContactResult {
+        pair.assemble(left: nextPosition, right: other.nextPosition,
+                      leftForce: &nextApplied, rightForce: &other.nextApplied, accumulating: true)
+    }
+
     mutating func accept() {
         swap(&body.velocity, &nextVelocity)
         swap(&body.position, &nextPosition)
@@ -316,6 +321,9 @@ public struct Simulation: Sendable {
     public var secondStrain: [Double]? { secondary?.strain }
     public var thirdBody: Body? { tertiary?.body }
     public var thirdStrain: [Double]? { tertiary?.strain }
+    public var receiverBody: Body? { receiver?.body }
+    public var receiverStrain: [Double]? { receiver?.strain }
+    public private(set) var receiverInContact = false
     public var secondPlasticStrain: [Double] { secondary?.history?.current.map(\.equivalentStrain) ?? [] }
     public var plasticDissipation: Double { primaryEnergy.dissipation + secondaryEnergy.dissipation }
     public var facingMeanPlasticStrain: Double { secondaryEnergy.meanPlasticStrain }
@@ -347,7 +355,7 @@ public struct Simulation: Sendable {
     package var seamLinkReadings: [(opening: Double, force: Double)] {
         guard let seam, let right = rightSeamBody else { return [] }
         return zip(seam.pairs, seamMaxima).map { pair, maximum in
-            let opening = right.position[pair.right].x - leftSeamBody.position[pair.left].x
+            let opening = seam.opening(for: right.position[pair.right] - leftSeamBody.position[pair.left])
             return (opening, pair.weight * seam.law.evaluate(opening: opening, previousMaximum: maximum,
                                                               canSeparate: seam.canSeparate).traction)
         }
@@ -362,6 +370,7 @@ public struct Simulation: Sendable {
     private var primaryEnergy = ElementEnergy()
     private var secondaryEnergy = ElementEnergy()
     private var tertiaryEnergy = ElementEnergy()
+    private var receiverEnergy = ElementEnergy()
     private var contactEnergy = 0.0
     public private(set) var lastWallContactTime: Double?
     private var bondEnergy = 0.0
@@ -369,6 +378,8 @@ public struct Simulation: Sendable {
     private var primary: BodyStep
     private var secondary: BodyStep?
     private var tertiary: BodyStep?
+    private var receiver: BodyStep?
+    private let freeContacts: FreeImpactContacts?
     private let rearStopX: Double?
     private let pairContact: BoundaryContact?
     private let tension: TensionLoad?
@@ -385,7 +396,7 @@ public struct Simulation: Sendable {
     init(primary: Body, secondary: Body? = nil, pairContact: BoundaryContact? = nil,
          gap: Double, stepScale: Double, tension: TensionLoad? = nil, j2: J2Model? = nil,
          seam: CohesiveSeam? = nil, tertiary: Body? = nil, secondaryJ2: J2Model? = nil,
-         rearStopX: Double? = nil) {
+         rearStopX: Double? = nil, receiver: Body? = nil) {
         let material = primary.material
         precondition(material.young > 0 && material.density > 0 && abs(material.poisson) < 0.5)
         precondition(stepScale > 0 && stepScale <= 1)
@@ -394,6 +405,9 @@ public struct Simulation: Sendable {
         self.primary = BodyStep(primary, j2: j2)
         self.secondary = secondary.map { BodyStep($0, j2: secondaryJ2) }
         self.tertiary = tertiary.map { BodyStep($0) }
+        self.receiver = receiver.map { BodyStep($0) }
+        let freeContacts = receiver.map { FreeImpactContacts(striker: pairContact!.left, facing: pairContact!.right, backing: tertiary!, receiver: $0) }
+        self.freeContacts = freeContacts
         impactEvents = tertiary.map { _ in LayeredImpactEvents() }
         self.pairContact = pairContact
         self.rearStopX = rearStopX
@@ -405,23 +419,37 @@ public struct Simulation: Sendable {
         func kineticEnergy(_ body: Body) -> Double {
             zip(body.mass, body.velocity).reduce(0) { $0 + 0.5 * $1.0 * simd_length_squared($1.1) }
         }
-        initialKinetic = kineticEnergy(primary) + (secondary.map(kineticEnergy) ?? 0) + (tertiary.map(kineticEnergy) ?? 0)
+        initialKinetic = kineticEnergy(primary) + (secondary.map(kineticEnergy) ?? 0)
+            + (tertiary.map(kineticEnergy) ?? 0) + (receiver.map(kineticEnergy) ?? 0)
         // Budget both the node's own contact spring and reactions to opposing springs.
         let allowance = 8 * (pairContact?.maximumStiffness ?? 0)
-        let seamStiffness = 2 * (seam?.law.contactStiffness ?? 0)
+        let seamStiffness = 2 * ((freeContacts == nil ? seam?.law.contactStiffness : seam?.law.stiffness) ?? 0)
+        let layersAllowance = 8 * (freeContacts?.layerContact.maximumStiffness ?? 0)
+        let backingReceiver = 8 * (freeContacts?.receiverContact.maximumStiffness ?? 0)
+        let strikerBacking = 8 * (freeContacts?.strikerBacking.maximumStiffness ?? 0)
+        let strikerReceiver = 8 * (freeContacts?.strikerReceiver.maximumStiffness ?? 0)
+        let facingReceiver = 8 * (freeContacts?.facingReceiver.maximumStiffness ?? 0)
         let firstSprings = seam?.pairs.map { ($0.left, seamStiffness * $0.weight) } ?? []
         let secondSprings = seam?.pairs.map { ($0.right, seamStiffness * $0.weight) } ?? []
         let firstOmega = Self.squaredFrequency(of: primary, contact: pairContact?.left,
-                                               allowance: allowance, springs: tertiary == nil ? firstSprings : [])
+                                               allowance: allowance + strikerBacking + strikerReceiver,
+                                               springs: tertiary == nil ? firstSprings : [])
         let secondOmega = secondary.map {
-            Self.squaredFrequency(of: $0, contact: pairContact?.right, allowance: allowance, springs: tertiary == nil ? secondSprings : firstSprings)
+            Self.squaredFrequency(of: $0, contact: pairContact?.right,
+                                  allowance: allowance + layersAllowance + facingReceiver,
+                                  springs: tertiary == nil ? secondSprings : firstSprings)
         } ?? 0
         let thirdOmega = tertiary.map {
-            Self.squaredFrequency(of: $0, contact: nil, allowance: 0, springs: secondSprings)
+            Self.squaredFrequency(of: $0, contact: freeContacts?.layerContact.right,
+                                  allowance: layersAllowance + backingReceiver + strikerBacking, springs: secondSprings)
         } ?? 0
         // Central difference is linearly stable for dt * omega < 2.
         // The margin also accommodates changes in the tangent during impact.
-        dt = stepScale * 0.8 / sqrt(max(firstOmega, secondOmega, thirdOmega))
+        let receiverOmega = receiver.map {
+            Self.squaredFrequency(of: $0, contact: freeContacts?.receiverContact.right,
+                                  allowance: backingReceiver + strikerReceiver + facingReceiver, springs: [])
+        } ?? 0
+        dt = stepScale * 0.8 / sqrt(max(firstOmega, secondOmega, thirdOmega, receiverOmega))
     }
 
     private static func squaredFrequency(of body: Body, contact: ContactSurface?, allowance: Double,
@@ -465,12 +493,13 @@ public struct Simulation: Sendable {
         accumulate(body)
         if let secondBody { accumulate(secondBody) }
         if let thirdBody { accumulate(thirdBody) }
+        if let receiverBody { accumulate(receiverBody) }
         let fracture = seamReadings?.dissipated ?? 0
-        let energy = kinetic + primaryEnergy.total + secondaryEnergy.total + tertiaryEnergy.total + contactEnergy + bondEnergy + fracture
+        let energy = kinetic + primaryEnergy.total + secondaryEnergy.total + tertiaryEnergy.total + receiverEnergy.total + contactEnergy + bondEnergy + fracture
         let seamScale = seam?.grips == nil ? nil : seam.map { $0.height * $0.law.fractureEnergy }
         let relativeError = (energy - initialKinetic - appliedWork)
             / max(seamScale ?? tension?.referenceEnergy ?? initialKinetic, Double.leastNormalMagnitude)
-        return Diagnostics(kinetic: kinetic, elastic: primaryEnergy.elastic + secondaryEnergy.elastic + tertiaryEnergy.elastic, contact: contactEnergy,
+        return Diagnostics(kinetic: kinetic, elastic: primaryEnergy.elastic + secondaryEnergy.elastic + tertiaryEnergy.elastic + receiverEnergy.elastic, contact: contactEnergy,
                            hardening: primaryEnergy.hardening + secondaryEnergy.hardening,
                            plasticDissipation: plasticDissipation,
                            appliedWork: appliedWork,
@@ -493,7 +522,7 @@ public struct Simulation: Sendable {
 
     @discardableResult public mutating func step() -> Bool {
         guard failure == nil else { return false }
-        guard primary.drift(dt), secondary?.drift(dt) ?? true, tertiary?.drift(dt) ?? true else {
+        guard primary.drift(dt), secondary?.drift(dt) ?? true, tertiary?.drift(dt) ?? true, receiver?.drift(dt) ?? true else {
             failure = "Position became non-finite."
             return false
         }
@@ -502,14 +531,15 @@ public struct Simulation: Sendable {
         if let grips, let motion {
             primary.guidePositions(grip: grips.left, motion: motion)
             secondary!.guidePositions(grip: grips.right, motion: motion)
-        } else if tertiary != nil {
+        } else if tertiary != nil && freeContacts == nil {
             primary.guideTransversePositions()
             secondary!.guideTransversePositions()
             tertiary!.guideTransversePositions()
         }
         guard let firstEnergy = primary.assemble(),
               let secondEnergy = secondary == nil ? ElementEnergy() : secondary?.assemble(),
-              let thirdEnergy = tertiary == nil ? ElementEnergy() : tertiary?.assemble() else {
+              let thirdEnergy = tertiary == nil ? ElementEnergy() : tertiary?.assemble(),
+              let fourthEnergy = receiver == nil ? ElementEnergy() : receiver?.assemble() else {
             failure = "An element inverted or its stress became non-finite."
             return false
         }
@@ -518,6 +548,8 @@ public struct Simulation: Sendable {
         var seamTrial: CohesiveSeam.Trial?
         var impactContact = ContactResult()
         var stopContact = ContactResult()
+        var receiverContact = ContactResult()
+        var layerContact = ContactResult()
         if let pairContact {
             impactContact = pairContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
                                                  leftForce: &primary.nextApplied, rightForce: &secondary!.nextApplied)
@@ -528,6 +560,8 @@ public struct Simulation: Sendable {
             if tertiary != nil {
                 if let rearStopX {
                     stopContact = tertiary!.wallContact(at: rearStopX, dt: dt)
+                } else if freeContacts != nil {
+                    for i in tertiary!.body.boundaryNodes { tertiary!.nextApplied[i] = .zero }
                 } else {
                     for pair in seam.pairs { tertiary!.nextApplied[pair.right] = .zero }
                 }
@@ -543,11 +577,8 @@ public struct Simulation: Sendable {
                                       maxima: seamMaxima, leftForce: &primary.nextApplied,
                                       rightForce: &secondary!.nextApplied)
             }
-            contact.energy += trial.contact.energy + stopContact.energy
-            contact.penetration = max(contact.penetration, trial.contact.penetration, stopContact.penetration)
-            contact.wallImpulse = stopContact.wallImpulse
-            contact.wallAngularImpulse = stopContact.wallAngularImpulse
-            contact.relativePenetration = max(contact.relativePenetration, trial.contact.relativePenetration)
+            contact.add(trial.contact)
+            contact.add(stopContact)
             seamTrial = trial
         } else if primary.body.hasWall {
             contact = primary.wallContact(at: 0, dt: dt)
@@ -555,14 +586,24 @@ public struct Simulation: Sendable {
             work = tension.apply(from: primary.body.position, to: primary.nextPosition, time: time,
                                  dt: dt, forces: &primary.nextApplied)
         }
+        if let freeContacts {
+            for i in receiver!.body.boundaryNodes { receiver!.nextApplied[i] = .zero }
+            layerContact = secondary!.contact(with: &tertiary!, using: freeContacts.layerContact)
+            receiverContact = tertiary!.contact(with: &receiver!, using: freeContacts.receiverContact)
+            contact.add(layerContact)
+            contact.add(receiverContact)
+            contact.add(primary.contact(with: &tertiary!, using: freeContacts.strikerBacking))
+            contact.add(primary.contact(with: &receiver!, using: freeContacts.strikerReceiver))
+            contact.add(secondary!.contact(with: &receiver!, using: freeContacts.facingReceiver))
+        }
         let seamEnergy = (seamTrial?.bondEnergy ?? 0) + (seamTrial?.readings.dissipated ?? 0)
-        guard (contact.energy + firstEnergy.total + secondEnergy.total + thirdEnergy.total + seamEnergy).isFinite,
+        guard (contact.energy + firstEnergy.total + secondEnergy.total + thirdEnergy.total + fourthEnergy.total + seamEnergy).isFinite,
               (wallImpulse + contact.wallImpulse).isFinite,
               (wallAngularImpulse + contact.wallAngularImpulse).isFinite else {
             failure = "Contact energy or impulse became non-finite."
             return false
         }
-        guard primary.kick(dt), secondary?.kick(dt) ?? true, tertiary?.kick(dt) ?? true else {
+        guard primary.kick(dt), secondary?.kick(dt) ?? true, tertiary?.kick(dt) ?? true, receiver?.kick(dt) ?? true else {
             failure = "Velocity became non-finite."
             return false
         }
@@ -570,7 +611,7 @@ public struct Simulation: Sendable {
             let before = seam.motion(at: time)
             work = primary.guideVelocitiesAndWork(grip: grips.left, before: before, after: motion)
             work += secondary!.guideVelocitiesAndWork(grip: grips.right, before: before, after: motion)
-        } else if tertiary != nil {
+        } else if tertiary != nil && freeContacts == nil {
             primary.guideTransverseVelocities()
             secondary!.guideTransverseVelocities()
             tertiary!.guideTransverseVelocities()
@@ -582,13 +623,16 @@ public struct Simulation: Sendable {
         primary.accept()
         secondary?.accept()
         tertiary?.accept()
+        receiver?.accept()
         time += dt
         primaryEnergy = firstEnergy
         secondaryEnergy = secondEnergy
         tertiaryEnergy = thirdEnergy
+        receiverEnergy = fourthEnergy
+        receiverInContact = receiverContact.penetration > 0
         strikerInContact = impactContact.penetration > 0
         backstopInContact = stopContact.penetration > 0
-        seamInCompression = (seamTrial?.contact.penetration ?? 0) > 0
+        seamInCompression = layerContact.penetration > 0 || (seamTrial?.contact.penetration ?? 0) > 0
         contactEnergy = contact.energy
         if primary.body.hasWall && contact.penetration > 0 { lastWallContactTime = time }
         if let trial = seamTrial {
@@ -599,6 +643,7 @@ public struct Simulation: Sendable {
         if var events = impactEvents {
             if strikerInContact && events.strike == nil { events.strike = time }
             if backstopInContact && events.backstop == nil { events.backstop = time }
+            if receiverInContact && events.receiver == nil { events.receiver = time }
             if events.failure != nil && seamInCompression && events.reclosure == nil { events.reclosure = time }
             if (seamReadings?.separatedFraction ?? 0) > 1 - 1e-12 && events.failure == nil {
                 events.failure = time

@@ -3,6 +3,7 @@ public struct LayeredImpactEvents: Sendable {
     public internal(set) var failure: Double?
     public internal(set) var backstop: Double?
     public internal(set) var reclosure: Double?
+    public internal(set) var receiver: Double?
 }
 
 extension Simulation {

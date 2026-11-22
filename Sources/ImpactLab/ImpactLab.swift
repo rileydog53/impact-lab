@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 private let ink = Color(red: 0.82, green: 0.88, blue: 0.92)
 private let mint = Color(red: 0.42, green: 0.88, blue: 0.78)
+private let sky = Color(red: 0.58, green: 0.78, blue: 1)
 private let amber = Color(red: 1, green: 0.64, blue: 0.38)
 private let labBackground = Color(red: 0.06, green: 0.09, blue: 0.12)
 private let panel = Color(red: 0.09, green: 0.13, blue: 0.17)
@@ -15,19 +16,20 @@ private extension Preset {
         case .twoBars: ("Left bar", "Right bar")
         case .puckStrip: ("Puck", "Strip")
         case .layeredSeam: ("Left layer", "Right layer")
-        case .layeredImpact: ("Striker", "Facing layer")
+        case .layeredImpact, .offAxisImpact: ("Striker", "Facing layer")
         default: nil
         }
     }
 }
 
 @MainActor @Observable final class Experiment {
-    static let initialPreset = Preset.layeredImpact
+    static let initialPreset = Preset.offAxisImpact
     private var run = try! SceneRun(.standard(initialPreset))
     private var drafts: [Preset: SceneConfiguration] = [:]
     private(set) var reference: SceneTrace?
     private(set) var running = false
     var fileError: String?
+    var slowerPlayback = false
     private var lastTick: Double?
     private var budget = 0.0
 
@@ -111,7 +113,7 @@ private extension Preset {
         guard running else { return }
         defer { lastTick = now }
         guard let lastTick else { return }
-        budget += min(0.05, max(0, now - lastTick)) * playbackRate
+        budget += min(0.05, max(0, now - lastTick)) * playbackRate * (slowerPlayback ? 0.25 : 1)
         let deadline = ProcessInfo.processInfo.systemUptime + 0.008
         while budget >= simulation.dt {
             guard advance() else { return }
@@ -133,8 +135,13 @@ private extension Preset {
         case .tensionCoupon: 0.105
         case .materialImpact: 0.026
         case .layeredSeam: 0.065
-        case .layeredImpact: 0.016
+        case .offAxisImpact, .layeredImpact: 0.016
         }
+    }
+
+    func advance(to time: Double) {
+        pause()
+        while simulation.time < time && advance() {}
     }
 
     @discardableResult func advance() -> Bool {
@@ -154,7 +161,7 @@ private extension Preset {
                 .frame(minWidth: 860, minHeight: 560)
                 .preferredColorScheme(.dark)
         }
-        .defaultSize(width: 1050, height: 660)
+        .defaultSize(width: 1180, height: 760)
     }
 }
 
@@ -164,7 +171,9 @@ struct LabView: View {
     @State private var showPlasticStrain = false
     @State private var showFractureEnergy = false
     private var isCoupon: Bool { experiment.preset == .tensionCoupon }
-    private var layeredImpact: Bool { experiment.configuration.isLayeredImpact }
+    private var layeredImpact: Bool { experiment.configuration.hasImpactedLayers }
+    private var offAxis: Bool { experiment.preset == .offAxisImpact }
+    @State private var showReceiverVelocity = false
     private var isSeam: Bool { experiment.configuration.seam != nil }
     private var showsMaterialResponse: Bool { isCoupon || experiment.configuration.impactPlasticity != nil }
     private var showingPlastic: Bool { showsMaterialResponse && showPlasticStrain }
@@ -195,6 +204,7 @@ struct LabView: View {
                 impactCanvas
                     .frame(minHeight: 230, maxHeight: .infinity)
                     .background(panel, in: RoundedRectangle(cornerRadius: 12))
+                if offAxis { eventReadings }
                 HStack {
                     switch experiment.preset {
                     case .bar:
@@ -235,6 +245,19 @@ struct LabView: View {
                             Text("Length \(1000 * length, specifier: "%.2f") mm")
                                 .foregroundStyle(.secondary).monospacedDigit()
                         }
+                    case .offAxisImpact:
+                        Picker("Motion trace", selection: $showReceiverVelocity) {
+                            Text("Backing angle").tag(false)
+                            Text("Receiver velocity X").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 275)
+                        Spacer()
+                        let signal = experiment.trace.last?.values ?? .zero
+                        Text(showReceiverVelocity ? String(format: "%+.3f m/s", signal.y)
+                             : String(format: "%+.1f°", signal.x))
+                        .foregroundStyle(showReceiverVelocity ? amber : mint).monospacedDigit()
                     case .layeredSeam, .layeredImpact:
                         Picker("Seam trace", selection: $showFractureEnergy) {
                             Text("Mean opening").tag(false)
@@ -268,7 +291,7 @@ struct LabView: View {
                         }
                     }
                     if layeredImpact {
-                        Text("Collinear impact · Lateral guides")
+                        Text(offAxis ? "Four deformable bodies · Free motion in X and Y" : "Collinear impact · Lateral guides")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if showsMaterialResponse {
@@ -309,9 +332,19 @@ struct LabView: View {
                         Button("Step", systemImage: "forward.frame") { experiment.advance() }
                             .disabled(experiment.running || experiment.simulation.failure != nil || experiment.finished)
                             .help("Advance one physical timestep")
+                        if offAxis {
+                            Button("+1 ms") { experiment.advance(to: experiment.simulation.time + 0.001) }
+                                .disabled(experiment.running || experiment.simulation.failure != nil || experiment.finished)
+                                .help("Advance at least one simulated millisecond, ending at the next solver step")
+                        }
                         Button("Reset", systemImage: "arrow.counterclockwise") { experiment.reset() }
                             .labelStyle(.iconOnly)
                             .help("Reset to the configured initial state")
+                    }
+                    if offAxis {
+                        Toggle("Quarter-speed playback", isOn: Binding(get: { experiment.slowerPlayback },
+                                                                        set: { experiment.slowerPlayback = $0 }))
+                            .font(.callout)
                     }
                     HStack {
                         Button("Pin reference", systemImage: "pin") { experiment.pinReference() }
@@ -358,13 +391,13 @@ struct LabView: View {
                 }
                 .padding(22)
             }
-            .frame(width: 286)
+            .frame(width: offAxis ? 316 : 286)
             .background(panel)
         }
         .foregroundStyle(ink)
         .background(labBackground)
         .onReceive(refresh) { _ in experiment.tick() }
-        .task { await smokeCheck() }
+        .task { await inspectOnLaunch(); await smokeCheck() }
         .sheet(isPresented: $showComparison) {
             if let reference = experiment.reference {
                 ComparisonView(reference: reference, current: experiment.currentTrace)
@@ -397,6 +430,30 @@ struct LabView: View {
         catch { experiment.fileError = error.localizedDescription }
     }
 
+    private var eventReadings: some View {
+        let events = experiment.simulation.impactEvents
+        return HStack(spacing: 8) {
+            eventReading("Striker contact", time: events?.strike, color: mint)
+            eventReading("Full bond failure", time: events?.failure, color: amber)
+            eventReading("Backing hits receiver", time: events?.receiver, color: sky)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Measured event times")
+    }
+
+    private func eventReading(_ name: String, time: Double?, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(name).font(.caption).foregroundStyle(ink)
+            Text(time.map { String(format: "%.2f ms", 1000 * $0) } ?? "Pending")
+                .font(.system(.callout, design: .monospaced).weight(.medium))
+                .foregroundStyle(time == nil ? Color.secondary : color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(panel, in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private var readings: some View {
         let simulation = experiment.simulation
         let d = simulation.diagnostics
@@ -419,7 +476,7 @@ struct LabView: View {
                 reading("Stored hardening energy", d.hardening, "J/m", "%.3f")
             }
             if let seam = simulation.seamReadings {
-                reading("Seam force", seam.force, "N/m", "%+.2f")
+                reading(offAxis ? "Sum of link tension" : "Seam force", seam.force, "N/m", "%+.2f")
                 reading("Fully separated", 100 * seam.separatedFraction, "%", "%.1f")
                 reading("Dissipated / area", seam.dissipatedPerArea, "J/m²", "%.3f")
                 reading("Fracture energy Gc", seam.criticalEnergy, "J/m²", "%.3f")
@@ -427,6 +484,14 @@ struct LabView: View {
                 if layeredImpact {
                     reading("Peak penetration", simulation.peakPenetration * 1000, "mm", "%.3f")
                     reading("Total momentum x", d.momentum.x, "N·s/m", "%+.5f")
+                    if offAxis {
+                        reading("Total momentum y", d.momentum.y, "N·s/m", "%+.5f")
+                        reading("Total angular momentum", d.angularMomentum, "N·m·s/m", "%+.5f")
+                        reading("Peak overlap / edge", 100 * simulation.peakRelativePenetration, "%", "%.2f")
+                        reading("Backing velocity y", simulation.thirdBody!.centerVelocity.y, "m/s", "%+.3f")
+                        reading("Receiver velocity y", simulation.receiverBody!.centerVelocity.y, "m/s", "%+.3f")
+                        reading("Mean link extension", seam.opening * 1000, "mm", "%.2f")
+                    }
                     if experiment.configuration.backstopX != nil {
                         reading("Backstop impulse", simulation.wallImpulse, "N·s/m", "%.3f")
                     }
@@ -472,6 +537,7 @@ struct LabView: View {
             let simulation = experiment.simulation
             let second = simulation.secondBody
             let third = simulation.thirdBody
+            let receiver = simulation.receiverBody
             let puckStrip = experiment.preset == .puckStrip
             let scene = experiment.configuration
             let coupon = scene.tension != nil
@@ -479,17 +545,20 @@ struct LabView: View {
             let initialWidth = experiment.preset == .bar ? 1.15 : (scene.impactPlasticity != nil ? 0.52 : 0.70)
             let primary = simulation.body.position
             let farthestLeft = min(primary.map(\.x).min() ?? 0, second?.position.map(\.x).min() ?? .infinity,
-                                   third?.position.map(\.x).min() ?? .infinity)
+                                   third?.position.map(\.x).min() ?? .infinity, receiver?.position.map(\.x).min() ?? .infinity)
             let farthestRight = max(primary.map(\.x).max() ?? 0, second?.position.map(\.x).max() ?? -.infinity,
-                                    third?.position.map(\.x).max() ?? -.infinity, scene.backstopX ?? -.infinity)
+                                    third?.position.map(\.x).max() ?? -.infinity, receiver?.position.map(\.x).max() ?? -.infinity, scene.backstopX ?? -.infinity)
             let farthestVertical = max(primary.map { abs($0.y - scene.centerY) }.max() ?? 0,
-                                       second?.position.map { abs($0.y - scene.centerY) }.max() ?? 0)
-            let sceneCenter = layeredImpact ? 0.060
-                : scene.targetX + (coupon || isSeam ? 0 : (puckStrip ? -0.045 : (scene.isBonded ? -0.10 : 0.054)))
-            let minimumHalfWidth = layeredImpact ? 0.164 : (isSeam ? 0.13 : (coupon ? 0.24 : (puckStrip ? 0.16 : (scene.isBonded ? 0.99 : 0.63))))
+                                       second?.position.map { abs($0.y - scene.centerY) }.max() ?? 0,
+                                       third?.position.map { abs($0.y - scene.centerY) }.max() ?? 0,
+                                       receiver?.position.map { abs($0.y - scene.centerY) }.max() ?? 0)
+            let sceneCenter = offAxis ? 0.088 : (layeredImpact ? 0.060
+                : scene.targetX + (coupon || isSeam ? 0 : (puckStrip ? -0.045 : (scene.isBonded ? -0.10 : 0.054))))
+            let minimumHalfWidth = offAxis ? 0.201 : (layeredImpact ? 0.164 : (isSeam ? 0.13 : (coupon ? 0.24 : (puckStrip ? 0.16 : (scene.isBonded ? 0.99 : 0.63)))))
             let sceneWidth = free ? 2 * max(minimumHalfWidth, sceneCenter - farthestLeft, farthestRight - sceneCenter)
                 : max(initialWidth, -farthestLeft + 0.1)
-            let sceneHeight = max(coupon || isSeam ? 0.17 : 0.52, 2 * farthestVertical + (puckStrip ? 0.12 : 0.08))
+            let sceneHeight = max(offAxis ? 0.19 : (coupon || isSeam ? 0.17 : 0.52),
+                                  2 * farthestVertical + (puckStrip ? 0.12 : 0.08))
             let scale = min((size.width - 65) / sceneWidth, (size.height - 60) / sceneHeight)
             let wall = size.width - 32
             let origin = free ? size.width / 2 - sceneCenter * scale : wall
@@ -507,12 +576,19 @@ struct LabView: View {
                 grid.move(to: CGPoint(x: x, y: 25))
                 grid.addLine(to: CGPoint(x: x, y: size.height - 28))
             }
+            if offAxis {
+                for j in -2...2 {
+                    let y = project(Point(0, scene.centerY + Double(j) * 0.025)).y
+                    grid.move(to: CGPoint(x: 24, y: y))
+                    grid.addLine(to: CGPoint(x: size.width - 24, y: y))
+                }
+            }
             context.stroke(grid, with: .color(ink.opacity(0.09)))
             let levels = 10
             let strainScale = showsMaterialResponse ? 0.08 : (scene.isBonded ? 0.0015 : 0.014)
             var patches = Array(repeating: Path(), count: levels * 2 + 1)
-            var outline = Path()
-            func drawMesh(_ body: ImpactPhysics.Body, strain: [Double]) {
+            var outlines: [(Path, Color)] = []
+            func drawMesh(_ body: ImpactPhysics.Body, strain: [Double], edgeColor: Color = ink) {
                 let nodes = body.position.map(project)
                 for (i, e) in body.mesh.elements.enumerated() {
                     let value = strain.isEmpty ? 0 : strain[i]
@@ -524,17 +600,25 @@ struct LabView: View {
                     patches[bucket].addLine(to: nodes[e.c])
                     patches[bucket].closeSubpath()
                 }
-                for edge in body.mesh.boundary {
-                    outline.move(to: nodes[edge.a])
-                    outline.addLine(to: nodes[edge.b])
+                let outline = Path { path in
+                    for edge in body.mesh.boundary {
+                        path.move(to: nodes[edge.a])
+                        path.addLine(to: nodes[edge.b])
+                    }
                 }
+                outlines.append((outline, edgeColor))
             }
-            drawMesh(simulation.body, strain: showingPlastic ? simulation.plasticStrain : simulation.strain)
+            drawMesh(simulation.body, strain: showingPlastic ? simulation.plasticStrain : simulation.strain,
+                     edgeColor: offAxis ? mint : ink)
             if let second, let strain = simulation.secondStrain {
-                drawMesh(second, strain: layeredImpact && showingPlastic ? simulation.secondPlasticStrain : strain)
+                drawMesh(second, strain: layeredImpact && showingPlastic ? simulation.secondPlasticStrain : strain,
+                         edgeColor: offAxis ? amber : ink)
             }
             if let third, let strain = simulation.thirdStrain {
                 drawMesh(third, strain: showingPlastic ? [] : strain)
+            }
+            if let receiver, let strain = simulation.receiverStrain {
+                drawMesh(receiver, strain: showingPlastic ? [] : strain, edgeColor: simulation.receiverInContact ? mint : sky)
             }
             let neutral = Color(red: 0.18, green: 0.33, blue: 0.42)
             for (i, patch) in patches.enumerated() where !patch.isEmpty {
@@ -543,7 +627,22 @@ struct LabView: View {
                 let color = showingPlastic || i < levels ? amber : mint
                 context.fill(patch, with: .color(color.opacity(intensity)))
             }
-            context.stroke(outline, with: .color(ink), lineWidth: 1.4)
+            for (outline, edgeColor) in outlines {
+                context.stroke(outline, with: .color(edgeColor), lineWidth: 1.4)
+            }
+            if let receiver, let third {
+                for (body, color) in [(third, ink), (receiver, sky)] {
+                    let center = body.centerOfMass
+                    let angle = body.orientation
+                    let axis = 0.016 * Point(cos(angle), sin(angle))
+                    context.stroke(Path { p in
+                        p.move(to: project(center - axis))
+                        p.addLine(to: project(center + axis))
+                    }, with: .color(color.opacity(0.85)), style: StrokeStyle(lineWidth: 1.3, dash: [4, 3]))
+                    let dot = project(center)
+                    context.fill(Path(ellipseIn: CGRect(x: dot.x - 2, y: dot.y - 2, width: 4, height: 4)), with: .color(color))
+                }
+            }
             if scene.impactPlasticity == nil, let station = simulation.body.probePosition {
                 let probe = project(station).x
                 context.stroke(Path { p in
@@ -552,6 +651,21 @@ struct LabView: View {
                 }, with: .color(mint), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                 context.draw(Text("PROBE").font(.caption2.monospaced()).foregroundStyle(mint),
                              at: CGPoint(x: probe, y: 25))
+            }
+            if offAxis {
+                let x = 24.0
+                let y = size.height - 23
+                context.stroke(Path { p in
+                    p.move(to: CGPoint(x: x, y: y - 3))
+                    p.addLine(to: CGPoint(x: x, y: y))
+                    p.addLine(to: CGPoint(x: x + 0.025 * scale, y: y))
+                    p.addLine(to: CGPoint(x: x + 0.025 * scale, y: y - 3))
+                }, with: .color(ink.opacity(0.65)))
+                context.draw(Text("25 mm").font(.caption2.monospaced()).foregroundStyle(ink),
+                             at: CGPoint(x: x, y: y - 7), anchor: .bottomLeading)
+                let legend = showingPlastic ? "Plastic strain · 0–8%" : "Amber: compression     Mint: tension"
+                context.draw(Text(legend).font(.caption2).foregroundStyle(ink.opacity(0.8)),
+                             at: CGPoint(x: size.width - 24, y: y), anchor: .trailing)
             }
             if experiment.preset == .block {
                 let center = simulation.body.centerOfMass
@@ -566,15 +680,17 @@ struct LabView: View {
                              with: .color(mint))
             }
             if let second, let labels = experiment.preset.pairLabels {
-                func drawLabel(_ body: ImpactPhysics.Body, _ label: String, _ color: Color) {
-                    let top = body.position.map(\.y).max() ?? 0
-                    let labelPosition = project(Point(body.centerOfMass.x, top + 0.026))
+                func drawLabel(_ body: ImpactPhysics.Body, _ label: String, _ color: Color, below: Bool = false) {
+                    let vertical = body.position.map(\.y)
+                    let labelY = below ? (vertical.min() ?? 0) - 0.016 : (vertical.max() ?? 0) + 0.017
+                    let labelPosition = project(Point(body.centerOfMass.x, labelY))
                     context.draw(Text(label.uppercased()).font(.caption2.monospaced()).foregroundStyle(color),
                                  at: labelPosition)
                 }
                 drawLabel(simulation.body, labels.first, mint)
-                drawLabel(second, labels.second, amber)
+                drawLabel(second, labels.second, amber, below: offAxis)
                 if let third { drawLabel(third, "Backing layer", ink) }
+                if let receiver { drawLabel(receiver, "Receiver", sky, below: true) }
                 if let stop = scene.backstopX {
                     let x = project(Point(stop, scene.centerY)).x
                     let color = simulation.backstopInContact ? amber : ink
@@ -602,12 +718,14 @@ struct LabView: View {
                     }
                     let separated = readings.separatedFraction > 1 - 1e-12
                     let closure = simulation.seamInCompression
-                    let caption = separated ? (closure ? "FAILED SEAM IN CONTACT" : "SEAM FAILED")
-                        : (closure ? "SEAM IN COMPRESSION" : (readings.dissipated > 0 ? "SEAM SOFTENING" : "SEAM"))
-                    context.draw(Text(caption).font(.caption2.monospaced())
-                        .foregroundStyle(separated || closure || readings.dissipated > 0 ? amber : mint),
-                                 at: project(Point((faces.left[0].x + faces.right[0].x) / 2,
-                                                   min(faces.left[0].y, faces.right[0].y) - 0.018)))
+                    if !offAxis {
+                        let caption = separated ? (closure ? "FAILED SEAM IN CONTACT" : "SEAM FAILED")
+                            : (closure ? "SEAM IN COMPRESSION" : (readings.dissipated > 0 ? "SEAM SOFTENING" : "SEAM"))
+                        context.draw(Text(caption).font(.caption2.monospaced())
+                            .foregroundStyle(separated || closure || readings.dissipated > 0 ? amber : mint),
+                                     at: project(Point((faces.left[0].x + faces.right[0].x) / 2,
+                                                       min(faces.left[0].y, faces.right[0].y) - 0.018)))
+                    }
                 }
             } else if let tension = scene.tension {
                 let ratio = simulation.appliedTraction / (tension.peakFraction * scene.first.material.young)
@@ -644,7 +762,8 @@ struct LabView: View {
                              at: CGPoint(x: wall - 22, y: size.height - 15))
             }
         }
-        .accessibilityLabel(layeredImpact ? "Deforming striker, facing, and backing layers"
+        .accessibilityLabel(offAxis ? "Free striker, facing, backing and receiver"
+                            : layeredImpact ? "Deforming striker, facing, and backing layers"
                             : experiment.preset.pairLabels.map { "Deforming \($0.first.lowercased()) and \($0.second.lowercased())" }
                             ?? (isCoupon ? "Tension coupon" : (experiment.configuration.isBonded
                                 ? "Bonded bar and strain probe" : "Deforming specimen and fixed wall")))
@@ -659,13 +778,13 @@ struct LabView: View {
             let bonded = experiment.preset == .bondedBar
             let lengthTrace = showsMaterialResponse
             let velocityTrace = experiment.configuration.isPair
-            let seamEnergy = isSeam && showFractureEnergy
-            let signal: KeyPath<Point, Double> = seamEnergy ? \.y : \.x
+            let seamEnergy = isSeam && !offAxis && showFractureEnergy
+            let signal: KeyPath<Point, Double> = (offAxis ? showReceiverVelocity : seamEnergy) ? \.y : \.x
             let initial = trace.first?.values.x ?? 0
             let initialTargetSpeed = trace.first?.values.y ?? 0
             let fractureScale = experiment.simulation.seamReadings?.criticalEnergy ?? 1
-            let center = seamEnergy ? fractureScale / 2 : (velocityTrace ? (initial + initialTargetSpeed) / 2 : initial)
-            var peak = velocityTrace ? abs(initial - initialTargetSpeed) * 0.5
+            let center = offAxis ? 0 : seamEnergy ? fractureScale / 2 : (velocityTrace ? (initial + initialTargetSpeed) / 2 : initial)
+            var peak = offAxis ? (showReceiverVelocity ? 0.1 : 5) : velocityTrace ? abs(initial - initialTargetSpeed) * 0.5
                 : (seamEnergy ? fractureScale / 2 : (lengthTrace || isSeam ? 4 : (ring || block ? 1.0 : (bonded ? 0.01 : 0.1))))
             for sample in trace {
                 let padding = velocityTrace || seamEnergy ? 1.0 : 1.12
@@ -682,7 +801,8 @@ struct LabView: View {
                 }, with: .color(ink.opacity(0.18)))
                 let value = center + fraction * peak
                 let label: String
-                if seamEnergy { label = String(format: "%.1f J/m²", value) }
+                if offAxis { label = String(format: showReceiverVelocity ? "%.2f m/s" : "%.0f°", value) }
+                else if seamEnergy { label = String(format: "%.1f J/m²", value) }
                 else if isSeam || ring || lengthTrace { label = String(format: "%.1f mm", value) }
                 else if block { label = String(format: "%+.1f°", value) }
                 else if velocityTrace { label = String(format: "%.2f m/s", value) }
@@ -704,11 +824,12 @@ struct LabView: View {
                     }
                 }
             }
-            context.stroke(line(signal), with: .color(seamEnergy ? amber : mint), lineWidth: 1.8)
+            context.stroke(line(signal), with: .color((offAxis ? showReceiverVelocity : seamEnergy) ? amber : mint), lineWidth: 1.8)
             if ring || velocityTrace { context.stroke(line(\.y), with: .color(amber), lineWidth: 1.8) }
             if let events = experiment.simulation.impactEvents {
                 for (time, label) in [(events.strike, "STRIKE"), (events.failure, "FAILS"),
-                                      (events.backstop, "STOP"), (events.reclosure, "RECLOSES")] {
+                                      (events.backstop, "STOP"), (offAxis ? nil : events.reclosure, "RECLOSES"),
+                                      (events.receiver, "RECEIVER")] {
                     guard let time else { continue }
                     let x = left + (right - left) * time / end
                     context.stroke(Path { path in
@@ -743,12 +864,20 @@ struct LabView: View {
         .accessibilityLabel("Time trace for " + experiment.preset.rawValue)
     }
 
+    private func inspectOnLaunch() async {
+        let args = CommandLine.arguments
+        guard let flag = args.firstIndex(of: "--inspect-ms"), args.indices.contains(flag + 1),
+              let milliseconds = Double(args[flag + 1]), milliseconds.isFinite, milliseconds >= 0 else { return }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        experiment.advance(to: milliseconds / 1000)
+    }
+
     private func smokeCheck() async {
         let args = CommandLine.arguments
         guard let flag = args.firstIndex(of: "--smoke"), args.indices.contains(flag + 1) else { return }
         try? await Task.sleep(for: .milliseconds(250))
         let windowVisible = NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" }
-        var results = ["window=\(windowVisible)", "opens on layered impact=\(experiment.preset == .layeredImpact)"]
+        var results = ["window=\(windowVisible)", "opens on off-axis impact=\(experiment.preset == .offAxisImpact)"]
         for preset in Preset.allCases {
             experiment.select(preset)
             let isPair = experiment.configuration.isPair
@@ -756,9 +885,9 @@ struct LabView: View {
             let isMaterialImpact = preset == .materialImpact
             let isSeam = preset == .layeredSeam
             let selected = experiment.preset == preset && experiment.simulation.time == 0
-            let topology = experiment.simulation.body.mesh.elements.count
-                + (experiment.simulation.secondBody?.mesh.elements.count ?? 0)
-                + (experiment.simulation.thirdBody?.mesh.elements.count ?? 0)
+            let s = experiment.simulation
+            let topology = [s.body, s.secondBody, s.thirdBody, s.receiverBody]
+                .compactMap { $0 }.reduce(0) { $0 + $1.mesh.elements.count }
             experiment.toggle()
             let start = ProcessInfo.processInfo.systemUptime
             try? await Task.sleep(for: .milliseconds(isPair ? 1300 : 1400))
@@ -780,6 +909,8 @@ struct LabView: View {
             case .bondedBar: inspected = experiment.simulation.body.mesh.interfaceNodes.count == 5
             case .tensionCoupon: inspected = experiment.simulation.appliedTraction > 0
                 && experiment.simulation.gaugeLength != nil
+            case .offAxisImpact: inspected = experiment.simulation.impactEvents?.failure != nil
+                && experiment.simulation.peakPlasticStrain > 0 && experiment.simulation.receiverBody != nil
             case .layeredImpact: inspected = experiment.simulation.impactEvents?.failure != nil
                 && experiment.simulation.peakPlasticStrain > 0 && experiment.simulation.thirdBody != nil
             case .layeredSeam: inspected = experiment.simulation.seamFaces != nil
@@ -819,6 +950,28 @@ struct LabView: View {
                     && experiment.simulation.failure == nil && (isCoupon ? residual > 0.001 : residual < -0.001)
                 let field = experiment.simulation.plasticStrain.contains { $0 > 0 }
                 results.append("\(preset.rawValue) playback: unloaded permanent set=\(unloaded) plastic field=\(field)")
+            } else if preset == .offAxisImpact {
+                let before = experiment.simulation.time
+                experiment.advance(to: before + 0.001)
+                let delta = experiment.simulation.time - before
+                let coarseStep = delta >= 0.001 && delta < 0.001 + experiment.simulation.dt
+                experiment.toggle()
+                for _ in 0..<180 where experiment.running {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                let events = experiment.simulation.impactEvents
+                let secondary = (events?.receiver ?? -1) > (events?.failure ?? .infinity)
+                let complete = experiment.finished && experiment.simulation.failure == nil
+                showPlasticStrain = true
+                try? await Task.sleep(for: .milliseconds(100))
+                let fields = showingPlastic && experiment.simulation.peakPlasticStrain > 0
+                    && experiment.simulation.seamDamage.allSatisfy { $0 == 1 }
+                showPlasticStrain = false
+                showReceiverVelocity = true
+                try? await Task.sleep(for: .milliseconds(100))
+                let motionTrace = (experiment.trace.last?.values.y ?? 0) > 0.1
+                showReceiverVelocity = false
+                results.append("Off-axis playback: millisecond step=\(coarseStep) finished=\(complete) failed backing hit receiver=\(secondary) plastic and damage fields=\(fields) receiver trace=\(motionTrace)")
             } else if preset == .layeredImpact {
                 showPlasticStrain = true
                 experiment.toggle()
@@ -844,11 +997,14 @@ struct LabView: View {
                 results.append("Layered seam playback: full separation=\(broken) compressive reclosure and free reopening=\(reclosed)")
             }
             var edited = experiment.configuration
-            if !isCoupon && !isSeam { edited.speed = preset == .bondedBar ? 0.07 : 0.6 }
+            if !isCoupon && !isSeam { edited.speed = preset == .bondedBar ? 0.07 : (preset == .offAxisImpact ? 1.10 : 0.6) }
             edited.first.material = Material(young: 4e6, density: 1500, poisson: 0.2)
             edited.first.width *= 1.05
             edited.second?.material = Material(young: 2e6)
             edited.third?.material = Material(young: 3e6)
+            edited.offAxis?.strikerAngle = -14
+            edited.offAxis?.receiverAngle = 14
+            edited.offAxis?.receiver.material = Material(young: 1.6e6)
             edited.mirrored = preset == .block
             experiment.edit(edited)
             let resetSecond = !(isPair || isSeam || preset == .layeredImpact) || experiment.simulation.secondBody?.material == edited.second?.material
@@ -858,6 +1014,7 @@ struct LabView: View {
                 && experiment.simulation.wallImpulse == 0
                 && resetSecond
                 && experiment.simulation.thirdBody?.material == edited.third?.material
+                && experiment.simulation.receiverBody?.material == edited.offAxis?.receiver.material
                 && (!edited.mirrored || abs(experiment.angle + 18) < 1e-9)
             experiment.toggle()
             try? await Task.sleep(for: .milliseconds(400))
@@ -979,6 +1136,36 @@ struct LabView: View {
             } catch {
                 results.append("\(preset.rawValue) comparison: save/reopen=false error=\(error.localizedDescription)")
             }
+        }
+        do {
+            let url = URL(fileURLWithPath: args[flag + 1]).deletingLastPathComponent()
+                .appendingPathComponent(UUID().uuidString + ".impact.json")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let standard = SceneConfiguration.standard(.offAxisImpact)
+            try experiment.configure(standard)
+            while experiment.advance() {}
+            experiment.pinReference()
+            var edited = standard
+            edited.offAxis?.receiverGap = 0.032
+            edited.offAxis?.receiverAngle = 3
+            edited.offAxis?.duration = 0.12
+            try experiment.configure(edited)
+            try experiment.save(to: url)
+            while experiment.advance() {}
+            let firstTrace = experiment.trace
+            let receiverTime = experiment.simulation.impactEvents?.receiver ?? 0
+            try experiment.open(url)
+            let restored = experiment.configuration == edited
+            while experiment.advance() {}
+            let replay = experiment.finished && experiment.trace == firstTrace
+            let matched = experiment.comparison().contains { abs($0.current.y - $0.reference.y) > 0.1 }
+            showComparison = true
+            try? await Task.sleep(for: .milliseconds(450))
+            let sheet = NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true }
+            showComparison = false
+            results.append("Off-axis comparison: save/reopen=\(restored) identical replay=\(replay) different matched-time velocities=\(matched) moved receiver hit later=\(receiverTime > 0.038) comparison sheet=\(sheet)")
+        } catch {
+            results.append("Off-axis comparison: save/reopen=false error=\(error.localizedDescription)")
         }
         do {
             try (results.joined(separator: "\n") + "\n").write(

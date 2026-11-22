@@ -97,6 +97,11 @@ func patchCheck() {
             "Inverted elements must be rejected")
 }
 
+if CommandLine.arguments.dropFirst().contains("--off-axis") {
+    try offAxisImpactCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--layered-impact") {
     try layeredImpactCheck()
     try layeredImpactEnvelopeCheck()
@@ -147,3 +152,4 @@ try materialImpactCheck()
 try cohesiveCheck()
 try layeredImpactCheck()
 try layeredImpactEnvelopeCheck()
+try offAxisImpactCheck()

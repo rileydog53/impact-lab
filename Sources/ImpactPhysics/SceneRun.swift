@@ -75,11 +75,17 @@ public struct SceneRun {
         let timeBefore = simulation.time
         let nextSample = Double(samples.count) * Self.sampleInterval
         let crossesSample = timeBefore + simulation.dt >= nextSample && nextSample <= horizon
-        let before = crossesSample ? Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge) : .zero
+        var before = crossesSample ? Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge) : .zero
         let plasticBefore = crossesSample ? simulation.plasticDissipation : 0
         guard simulation.step() else { return false }
         if crossesSample {
-            let after = Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge)
+            var after = Self.values(in: simulation, configuration: configuration, impactGauge: impactGauge)
+            if configuration.preset == .offAxisImpact {
+                // Match the nearest equivalent angle before interpolating this sample.
+                let previous = samples.last!.values.x
+                before.x = previous + (before.x - previous).remainder(dividingBy: 360)
+                after.x = before.x + (after.x - before.x).remainder(dividingBy: 360)
+            }
             var time = nextSample
             while time <= min(simulation.time, horizon) {
                 let fraction = (time - timeBefore) / (simulation.time - timeBefore)
@@ -101,6 +107,8 @@ public struct SceneRun {
         case .tensionCoupon, .materialImpact:
             Point(1000 * ((impactGauge?.length(of: simulation.body.position) ?? simulation.gaugeLength!) - configuration.first.width),
                   100 * simulation.meanPlasticStrain)
+        case .offAxisImpact:
+            Point(simulation.thirdBody!.orientation * 180 / .pi, simulation.receiverBody!.centerVelocity.x)
         case .layeredSeam, .layeredImpact:
             Point(1000 * (simulation.seamReadings?.opening ?? 0), simulation.seamReadings?.dissipatedPerArea ?? 0)
         }

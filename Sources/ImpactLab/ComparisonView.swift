@@ -29,6 +29,9 @@ struct ComparisonView: View {
             [("Length change", "mm", \.values.x, .mint), ("Mean plastic strain", "%", \.values.y, .orange)]
         case .layeredSeam:
             [("Mean opening", "mm", \.values.x, .mint), ("Fracture dissipation", "J/m²", \.values.y, .orange)]
+        case .offAxisImpact:
+            [("Backing angle", "°", \.values.x, .mint), ("Receiver velocity X", "m/s", \.values.y, .orange),
+             ("Plastic dissipation", "J/m", \.plasticDissipation, .yellow)]
         case .layeredImpact:
             [("Mean opening", "mm", \.values.x, .mint), ("Fracture dissipation", "J/m²", \.values.y, .orange),
              ("Plastic dissipation", "J/m", \.plasticDissipation, .yellow)]

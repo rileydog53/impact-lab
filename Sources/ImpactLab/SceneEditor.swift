@@ -24,10 +24,10 @@ struct SceneEditor: View {
                 DisclosureGroup("Seam settings") {
                     VStack(alignment: .leading, spacing: 9) {
                         seamControl("Peak stress / softer E", unit: "%", \.strengthFraction,
-                                    range: scene.isLayeredImpact ? SeamSettings.impactStrengthRange : SeamSettings.strengthRange, scale: 100, digits: 2, seam: seam)
-                        seamControl("Critical opening", unit: "mm", \.criticalOpening,
-                                    range: scene.isLayeredImpact ? SeamSettings.impactOpeningRange : SeamSettings.openingRange, scale: 1000, digits: 2, seam: seam)
-                        if scene.isLayeredImpact {
+                                    range: scene.hasImpactedLayers ? SeamSettings.impactStrengthRange : SeamSettings.strengthRange, scale: 100, digits: 2, seam: seam)
+                        seamControl(scene.offAxis == nil ? "Critical opening" : "Critical extension", unit: "mm", \.criticalOpening,
+                                    range: scene.hasImpactedLayers ? SeamSettings.impactOpeningRange : SeamSettings.openingRange, scale: 1000, digits: 2, seam: seam)
+                        if scene.hasImpactedLayers {
                             let peak = seam.strengthFraction * min(scene.second!.material.young, scene.third!.material.young)
                             Text(String(format: "Peak traction %.2f kPa · Gc %.3f J/m²",
                                         peak / 1000, 0.5 * peak * seam.criticalOpening))
@@ -40,7 +40,7 @@ struct SceneEditor: View {
                     .padding(.top, 8)
                 }
             }
-            if scene.tension == nil && (scene.seam == nil || scene.isLayeredImpact) {
+            if scene.tension == nil && (scene.seam == nil || scene.hasImpactedLayers) {
                 DisclosureGroup("Initial conditions") {
                     VStack(alignment: .leading, spacing: 9) {
                         initialControls
@@ -60,9 +60,14 @@ struct SceneEditor: View {
                     specimenControls(.second)
                 }
             }
-            if scene.isLayeredImpact {
+            if scene.hasImpactedLayers {
                 DisclosureGroup("Backing layer · elastic") { specimenControls(.third) }
-                DisclosureGroup("Striker and facing yield") { yieldControls.padding(.top, 8) }
+                if scene.offAxis != nil {
+                    DisclosureGroup("Receiver · elastic") { specimenControls(.receiver) }
+                }
+                if scene.impactPlasticity?.response == .elastoplastic {
+                    DisclosureGroup("Striker and facing yield") { yieldControls.padding(.top, 8) }
+                }
             }
         }
         .id(scene.preset)
@@ -73,7 +78,7 @@ struct SceneEditor: View {
         case .twoBars, .bondedBar: "Left bar"
         case .puckStrip: "Puck"
         case .layeredSeam: "Left layer"
-        case .layeredImpact: "Striker"
+        case .layeredImpact, .offAxisImpact: "Striker"
         default: "Specimen"
         }
     }
@@ -82,14 +87,14 @@ struct SceneEditor: View {
         switch scene.preset {
         case .puckStrip: "Strip"
         case .layeredSeam: "Right layer"
-        case .layeredImpact: "Facing layer"
+        case .layeredImpact, .offAxisImpact: "Facing layer"
         default: "Right bar"
         }
     }
 
     @ViewBuilder
     private var initialControls: some View {
-        let speedTitle = scene.isBonded ? "Pulse amplitude" : ((scene.isPair || scene.isLayeredImpact) ? "Closing speed" : "Initial speed X")
+        let speedTitle = scene.isBonded ? "Pulse amplitude" : ((scene.isPair || scene.hasImpactedLayers) ? "Closing speed" : "Initial speed X")
         sceneControl(speedTitle, unit: "m/s", key: \.speed, range: scene.speedRange, digits: 2)
         if !scene.isBonded {
             sceneControl("Starting gap", unit: "mm", key: \.gap, range: scene.gapRange, scale: 1000, digits: 2)
@@ -100,7 +105,21 @@ struct SceneEditor: View {
             sceneControl(scene.isBonded ? "Bar drift X" : "Target velocity X", unit: "m/s",
                          key: \.targetVelocityX, range: scene.targetVelocityXRange, digits: 2)
         }
-        if scene.isLayeredImpact {
+        if let options = scene.offAxis {
+            offAxisControl("Striker offset Y", unit: "mm", options, \.strikerOffset, OffAxisSettings.strikerOffsetRange, scale: 1000)
+            offAxisControl("Striker angle", unit: "°", options, \.strikerAngle, OffAxisSettings.angleRange)
+            sceneControl("Striker relative velocity Y", unit: "m/s", key: \.velocityY, range: OffAxisSettings.transverseRange, digits: 2)
+            sceneControl("Specimen velocity X", unit: "m/s", key: \.targetVelocityX, range: scene.targetVelocityXRange, digits: 2)
+            offAxisControl("Specimen velocity Y", unit: "m/s", options, \.targetVelocityY, OffAxisSettings.transverseRange)
+            Divider()
+            offAxisControl("Receiver clearance X", unit: "mm", options, \.receiverGap, OffAxisSettings.receiverGapRange, scale: 1000)
+            offAxisControl("Receiver offset Y", unit: "mm", options, \.receiverOffset, OffAxisSettings.receiverOffsetRange, scale: 1000)
+            offAxisControl("Receiver angle", unit: "°", options, \.receiverAngle, OffAxisSettings.angleRange)
+            offAxisControl("Receiver initial velocity X", unit: "m/s", options, \.receiverVelocityX, OffAxisSettings.receiverSpeedRange)
+            offAxisControl("Receiver initial velocity Y", unit: "m/s", options, \.receiverVelocityY, OffAxisSettings.transverseRange)
+            Divider()
+            offAxisControl("Run duration", unit: "ms", options, \.duration, OffAxisSettings.durationRange, scale: 1000)
+        } else if scene.hasImpactedLayers {
             sceneControl("Specimen velocity", unit: "m/s", key: \.targetVelocityX,
                          range: scene.targetVelocityXRange, digits: 2)
         } else {
@@ -119,6 +138,17 @@ struct SceneEditor: View {
                 draft.mirrored = value
                 experiment.edit(draft)
             }))
+        }
+    }
+
+    private func offAxisControl(_ label: String, unit: String, _ options: OffAxisSettings,
+                                _ key: WritableKeyPath<OffAxisSettings, Double>, _ range: ClosedRange<Double>,
+                                scale: Double = 1) -> some View {
+        slider(label, unit: unit, value: options[keyPath: key], range: range,
+               scale: scale, digits: unit == "m/s" ? 2 : 1) { value in
+            var draft = scene
+            draft.offAxis?[keyPath: key] = value
+            experiment.edit(draft)
         }
     }
 
@@ -148,13 +178,14 @@ struct SceneEditor: View {
     }
 
     private enum Region {
-        case first, second, third
+        case first, second, third, receiver
 
         func specimen(in scene: SceneConfiguration) -> SpecimenConfiguration {
             switch self {
             case .first: scene.first
             case .second: scene.second!
             case .third: scene.third!
+            case .receiver: scene.offAxis!.receiver
             }
         }
     }
@@ -162,7 +193,7 @@ struct SceneEditor: View {
     private func specimenControls(_ region: Region) -> some View {
         let nominal = region.specimen(in: .standard(scene.preset))
         let diameter = region == .first && (scene.preset == .puckStrip || scene.preset == .ring)
-        let sharedHeight = scene.sharesHeight || (scene.isLayeredImpact && region == .second) ? "Shared height" : "Height"
+        let sharedHeight = scene.sharesHeight || (scene.hasImpactedLayers && region == .second) ? "Shared height" : "Height"
         return VStack(alignment: .leading, spacing: 9) {
             let widthLabel = (scene.tension != nil || scene.impactPlasticity != nil) ? "Length" : (diameter ? "Diameter" : "Width")
             specimenControl(widthLabel, unit: "mm", region: region,
@@ -247,9 +278,11 @@ struct SceneEditor: View {
                 if draft.sharesHeight { draft.second?.height = specimen.height }
             case .second:
                 draft.second = specimen
-                if draft.isLayeredImpact { draft.third?.height = specimen.height }
+                if draft.hasImpactedLayers { draft.third?.height = specimen.height }
             case .third:
                 draft.third = specimen
+            case .receiver:
+                draft.offAxis?.receiver = specimen
             }
             experiment.edit(draft)
         }

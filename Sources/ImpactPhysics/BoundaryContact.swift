@@ -6,6 +6,14 @@ struct ContactResult {
     var relativePenetration = 0.0
     var wallImpulse = 0.0
     var wallAngularImpulse = 0.0
+
+    mutating func add(_ other: Self) {
+        energy += other.energy
+        penetration = max(penetration, other.penetration)
+        relativePenetration = max(relativePenetration, other.relativePenetration)
+        wallImpulse += other.wallImpulse
+        wallAngularImpulse += other.wallAngularImpulse
+    }
 }
 
 struct ContactSurface: Sendable {
@@ -66,9 +74,11 @@ struct BoundaryContact: Sendable {
     }
 
     func assemble(left leftPosition: [Point], right rightPosition: [Point],
-                  leftForce: inout [Point], rightForce: inout [Point]) -> ContactResult {
-        for i in left.nodes { leftForce[i] = .zero }
-        for i in right.nodes { rightForce[i] = .zero }
+                  leftForce: inout [Point], rightForce: inout [Point], accumulating: Bool = false) -> ContactResult {
+        if !accumulating {
+            for i in left.nodes { leftForce[i] = .zero }
+            for i in right.nodes { rightForce[i] = .zero }
+        }
         var result = ContactResult()
         let leftBounds = ContactBounds(surface: left, position: leftPosition)
         let rightBounds = ContactBounds(surface: right, position: rightPosition)

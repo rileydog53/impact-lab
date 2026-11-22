@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 public enum SeamResponse: String, CaseIterable, Codable, Sendable {
     case intact = "Intact"
@@ -107,6 +108,11 @@ struct CohesiveSeam: Sendable {
     let height, spacing, phaseDuration: Double
     let pairs: [Pair]
     let grips: (left: Grip, right: Grip)?
+    var bridgeLength: Double? = nil
+
+    func opening(for chord: Point) -> Double {
+        bridgeLength.map { max(0, simd_length(chord) - $0) } ?? chord.x
+    }
     var initialReadings: SeamReadings { SeamReadings(criticalEnergy: law.fractureEnergy, height: height) }
 
     func motion(at time: Double) -> Motion {
@@ -127,12 +133,16 @@ struct CohesiveSeam: Sendable {
                   leftForce: inout [Point], rightForce: inout [Point]) -> Trial {
         var trial = Trial(readings: initialReadings, maxima: maxima)
         for (i, pair) in pairs.enumerated() {
-            let opening = right[pair.right].x - left[pair.left].x
+            let chord = right[pair.right] - left[pair.left]
+            let opening = opening(for: chord)
             let sample = law.evaluate(opening: opening, previousMaximum: maxima[i], canSeparate: canSeparate)
             let weight = pair.weight
             let force = sample.traction * weight
-            leftForce[pair.left].x += force
-            rightForce[pair.right].x -= force
+            // A bridge pulls along its chord, with zero net force and torque.
+            // Its compression branch is replaced by boundary contact in 2D.
+            let direction = bridgeLength == nil ? Point(1, 0) : (opening > 0 ? chord / simd_length(chord) : .zero)
+            leftForce[pair.left] += force * direction
+            rightForce[pair.right] -= force * direction
             trial.maxima[i] = sample.maximumOpening
             trial.readings.opening += opening * weight / height
             trial.readings.force += force
