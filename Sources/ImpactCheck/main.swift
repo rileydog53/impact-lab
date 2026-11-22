@@ -125,3 +125,4 @@ require(abs(stiff.arrival / nominal.arrival - 0.5) < 0.025 && repeatRun.trace ==
 patchCheck()
 
 ringCheck()
+blockCheck()

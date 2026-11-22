@@ -19,7 +19,8 @@ struct TraceSample: Equatable {
     var speed = 0.4
     var density = 1000.0
     var poisson = 0.0
-    var running = false
+    private(set) var running = false
+    private(set) var mirrored = false
     private(set) var simulation = Simulation()
     private(set) var trace = [TraceSample(time: 0, values: .zero)]
     private var lastTick: Double?
@@ -31,10 +32,15 @@ struct TraceSample: Equatable {
         reset()
     }
 
+    func mirror(_ enabled: Bool) {
+        mirrored = enabled
+        reset()
+    }
+
     func reset() {
         running = false
         let material = Material(young: stiffness * 1e6, density: density, poisson: poisson)
-        simulation = preset.makeSimulation(material: material, speed: speed)
+        simulation = preset.makeSimulation(material: material, speed: speed, mirrored: mirrored)
         trace = [TraceSample(time: 0, values: traceValues)]
         lastTick = nil
         lastSample = 0
@@ -44,6 +50,7 @@ struct TraceSample: Equatable {
     func toggle() {
         guard simulation.failure == nil, !finished else { return }
         running.toggle()
+        if !running && simulation.time > lastSample { recordSample() }
         lastTick = nil
         budget = 0
     }
@@ -68,7 +75,12 @@ struct TraceSample: Equatable {
     private var playbackRate: Double { preset == .bar ? 0.020 : 0.045 }
 
     var horizon: Double {
-        let duration = preset == .bar ? 0.062 : 0.26
+        let duration: Double
+        switch preset {
+        case .bar: duration = 0.062
+        case .ring: duration = 0.26
+        case .block: duration = 0.17
+        }
         return simulation.gap / speed + duration * Material().waveSpeed / simulation.body.material.waveSpeed
     }
 
@@ -78,7 +90,16 @@ struct TraceSample: Equatable {
         switch preset {
         case .bar: Point(simulation.probeStrain * 100, 0)
         case .ring: simulation.body.diameters * 1000
+        case .block: Point(angle, 0)
         }
+    }
+
+    var angle: Double { simulation.body.orientation * 180 / .pi }
+
+    private func recordSample() {
+        trace.append(TraceSample(time: simulation.time, values: traceValues))
+        lastSample = simulation.time
+        if trace.count > 1400 { trace.remove(at: 1) }
     }
 
     @discardableResult func advance() -> Bool {
@@ -87,9 +108,7 @@ struct TraceSample: Equatable {
             return false
         }
         if simulation.time - lastSample >= horizon / 600 || finished || !running {
-            trace.append(TraceSample(time: simulation.time, values: traceValues))
-            lastSample = simulation.time
-            if trace.count > 1400 { trace.remove(at: 1) }
+            recordSample()
         }
         if finished { running = false }
         return true
@@ -128,15 +147,21 @@ struct LabView: View {
                     .frame(minHeight: 230, maxHeight: .infinity)
                     .background(panel, in: RoundedRectangle(cornerRadius: 12))
                 HStack {
-                    if experiment.preset == .bar {
+                    switch experiment.preset {
+                    case .bar:
                         Text("Axial strain at probe").font(.headline)
                         Spacer()
                         Text("0.50 m from impact face").foregroundStyle(.secondary)
-                    } else {
+                    case .ring:
                         Text("Ring diameters").font(.headline)
                         Spacer()
                         Text("Horizontal").foregroundStyle(mint)
                         Text("Vertical").foregroundStyle(amber)
+                    case .block:
+                        Text("Block orientation").font(.headline)
+                        Spacer()
+                        Text(String(format: "%+.2f°", experiment.angle))
+                            .monospacedDigit().foregroundStyle(mint)
                     }
                 }
                 traceCanvas
@@ -153,6 +178,10 @@ struct LabView: View {
                         ForEach(Preset.allCases) { preset in
                             Text(preset.rawValue).tag(preset)
                         }
+                    }
+                    if experiment.preset == .block {
+                        Toggle("Mirror tilt", isOn: Binding(get: { experiment.mirrored },
+                                                          set: { experiment.mirror($0) }))
                     }
                     control("Young’s modulus", unit: "MPa", value: $experiment.stiffness, range: 0.5...4, step: 0.05)
                     control("Impact speed", unit: "m/s", value: $experiment.speed, range: 0.1...1, step: 0.05)
@@ -200,15 +229,19 @@ struct LabView: View {
 
     private func control(_ title: String, unit: String, value: Binding<Double>,
                          range: ClosedRange<Double>, step: Double, digits: Int = 2) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.subheadline.weight(.medium))
-            Text(value.wrappedValue.formatted(.number.precision(.fractionLength(digits))) +
-                 (unit.isEmpty ? "" : " " + unit))
-                .font(.system(.callout, design: .monospaced)).foregroundStyle(mint)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(title).font(.subheadline.weight(.medium))
+                Spacer(minLength: 5)
+                Text(value.wrappedValue.formatted(.number.precision(.fractionLength(digits))) +
+                     (unit.isEmpty ? "" : " " + unit))
+                    .font(.system(.callout, design: .monospaced)).foregroundStyle(mint)
+            }
             Slider(value: Binding(get: { value.wrappedValue }, set: {
                 value.wrappedValue = $0
                 experiment.reset()
             }), in: range, step: step) { Text(title) }
+                .labelsHidden()
                 .tint(mint)
         }
     }
@@ -232,25 +265,29 @@ struct LabView: View {
         HStack {
             Text(name).foregroundStyle(.secondary)
             Spacer(minLength: 4)
-            Text(String(format: format, value) + " " + unit).monospacedDigit()
+            Text(String(format: format, value) + (unit == "%" ? "" : " ") + unit).monospacedDigit()
         }
         .font(.caption)
     }
 
     private var impactCanvas: some View {
         Canvas { context, size in
-            let sceneWidth = experiment.preset == .bar ? 1.15 : 0.70
-            let scale = min((size.width - 65) / sceneWidth, (size.height - 60) / 0.52)
+            let simulation = experiment.simulation
+            let initialWidth = experiment.preset == .bar ? 1.15 : 0.70
+            let farthestLeft = simulation.body.position.map(\.x).min() ?? 0
+            let farthestVertical = simulation.body.position.map { abs($0.y) }.max() ?? 0
+            let sceneWidth = max(initialWidth, -farthestLeft + 0.1)
+            let sceneHeight = max(0.52, 2 * farthestVertical + 0.08)
+            let scale = min((size.width - 65) / sceneWidth, (size.height - 60) / sceneHeight)
             let wall = size.width - 32
             let middle = size.height / 2
             func project(_ p: Point) -> CGPoint {
                 CGPoint(x: wall + scale * p.x, y: middle - scale * p.y)
             }
-            let simulation = experiment.simulation
             let nodes = simulation.body.position.map(project)
             let mesh = simulation.body.mesh
             var grid = Path()
-            for i in 0...10 {
+            for i in 0...Int(sceneWidth * 10) {
                 let x = wall - Double(i) * scale / 10
                 grid.move(to: CGPoint(x: x, y: 25))
                 grid.addLine(to: CGPoint(x: x, y: size.height - 28))
@@ -289,6 +326,18 @@ struct LabView: View {
                 context.draw(Text("PROBE").font(.caption2.monospaced()).foregroundStyle(mint),
                              at: CGPoint(x: probe, y: 25))
             }
+            if experiment.preset == .block {
+                let center = simulation.body.centerOfMass
+                let angle = simulation.body.orientation
+                let halfAxis = 0.12 * Point(cos(angle), sin(angle))
+                context.stroke(Path { p in
+                    p.move(to: project(center - halfAxis))
+                    p.addLine(to: project(center + halfAxis))
+                }, with: .color(mint), style: StrokeStyle(lineWidth: 1.6, dash: [6, 4]))
+                let c = project(center)
+                context.fill(Path(ellipseIn: CGRect(x: c.x - 3, y: c.y - 3, width: 6, height: 6)),
+                             with: .color(mint))
+            }
             context.stroke(Path { p in
                 p.move(to: CGPoint(x: wall, y: 29))
                 p.addLine(to: CGPoint(x: wall, y: size.height - 24))
@@ -302,10 +351,11 @@ struct LabView: View {
     private var traceCanvas: some View {
         Canvas { context, size in
             let trace = experiment.trace
-            let end = experiment.horizon
+            let end = max(experiment.horizon, trace.last?.time ?? 0)
             let ring = experiment.preset == .ring
-            let center = ring ? 400.0 : 0.0
-            var peak = ring ? 1.0 : 0.1
+            let block = experiment.preset == .block
+            let center = trace.first?.values.x ?? 0
+            var peak = ring || block ? 1.0 : 0.1
             for sample in trace {
                 peak = max(peak, abs(sample.values.x - center) * 1.12)
                 if ring { peak = max(peak, abs(sample.values.y - center) * 1.12) }
@@ -319,7 +369,10 @@ struct LabView: View {
                     p.addLine(to: CGPoint(x: right, y: y))
                 }, with: .color(ink.opacity(0.18)))
                 let value = center + fraction * peak
-                let label = ring ? String(format: "%.1f mm", value) : String(format: "%+.2f%%", value)
+                let label: String
+                if ring { label = String(format: "%.1f mm", value) }
+                else if block { label = String(format: "%+.1f°", value) }
+                else { label = String(format: "%+.2f%%", value) }
                 context.draw(Text(label).font(.caption2.monospaced()).foregroundStyle(ink),
                              at: CGPoint(x: left - 6, y: y), anchor: .trailing)
             }
@@ -340,7 +393,7 @@ struct LabView: View {
             context.stroke(line(\.x), with: .color(mint), lineWidth: 1.8)
             if ring { context.stroke(line(\.y), with: .color(amber), lineWidth: 1.8) }
         }
-        .accessibilityLabel(experiment.preset == .bar ? "Axial strain versus time" : "Diameters versus time")
+        .accessibilityLabel("Time trace for " + experiment.preset.rawValue)
     }
 
     private func smokeCheck() async {
@@ -355,9 +408,11 @@ struct LabView: View {
             experiment.density = 1000
             experiment.poisson = 0
             experiment.select(preset)
+            let selected = experiment.preset == preset && experiment.simulation.time == 0
+            let topology = experiment.simulation.body.mesh.elements.count
             experiment.toggle()
             let start = ProcessInfo.processInfo.systemUptime
-            try? await Task.sleep(for: .milliseconds(1000))
+            try? await Task.sleep(for: .milliseconds(1400))
             let playbackRate = experiment.simulation.time / (ProcessInfo.processInfo.systemUptime - start)
             experiment.toggle()
             let pausedTime = experiment.simulation.time
@@ -366,21 +421,32 @@ struct LabView: View {
             let step = experiment.advance()
                 && abs(experiment.simulation.time - pausedTime - experiment.simulation.dt) < 1e-12
             let traceAdvanced = experiment.trace.count > 2
-                && experiment.trace.contains { $0.values != experiment.trace[0].values }
+                && experiment.trace.contains { abs($0.values.x - experiment.trace[0].values.x) > 1e-3 }
+                && experiment.simulation.wallImpulse > 0 && experiment.simulation.peakPenetration > 0
+                && experiment.simulation.diagnostics.relativeEnergyError.isFinite
+            let updateTilt = preset == .block
             experiment.speed = 0.6
             experiment.density = 1500
             experiment.poisson = 0.2
             experiment.stiffness = 4
-            experiment.reset()
+            if updateTilt { experiment.mirror(true) }
+            else { experiment.reset() }
             let reset = experiment.simulation.time == 0 && experiment.trace.count == 1
                 && experiment.simulation.body.material.young == 4e6
                 && experiment.simulation.body.velocity[0].x == 0.6
                 && experiment.simulation.body.material.density == 1500
                 && experiment.simulation.body.material.poisson == 0.2
                 && experiment.simulation.wallImpulse == 0
-            results.append(String(format: "%@: run/pause=%@ single-step=%@ inspect=%@ edit/reset=%@ playback=%.3f sim s/wall s",
-                                  preset.rawValue, paused.description, step.description,
-                                  traceAdvanced.description, reset.description, playbackRate))
+                && (!updateTilt || abs(experiment.angle + 18) < 1e-9)
+            experiment.toggle()
+            try? await Task.sleep(for: .milliseconds(400))
+            experiment.toggle()
+            let editedRun = experiment.simulation.time > 0 && experiment.simulation.failure == nil
+            experiment.reset()
+            results.append(String(format: "%@ (%d triangles): select=%@ run/pause=%@ single-step=%@ inspect=%@ edit/reset=%@ edited run=%@ playback=%.3f sim s/wall s",
+                                  preset.rawValue, topology, selected.description, paused.description,
+                                  step.description, traceAdvanced.description, reset.description,
+                                  editedRun.description, playbackRate))
         }
         try? (results.joined(separator: "\n") + "\n").write(
             toFile: args[flag + 1], atomically: true, encoding: .utf8)

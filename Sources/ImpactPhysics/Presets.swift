@@ -1,20 +1,46 @@
 import Foundation
+import simd
 
 public enum Preset: String, CaseIterable, Identifiable, Sendable {
     case bar = "Bar impact"
     case ring = "Ring impact"
+    case block = "Tilted block"
 
     public var id: Self { self }
 
-    public func makeSimulation(material: Material = Material(), speed: Double = 0.4) -> Simulation {
+    public static let blockTilt = Double.pi / 10
+
+    public func makeSimulation(material: Material = Material(), speed: Double = 0.4,
+                               mirrored: Bool = false) -> Simulation {
         switch self {
         case .bar: Simulation(mesh: .bar(), material: material, speed: speed)
         case .ring: Simulation(mesh: .ring(), material: material, speed: speed, gap: 0.004)
+        case .block:
+            Simulation(mesh: .roundedBlock(), material: material, speed: speed, gap: 0.004,
+                       tilt: mirrored ? -Self.blockTilt : Self.blockTilt)
         }
     }
 }
 
 extension Mesh {
+    public static func roundedBlock(columns: Int = 36, rows: Int = 24) -> Mesh {
+        let halfWidth = 0.18, halfHeight = 0.115, radius = 0.035
+        let corner = Point(halfWidth - radius, halfHeight - radius)
+        return rectangle(columns: columns, rows: rows) { u, v in
+            let p = Point((2 * u - 1) * halfWidth, (2 * v - 1) * halfHeight)
+            let scale = max(abs(p.x) / halfWidth, abs(p.y) / halfHeight)
+            guard scale > 0 else { return p }
+            let boundary = Point(abs(p.x), abs(p.y)) / scale
+            guard boundary.x > corner.x && boundary.y > corner.y else { return p }
+            // Intersect the ray with the circle forming the rounded corner.
+            let a = simd_length_squared(boundary)
+            let b = simd_dot(boundary, corner)
+            let c = simd_length_squared(corner) - radius * radius
+            let factor = (b + sqrt(max(0, b * b - a * c))) / a
+            return p * factor
+        }
+    }
+
     public static func ring(sectors: Int = 96, layers: Int = 8) -> Mesh {
         precondition(sectors >= 8 && sectors.isMultiple(of: 4) && layers > 0)
         var nodes: [Point] = []
@@ -66,5 +92,24 @@ extension Body {
             sum += position[e.a] + position[e.b] + position[e.c]
         }
         return sum / Double(3 * mesh.probe.count)
+    }
+}
+
+extension Body {
+    public var centerOfMass: Point {
+        zip(mass, position).reduce(.zero) { $0 + $1.0 * $1.1 } / totalMass
+    }
+
+    public var orientation: Double {
+        // Mass-weighted best-fit rotation between reference and current nodes.
+        let center = centerOfMass
+        var sine = 0.0, cosine = 0.0
+        for i in mass.indices {
+            let reference = mesh.reference[i] - referenceCenter
+            let current = position[i] - center
+            sine += mass[i] * cross2D(reference, current)
+            cosine += mass[i] * simd_dot(reference, current)
+        }
+        return atan2(sine, cosine)
     }
 }
