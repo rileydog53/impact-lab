@@ -11,6 +11,8 @@ private let panel = Color(red: 0.09, green: 0.13, blue: 0.17)
 @MainActor @Observable final class Experiment {
     var stiffness = 1.0
     var speed = 0.4
+    var density = 1000.0
+    var poisson = 0.0
     var running = false
     private(set) var simulation = Simulation()
     private(set) var trace: [Point] = [.zero]
@@ -20,7 +22,8 @@ private let panel = Color(red: 0.09, green: 0.13, blue: 0.17)
 
     func reset() {
         running = false
-        simulation = Simulation(material: Material(young: stiffness * 1e6), speed: speed)
+        simulation = Simulation(material: Material(young: stiffness * 1e6, density: density,
+                                                   poisson: poisson), speed: speed)
         trace = [.zero]
         lastTick = nil
         lastSample = 0
@@ -107,10 +110,14 @@ struct LabView: View {
             .padding(24)
 
             Divider()
-            VStack(alignment: .leading, spacing: 18) {
+            ScrollView {
+            VStack(alignment: .leading, spacing: 13) {
                 Text("Experiment").font(.title3.bold())
                 control("Young’s modulus", unit: "MPa", value: $experiment.stiffness, range: 0.5...4, step: 0.05)
                 control("Impact speed", unit: "m/s", value: $experiment.speed, range: 0.1...1, step: 0.05)
+                control("Density", unit: "kg/m³", value: $experiment.density, range: 500...2500, step: 50, digits: 0)
+                control("Poisson ratio", unit: "", value: $experiment.poisson, range: 0...0.35, step: 0.01)
+                HStack {
                 Button(experiment.running ? "Pause" : "Run", systemImage: experiment.running ? "pause.fill" : "play.fill") {
                     experiment.toggle()
                 }
@@ -119,11 +126,16 @@ struct LabView: View {
                 .foregroundStyle(labBackground)
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(experiment.simulation.failure != nil)
+                Button("Step", systemImage: "forward.frame") { experiment.advance() }
+                    .disabled(experiment.running || experiment.simulation.failure != nil)
+                    .help("Advance one physical timestep")
+                }
                 Button("Reset", systemImage: "arrow.counterclockwise") { experiment.reset() }
+                Divider()
+                readings
                 if let failure = experiment.simulation.failure {
                     Text(failure).foregroundStyle(amber)
                 }
-                Spacer()
                 HStack(spacing: 8) {
                     Circle().fill(amber).frame(width: 8, height: 8)
                     Text("Compression")
@@ -133,7 +145,8 @@ struct LabView: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             .padding(22)
-            .frame(width: 235)
+            }
+            .frame(width: 252)
             .background(panel)
         }
         .foregroundStyle(ink)
@@ -143,15 +156,40 @@ struct LabView: View {
     }
 
     private func control(_ title: String, unit: String, value: Binding<Double>,
-                         range: ClosedRange<Double>, step: Double) -> some View {
+                         range: ClosedRange<Double>, step: Double, digits: Int = 2) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.subheadline.weight(.medium))
-            Text("\(value.wrappedValue, specifier: "%.2f") \(unit)")
+            Text(value.wrappedValue.formatted(.number.precision(.fractionLength(digits))) +
+                 (unit.isEmpty ? "" : " " + unit))
                 .font(.system(.callout, design: .monospaced)).foregroundStyle(mint)
             Slider(value: value, in: range, step: step) { Text(title) }
                 .tint(mint)
         }
         .onChange(of: value.wrappedValue) { _, _ in experiment.reset() }
+    }
+
+    private var readings: some View {
+        let simulation = experiment.simulation
+        let d = simulation.diagnostics
+        return VStack(alignment: .leading, spacing: 5) {
+            Text("Diagnostics").font(.headline).padding(.bottom, 3)
+            reading("Timestep", simulation.dt * 1e6, "µs", "%.2f")
+            reading("Peak penetration", simulation.peakPenetration * 1000, "mm", "%.3f")
+            reading("Wall impulse", simulation.wallImpulse, "N·s/m", "%.3f")
+            reading("Kinetic energy", d.kinetic, "J/m", "%.3f")
+            reading("Elastic energy", d.elastic, "J/m", "%.3f")
+            reading("Contact energy", d.contact, "J/m", "%.3f")
+            reading("Energy imbalance", 100 * d.relativeEnergyError, "%", "%+.3f")
+        }
+    }
+
+    private func reading(_ name: String, _ value: Double, _ unit: String, _ format: String) -> some View {
+        HStack {
+            Text(name).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Text(String(format: format, value) + " " + unit).monospacedDigit()
+        }
+        .font(.caption)
     }
 
     private var impactCanvas: some View {
@@ -253,13 +291,20 @@ struct LabView: View {
         let pausedTime = experiment.simulation.time
         try? await Task.sleep(for: .milliseconds(100))
         let paused = pausedTime > 0 && experiment.simulation.time == pausedTime
+        let step = experiment.advance()
+            && abs(experiment.simulation.time - pausedTime - experiment.simulation.dt) < 1e-12
         experiment.speed = 0.6
+        experiment.density = 1500
+        experiment.poisson = 0.2
         experiment.stiffness = 4
         experiment.reset()
         let reset = experiment.simulation.time == 0 && experiment.trace == [.zero]
             && experiment.simulation.body.material.young == 4e6
             && experiment.simulation.body.velocity[0].x == 0.6
-        try? "window=\(windowVisible) run/pause=\(paused) edit/reset=\(reset)\n"
+            && experiment.simulation.body.material.density == 1500
+            && experiment.simulation.body.material.poisson == 0.2
+            && experiment.simulation.wallImpulse == 0
+        try? "window=\(windowVisible) run/pause=\(paused) single-step=\(step) edit/reset=\(reset)\n"
             .write(toFile: args[flag + 1], atomically: true, encoding: .utf8)
         NSApplication.shared.terminate(nil)
     }

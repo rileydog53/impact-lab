@@ -128,6 +128,12 @@ public struct Body: Sendable {
     }
 }
 
+public struct Diagnostics: Sendable {
+    public let kinetic, elastic, contact: Double
+    public let relativeEnergyError: Double
+    public let momentum: Point
+}
+
 public struct Simulation: Sendable {
     public let dt: Double
     public let gap: Double
@@ -135,6 +141,11 @@ public struct Simulation: Sendable {
     public private(set) var time = 0.0
     public private(set) var strain: [Double]
     public private(set) var failure: String?
+    public private(set) var wallImpulse = 0.0
+    public private(set) var peakPenetration = 0.0
+    private let initialKinetic: Double
+    private var elasticEnergy = 0.0
+    private var contactEnergy = 0.0
     private var internalForce: [Point]
     private var contactForce: [Point]
     private var nextInternal: [Point]
@@ -146,6 +157,7 @@ public struct Simulation: Sendable {
                 gap: Double = 0.0005, penalty: Double = 2500, stepScale: Double = 1) {
         body = Body(mesh: mesh, material: material, speed: speed, gap: gap, penalty: penalty)
         self.gap = gap
+        initialKinetic = 0.5 * body.mass.reduce(0, +) * speed * speed
         var stiffness = Array(repeating: 0.0, count: body.mass.count)
         for e in mesh.elements {
             // A lumped-mass bound on the initial elastic spectral radius.
@@ -175,9 +187,28 @@ public struct Simulation: Sendable {
         body.mesh.probe.reduce(0) { $0 + strain[$1] } / Double(max(1, body.mesh.probe.count))
     }
 
-    public var penetration: Double {
-        body.boundaryNodes.reduce(0) { max($0, body.position[$1].x) }
+    public var diagnostics: Diagnostics {
+        var kinetic = 0.0
+        var momentum = Point.zero
+        for i in body.mass.indices {
+            momentum += body.mass[i] * body.velocity[i]
+            kinetic += 0.5 * body.mass[i] * simd_length_squared(body.velocity[i])
+        }
+        let relativeError = (kinetic + elasticEnergy + contactEnergy - initialKinetic)
+            / max(initialKinetic, Double.leastNormalMagnitude)
+        return Diagnostics(kinetic: kinetic, elastic: elasticEnergy, contact: contactEnergy,
+                           relativeEnergyError: relativeError, momentum: momentum)
     }
+
+    package func internalForces(at position: [Point]) -> [Point]? {
+        var forces = internalForce
+        var strain = strain
+        guard Self.assemble(body: body, position: position, forces: &forces, strain: &strain) != nil
+        else { return nil }
+        return forces
+    }
+
+    package var nodalMass: [Double] { body.mass }
 
     @discardableResult public mutating func step() -> Bool {
         guard failure == nil else { return false }
@@ -190,13 +221,25 @@ public struct Simulation: Sendable {
             }
             nextPosition[i] = position
         }
-        guard Self.assemble(body: body, position: nextPosition, forces: &nextInternal,
-                            strain: &nextStrain) else {
+        guard let nextElastic = Self.assemble(body: body, position: nextPosition,
+                                               forces: &nextInternal, strain: &nextStrain) else {
             failure = "An element inverted or its stress became non-finite."
             return false
         }
+        var nextContactEnergy = 0.0
+        var impulse = 0.0
+        var penetration = 0.0
         for i in body.boundaryNodes {
-            nextContact[i] = Point(-body.wallStiffness[i] * max(0, nextPosition[i].x), 0)
+            let overlap = max(0, nextPosition[i].x)
+            let reaction = body.wallStiffness[i] * overlap
+            nextContact[i] = Point(-reaction, 0)
+            penetration = max(penetration, overlap)
+            nextContactEnergy += 0.5 * reaction * overlap
+            impulse += 0.5 * dt * (reaction - contactForce[i].x)
+        }
+        guard (nextContactEnergy + nextElastic).isFinite, (wallImpulse + impulse).isFinite else {
+            failure = "Contact energy or impulse became non-finite."
+            return false
         }
         for i in body.mass.indices {
             let force = internalForce[i] + contactForce[i] + nextInternal[i] + nextContact[i]
@@ -215,33 +258,43 @@ public struct Simulation: Sendable {
         swap(&contactForce, &nextContact)
         swap(&strain, &nextStrain)
         time += dt
+        elasticEnergy = nextElastic
+        contactEnergy = nextContactEnergy
+        wallImpulse += impulse
+        peakPenetration = max(peakPenetration, penetration)
         return true
     }
 
     static func assemble(body: Body, position: [Point], forces: inout [Point],
-                         strain: inout [Double]) -> Bool {
+                         strain: inout [Double]) -> Double? {
         for i in forces.indices { forces[i] = .zero }
         let mu = body.material.shear
         let lambda = body.material.lambda
+        var energy = 0.0
         for (i, e) in body.mesh.elements.enumerated() {
             let u = position[e.b] - position[e.a]
             let v = position[e.c] - position[e.a]
             let fx = u * e.g1.x + v * e.g2.x
             let fy = u * e.g1.y + v * e.g2.y
             let j = cross2D(fx, fy)
-            guard j > 0, j.isFinite else { return false }
+            guard j > 0, j.isFinite else { return nil }
             // P = mu F + (lambda ln J - mu) F^(-T), with Fzz = 1.
-            let pressure = (lambda * log(j) - mu) / j
+            let logJ = log(j)
+            let pressure = (lambda * logJ - mu) / j
             let px = -e.area * (mu * fx + pressure * Point(fy.y, -fy.x))
             let py = -e.area * (mu * fy + pressure * Point(-fx.y, fx.x))
             guard px.x.isFinite && px.y.isFinite && py.x.isFinite && py.y.isFinite else {
-                return false
+                return nil
             }
             forces[e.a] += px * e.g0.x + py * e.g0.y
             forces[e.b] += px * e.g1.x + py * e.g1.y
             forces[e.c] += px * e.g2.x + py * e.g2.y
-            strain[i] = 0.5 * (simd_length_squared(fx) - 1)
+            let xx = simd_length_squared(fx)
+            let yy = simd_length_squared(fy)
+            strain[i] = 0.5 * (xx - 1)
+            energy += e.area * (0.5 * mu * (xx + yy - 2 - 2 * logJ)
+                                + 0.5 * lambda * logJ * logJ)
         }
-        return true
+        return energy.isFinite ? energy : nil
     }
 }
