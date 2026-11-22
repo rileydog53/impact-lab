@@ -8,6 +8,7 @@ struct ContactResult {
     var normalLoad = 0.0
     var wallImpulse = 0.0
     var wallAngularImpulse = 0.0
+    var matchingContacts: Set<Int> = []
 
     mutating func add(_ other: Self) {
         energy += other.energy
@@ -17,7 +18,15 @@ struct ContactResult {
         normalLoad += other.normalLoad
         wallImpulse += other.wallImpulse
         wallAngularImpulse += other.wallAngularImpulse
+        if !other.matchingContacts.isEmpty { matchingContacts.formUnion(other.matchingContacts) }
     }
+}
+
+// Matching contacts are keyed by material node IDs, so the same rule
+// applies after a fracture surface has been compacted for collision.
+struct MatchingContact {
+    let leftNodes, rightNodes: [Int]
+    let seams: [SIMD3<Int>: Int]
 }
 
 struct ContactSurface: Sendable {
@@ -96,24 +105,37 @@ struct BoundaryContact: Sendable {
     func accumulate(left leftPosition: [Point], right rightPosition: [Point],
                     leftBounds: ContactBounds, rightBounds: ContactBounds,
                     leftForce: inout [Point], rightForce: inout [Point],
-                    leftExposed: Set<SIMD2<Int>> = [], rightExposed: Set<SIMD2<Int>> = []) -> ContactResult {
+                    leftExposed: Set<SIMD2<Int>> = [], rightExposed: Set<SIMD2<Int>> = [],
+                    matching: MatchingContact? = nil) -> ContactResult {
         var result = ContactResult()
         guard leftBounds.intersects(rightBounds) else { return result }
         Self.apply(from: left, at: leftPosition, to: right, at: rightPosition, bounds: rightBounds,
-                   sourceForce: &leftForce, targetForce: &rightForce, exposed: rightExposed, result: &result)
+                   sourceForce: &leftForce, targetForce: &rightForce, exposed: rightExposed, result: &result,
+                   matching: matching, leftToRight: true)
         Self.apply(from: right, at: rightPosition, to: left, at: leftPosition, bounds: leftBounds,
-                   sourceForce: &rightForce, targetForce: &leftForce, exposed: leftExposed, result: &result)
+                   sourceForce: &rightForce, targetForce: &leftForce, exposed: leftExposed, result: &result,
+                   matching: matching, leftToRight: false)
         return result
     }
 
     private static func apply(from source: ContactSurface, at sourcePosition: [Point],
                               to target: ContactSurface, at targetPosition: [Point], bounds: ContactBounds,
                               sourceForce: inout [Point], targetForce: inout [Point],
-                              exposed: Set<SIMD2<Int>>, result: inout ContactResult) {
+                              exposed: Set<SIMD2<Int>>, result: inout ContactResult,
+                              matching: MatchingContact?, leftToRight: Bool) {
         for (i, stiffness) in zip(source.nodes, source.stiffness) where stiffness > 0 {
             let node = sourcePosition[i]
             guard bounds.contains(node), let hit = boundaryHit(node, target: target, position: targetPosition) else {
                 continue
+            }
+            result.relativePenetration = max(result.relativePenetration, hit.distance / hit.length)
+            if let matching {
+                let sourceNodes = leftToRight ? matching.leftNodes : matching.rightNodes
+                let targetNodes = leftToRight ? matching.rightNodes : matching.leftNodes
+                if let seam = matching.seams[SIMD3(sourceNodes[i], targetNodes[hit.edge.a], targetNodes[hit.edge.b])] {
+                    result.matchingContacts.insert(seam)
+                    continue // Its paired closure law supplies this reaction.
+                }
             }
             let load = stiffness * hit.distance
             result.normalLoad += load
@@ -123,7 +145,6 @@ struct BoundaryContact: Sendable {
             targetForce[hit.edge.b] -= hit.fraction * force
             result.energy += 0.5 * load * hit.distance
             result.penetration = max(result.penetration, hit.distance)
-            result.relativePenetration = max(result.relativePenetration, hit.distance / hit.length)
             if !exposed.isEmpty, exposed.contains(SIMD2(hit.edge.a, hit.edge.b)) {
                 result.exposedFaceContact = true
             }

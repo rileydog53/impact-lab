@@ -301,11 +301,13 @@ public struct AssemblySimulation: Sendable {
         body.mass.indices.reduce(0) { $0 + 0.5 * body.mass[$1] * simd_length_squared(body.velocity[$1]) }
     }
 
-    private mutating func fractureContact(fractures: [MaterialFracture?], energy: inout AssemblyEnergy,
+    private mutating func fractureContact(fractures: inout [MaterialFracture?], energy: inout AssemblyEnergy,
                                           penetration: inout Double, active: inout [SIMD2<Int>],
                                           loads: inout [FragmentPair: FragmentLoad], normal: inout [SIMD2<Int>: Double],
                                           deepest: inout SIMD4<Int>?) {
         var domains: [ContactDomain] = []
+        let matching = fractures.map { $0?.matchingFeatures() ?? [:] }
+        var overlapping = Array(repeating: Set<Int>(), count: fractures.count)
         for i in steps.indices {
             let position = steps[i].nextPosition
             if let fracture = fractures[i] {
@@ -322,7 +324,9 @@ public struct AssemblySimulation: Sendable {
                 guard leftBounds.intersects(rightBounds) else { continue }
                 let partPair = SIMD2(domains[a].part, domains[b].part)
                 let pieces = SIMD2(domains[a].proxy?.id ?? 0, domains[b].proxy?.id ?? 0)
-                if partPair.x == partPair.y, fractures[partPair.x]!.suppressedPairs.contains(pieces) { continue }
+                let siblingContact = partPair.x == partPair.y && !matching[partPair.x].isEmpty
+                    ? MatchingContact(leftNodes: domains[a].proxy!.nodes, rightNodes: domains[b].proxy!.nodes,
+                                      seams: matching[partPair.x]) : nil
                 let contact = BoundaryContact(left: domains[a].surface, right: domains[b].surface)
                 let result = domains.withUnsafeMutableBufferPointer { buffer in
                     let first = buffer.baseAddress!.advanced(by: a)
@@ -331,8 +335,10 @@ public struct AssemblySimulation: Sendable {
                     let leftFaces = first.pointee.proxy?.exposedEdges ?? [], rightFaces = second.pointee.proxy?.exposedEdges ?? []
                     return contact.accumulate(left: leftPosition, right: rightPosition, leftBounds: leftBounds,
                                               rightBounds: rightBounds, leftForce: &first.pointee.force,
-                                              rightForce: &second.pointee.force, leftExposed: leftFaces, rightExposed: rightFaces)
+                                              rightForce: &second.pointee.force, leftExposed: leftFaces, rightExposed: rightFaces,
+                                              matching: siblingContact)
                 }
+                if !result.matchingContacts.isEmpty { overlapping[partPair.x].formUnion(result.matchingContacts) }
                 energy.contact += result.energy
                 if result.relativePenetration > penetration {
                     penetration = result.relativePenetration
@@ -347,6 +353,9 @@ public struct AssemblySimulation: Sendable {
                     }
                 }
             }
+        }
+        for i in fractures.indices where !matching[i].isEmpty {
+            fractures[i]!.finishMatchingContact(position: steps[i].nextPosition, overlapping: overlapping[i])
         }
         for domain in domains {
             if let proxy = domain.proxy {
@@ -456,15 +465,17 @@ public struct AssemblySimulation: Sendable {
                 closureEnergy += closure
                 trial.cohesive += nextFractures[i]!.reading.storedEnergy
                 trial.fracture += nextFractures[i]!.reading.dissipation
-                nextFractures[i]!.prepareFragmentContact(position: newPosition)
             }
             if nextFractures.contains(where: { ($0?.reading.insertedEdges ?? 0) > 0 }) {
-                fractureContact(fractures: nextFractures, energy: &trial, penetration: &penetration,
+                fractureContact(fractures: &nextFractures, energy: &trial, penetration: &penetration,
                                 active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest)
             } else {
                 intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal)
             }
             guard penetration <= 0.10 else {
+                rejectedPenetration = penetration
+                rejectedContactDomains = deepest
+                rejectedClosureEnergy = closureEnergy
                 failure = "Contact overlapped by more than 10% of an edge. Try a slower impact or a different mesh."
                 return false
             }

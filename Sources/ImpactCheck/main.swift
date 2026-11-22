@@ -112,6 +112,11 @@ if CommandLine.arguments.dropFirst().contains("--notched-bend") {
     exit(gatePassed ? EXIT_SUCCESS : EXIT_FAILURE)
 }
 
+if CommandLine.arguments.dropFirst().contains("--sibling-contact") {
+    try siblingContactCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--fracture-stability") {
     try fractureStabilityProbe()
     exit(EXIT_SUCCESS)

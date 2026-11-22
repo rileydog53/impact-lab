@@ -149,7 +149,6 @@ package struct MaterialFracture: Sendable {
     private var pieces: [Int]
     private var cornerNodes: [Int]
     private(set) var surfaces: [FractureSurface] = []
-    private(set) var suppressedPairs: Set<SIMD2<Int>> = []
     package private(set) var reading = MaterialFractureReading()
 
     mutating func record(_ balance: InsertionBalance) { reading.insertionBalance.accumulate(balance) }
@@ -394,25 +393,32 @@ package struct MaterialFracture: Sendable {
         return contactEnergy
     }
 
-    // Keep matching closure while any paired lips remain bonded or overlapping.
-    // Hand over to ordinary collision at zero local contact energy.
-    mutating func prepareFragmentContact(position: [Point]) {
-        suppressedPairs.removeAll(keepingCapacity: true)
-        guard surfaces.count > 1 else { return }
-        var pending: [(Int, SIMD2<Int>)] = []
+    func matchingFeatures() -> [SIMD3<Int>: Int] {
+        guard surfaces.count > 1 else { return [:] }
+        var features: [SIMD3<Int>: Int] = [:]
         for (i, seam) in interfaces.enumerated() where seam.failed && !seam.handedOff {
             let face = faces[seam.face]
-            let a = pieces[face.a], b = pieces[face.b]
-            guard a != b else { continue }
-            let pair = SIMD2(min(a, b), max(a, b))
+            guard pieces[face.a] != pieces[face.b] else { continue }
+            for node in [seam.left.a, seam.left.b] { features[SIMD3(node, seam.right.b, seam.right.a)] = i }
+            for node in [seam.right.a, seam.right.b] { features[SIMD3(node, seam.left.a, seam.left.b)] = i }
+        }
+        return features
+    }
+
+    // Both representations must have zero contact energy at the handoff.
+    // An overlapping feature continues to carry a force via its closure law;
+    // other features on these same pieces are already handled by contact.
+    mutating func finishMatchingContact(position: [Point], overlapping: Set<Int>) {
+        guard surfaces.count > 1 else { return }
+        for (i, seam) in interfaces.enumerated() where seam.failed && !seam.handedOff && !overlapping.contains(i) {
+            let face = faces[seam.face]
+            guard pieces[face.a] != pieces[face.b] else { continue }
             let frame = seam.frame(position)
             let (gapA, gapB) = seam.gap(position)
-            if min(simd_dot(gapA, frame.normal), simd_dot(gapB, frame.normal)) < 0 {
-                suppressedPairs.insert(pair)
+            if min(simd_dot(gapA, frame.normal), simd_dot(gapB, frame.normal)) >= 0 {
+                interfaces[i].handedOff = true
             }
-            pending.append((i, pair))
         }
-        for (i, pair) in pending where !suppressedPairs.contains(pair) { interfaces[i].handedOff = true }
     }
 
     func crackFaces(position: [Point]) -> [CrackFace] {

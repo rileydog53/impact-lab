@@ -6,12 +6,24 @@ The assembly solver now starts fracture-enabled bodies on shared FEM nodes. It c
 
 - Constant-strain triangles provide one first Piola stress on each side. The mean resolved traction sets the insertion criterion and initializes the new interface in its current frame. A split requires at least one endpoint to separate into distinct groups of incident triangles. This limits isolated interior nucleation.
 - The topology change transfers position and half-step velocity to the new nodes, reallocates lumped mass by incident element, and preserves element state and material attachments. The final half kick uses forces on the new connectivity. The traction-separation law uses zero physical gap at insertion, a finite seed traction, irreversible softening, and equal opening and shear toughness.
-- Contact uses the actual new boundary nodes. Matching crack faces retain their closure penalty until they clear. The ordinary fragment contact solver then handles sibling recontact. Geometry that overlaps elsewhere at that transition can generate an abrupt contact penalty. The existing energy guard rejects that step and preserves the last accepted state.
+- Contact uses the actual new boundary nodes. Each matching node-to-edge feature can retain paired closure while other surfaces on the same fragments collide. The matching feature changes representation only when both its paired closure and its ordinary contact are unloaded. Fully failed interfaces still determine when a sibling gets its own collision domain. That can expose overlap that accumulated inside a previously connected body.
 - Candidate paths still follow mesh edges and pay fracture energy per unit of actual edge length. Staggering the block mesh changes the available directions, and both patterns retain horizontal rows. The model has no compressive shear initiation, general same-piece self-contact, or edge-only collision detection. All calculations remain 2D plane strain.
 
 [Pandolfi and Ortiz, adaptive cohesive insertion](https://arxiv.org/abs/cond-mat/0106318)
 
-## Verification
+## Contact repair and remaining gates
+
+At `923c8f8`, fragment pair 0/247 already had 0.3865 J/m of ordinary contact potential one step before the 28.771 ms rejection. The pair-wide switch had suppressed it. The feature-level repair allows nonmatching contacts to act while matching crack faces still carry closure. In the same fine staggered run, the pair now begins ordinary contact at 27.857 ms, accumulates 0.049962 N·s/m of scalar normal impulse, and reaches 115 ms. The total energy change at the former rejection was −4.3e−6 J/m. Peak energy imbalance was 0.033%, with momentum residuals of 3.64e−14 N·s/m and 1.26e−15 N·s. Peak penetration was 4.83%, above the 2% gate.
+
+The repeated two-pattern, three-resolution study still fails. Receiver contact occurred in 7 of 12 runs and tagged new-face contact occurred in 3. The aligned extra-fine half-step run rejected 15.94% trial overlap at 28.906 ms when its fourth fragment acquired a collision domain. The insertion count stayed at 122 while the spent-face count increased from 23 to 24. Trying collision domains from the moment of node insertion moved the problem earlier. In that trial the same extra-fine run rejected a 0.0631 J/m one-step contact-energy increase at 13.408 ms. The fine staggered case also rejected a step. The trial was reverted. Moving the domain boundary in time is insufficient when already-overlapping surface features enter the contact search.
+
+The notched-bend work discrepancy survives the contact repair. At extra fine, work at matched advance was 0.7634 J/m for aligned and 0.3476 J/m for staggered. The adjacent measured work intervals were disjoint, so interpolation cannot explain the 54.47% difference. Away from the notch-connected crack, fully spent faces accounted for 0.1560 J/m of the difference and partially damaged faces for 0.2482 J/m. Together they explain about 97% of the difference. Work in the spent notch-connected crack differed by only 0.0033 J/m. Peak striker load differed by 13.69% and occurred before measurable fracture dissipation in both patterns. The next controlled bend should isolate the mesh dependence of the loading response before changing the fracture criterion.
+
+The nominal production step remains 2.218 µs for the standard case. A paired standard-case probe measured 0.551 s and 7.38 MiB at `923c8f8`, and 0.558 s and 7.33 MiB with the repair. `ImpactCheck --sibling-contact`, `--fracture`, `--assembly`, and the native assembly smoke passed. The scientific study still exits nonzero.
+
+The next numerical change should start with a 2D sliding and opening patch using stable material contact features and swept node–edge and edge–edge detection. It needs to account for overlap before a fragment detaches and verify force and energy consistency across feature changes. This keeps the cohesive law and shared-node FEM in place. [Cohesive element and node-to-segment contact formulation](https://onlinelibrary.wiley.com/doi/10.1002/nme.6705)
+
+## Verification at the original experimental checkpoint
 
 **Insertion passes the controlled patches.** Axial stiffness was identical at 35,998.20 N/m per unit strain. The intact weak pulse reached its gauge at 3.771 ms in both runs. The largest observed insertion change on the standard assembly was 1.78e−15 kg/m in mass, 4.44e−16 N·s/m in linear momentum, and 2.22e−16 J/m in kinetic energy. Opening, sliding, and mixed-mode patches absorbed 0.14000002 J/m against 0.14000000 prescribed. Seeded traction matched the resolved mean to roundoff. The individual bulk tractions on the two sides of a face differed by up to one interface strength in the standard impact, so the patch result establishes continuity of the seed with the discrete mean.
 
@@ -23,7 +35,7 @@ The extra-fine aligned app run is paused at 40.20 ms. It logged a newly exposed 
 
 ## Reference and performance
 
-| Standard aligned impact through 115 ms | 0.7 at `a410871` | 0.8 experimental |
+| Standard aligned impact through 115 ms | 0.7 at `a410871` | 0.8 at `923c8f8` |
 | --- | ---: | ---: |
 | Specimen nodes, start → end | 324 → 324 | 76 → 92 |
 | Nominal timestep | 2.218 µs | 2.218 µs |

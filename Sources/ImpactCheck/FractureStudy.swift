@@ -13,6 +13,7 @@ private struct AssemblyCase {
 
 private struct AssemblyOutcome {
     var error: String?
+    var time = 0.0
     var firstSplit: Double?
     var work = 0.0
     var crackLength = 0.0
@@ -30,6 +31,9 @@ private struct AssemblyOutcome {
     var elapsed = 0.0
     var dt = 0.0
     var rejection: String?
+    var energyChangeAtFormerRejection: Double?
+    var firstSiblingContact: Double?
+    var siblingImpulse = 0.0
 }
 
 private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinity, stepScale: Double = 1,
@@ -39,11 +43,18 @@ private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinit
     let start = ProcessInfo.processInfo.systemUptime
     var outcome = AssemblyOutcome(initialNodes: s.body(0).mesh.reference.count, dt: s.dt)
     var nextClearance = 0.0
+    var previousEnergy = s.initialEnergy
     while s.step() {
         outcome.steps += 1
         let reading = s.fractureReading(0)!
         if reading.pieces > 1 && outcome.firstSplit == nil { outcome.firstSplit = s.time }
-        outcome.imbalance = max(outcome.imbalance, abs(s.energies.total / s.initialEnergy - 1))
+        let energy = s.energies.total
+        outcome.imbalance = max(outcome.imbalance, abs(energy / s.initialEnergy - 1))
+        if test.mesh == .staggered && test.refinement == 2 && s.time >= 0.028771373,
+           outcome.energyChangeAtFormerRejection == nil {
+            outcome.energyChangeAtFormerRejection = energy - previousEnergy
+        }
+        previousEnergy = energy
         outcome.momentum = max(outcome.momentum, simd_distance(s.momentum, initialP))
         outcome.angularMomentum = max(outcome.angularMomentum, abs(s.angularMomentum - initialL))
         if recordClearance && s.time >= nextClearance {
@@ -57,6 +68,7 @@ private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinit
         }
     }
     outcome.error = s.failure ?? s.initialIssue
+    outcome.time = s.time
     if let rejected = s.rejectedEnergy {
         let previous = s.energies
         outcome.rejection = String(format: "Rejected at %.6f ms: ΔE %+.6f, Δcontact %+.6f, Δelastic %+.6f, ΔK %+.6f, Δcohesive and fracture %+.6f J/m, trial penetration %.3f%%",
@@ -64,20 +76,44 @@ private func simulateAssembly(_ test: AssemblyCase, stepLimit: Double = .infinit
                                    rejected.elastic - previous.elastic, rejected.kinetic - previous.kinetic,
                                    rejected.cohesive + rejected.fracture - previous.cohesive - previous.fracture,
                                    100 * (s.rejectedPenetration ?? 0))
-        if let domains = s.rejectedContactDomains {
-            outcome.rejection! += String(format: "; deepest penetration parts/pieces [%d:%d, %d:%d]; matching closure %.6f J/m",
-                                        domains.x, domains.y, domains.z, domains.w, s.rejectedClosureEnergy ?? 0)
-        }
+    } else if let penetration = s.rejectedPenetration {
+        outcome.rejection = String(format: "Rejected at %.6f ms: trial penetration %.3f%%",
+                                   (s.time + s.dt) * 1000, 100 * penetration)
+    }
+    if let domains = s.rejectedContactDomains {
+        outcome.rejection! += String(format: "; deepest penetration parts/pieces [%d:%d, %d:%d]; matching closure %.6f J/m",
+                                    domains.x, domains.y, domains.z, domains.w, s.rejectedClosureEnergy ?? 0)
     }
     outcome.penetration = s.peakRelativePenetration
     outcome.work = s.fractureReading(0)!.dissipation
     outcome.crackLength = s.fractureReading(0)!.crackLength
     outcome.receiverEvents = s.fragmentContacts.filter { $0.parts == SIMD2(0, 4) }
+    let siblings = s.fragmentContacts.filter { $0.parts == SIMD2(0, 0) && $0.pieces == SIMD2(0, 247) }
+    outcome.firstSiblingContact = siblings.first?.time
+    outcome.siblingImpulse = siblings.reduce(0.0) { $0 + $1.normalImpulse }
     for event in outcome.receiverEvents { outcome.clearance[event.pieces.x] = 0 }
     outcome.pieces = s.materialPieces(0)
     outcome.nodes = s.body(0).mesh.reference.count
     outcome.elapsed = ProcessInfo.processInfo.systemUptime - start
     return outcome
+}
+
+func siblingContactCheck() throws {
+    var scene = AssemblyScene.bendingFractureExample()
+    scene.parts[0].fracture?.meshPattern = .staggered
+    let test = AssemblyCase(mesh: .staggered, refinement: 2, scene: scene)
+    let outcome = try simulateAssembly(test, recordClearance: false)
+    printAssembly(test.label, outcome)
+    print(String(format: "Sibling-contact regression, pieces 0 and 247: first %.3f ms, scalar impulse %.6f N·s/m, step ΔE at previous rejection %+.7f J/m",
+                 1000 * (outcome.firstSiblingContact ?? 0), outcome.siblingImpulse,
+                 outcome.energyChangeAtFormerRejection ?? .infinity))
+    require(outcome.error == nil && outcome.time >= scene.duration, "The sibling-contact reproducer rejected a step")
+    require((outcome.firstSiblingContact ?? .infinity) < 0.028771373 && outcome.siblingImpulse > 0,
+            "Sibling contact was missing before the previous rejection")
+    require(outcome.imbalance < 0.005 && abs(outcome.energyChangeAtFormerRejection ?? .infinity) < 1e-3,
+            "Sibling-contact activation created an energy jump")
+    require(max(outcome.momentum, outcome.angularMomentum) < 1e-9, "Sibling contact lost momentum")
+    // The full study applies the separate 2% penetration gate.
 }
 
 private func percentChange(_ a: Double, _ b: Double) -> Double {
@@ -117,9 +153,19 @@ func fractureAssemblyCase(_ pattern: String, _ resolution: String) throws {
     printAssembly(test.label + ", half step", try simulateAssembly(test, stepLimit: normal.dt / 2))
 }
 
+private struct BendWork {
+    // Spent notch network, other spent faces, partial faces touching the
+    // notch network, and other partial faces, respectively.
+    var terms = SIMD4<Double>.zero
+    var total: Double { terms.sum() }
+}
+
 private struct BendOutcome {
     var peakLoad = 0.0
-    var matched: (force: Double, work: Double, below: Double, above: Double)?
+    var peakTime = 0.0
+    var workAtPeak = 0.0
+    var matched: (force: Double, work: BendWork, below: Double, above: Double, rawWork: SIMD2<Double>,
+                  peakTime: Double, workAtPeak: Double)?
     var exits: [Double] = []
     var maxAdvance = 0.0
     var error: String?
@@ -135,15 +181,22 @@ private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double)
     let advance = 0.5 * (halfHeight - tip.y)
     var outcome = BendOutcome()
     var failed = 0
-    var workAtLastAdvance = 0.0
+    var workAtLastAdvance = BendWork()
+    let toughness = scene.parts[0].fracture!.energy
     while simulation.step() {
-        outcome.peakLoad = max(outcome.peakLoad, simulation.normalLoad(0, 1))
         let reading = simulation.fractureReading(0)!
+        let force = simulation.normalLoad(0, 1)
+        if force > outcome.peakLoad {
+            outcome.peakLoad = force
+            outcome.peakTime = simulation.time
+            outcome.workAtPeak = reading.dissipation
+        }
         guard failed != reading.failedEdges else { continue }
         failed = reading.failedEdges
         let reference = simulation.body(0).mesh.reference
         var links: [Point: [Point]] = [:]
-        for face in simulation.crackFaces(0) where face.damage == 1 {
+        let faces = simulation.crackFaces(0)
+        for face in faces where face.damage == 1 {
             let a = reference[face.first.a], b = reference[face.first.b]
             links[a, default: []].append(b)
             links[b, default: []].append(a)
@@ -157,13 +210,22 @@ private func notchedBend(_ test: AssemblyCase, stepLimit: Double, depth: Double)
             i += 1
         }
         let crackAdvance = queue.map(\.y).max()! - tip.y
+        var work = BendWork()
+        for face in faces where face.damage > 0 {
+            let a = reference[face.first.a], b = reference[face.first.b]
+            let touchesNotchNetwork = reached.contains(a) || reached.contains(b)
+            let term = (face.damage == 1 ? 0 : 2) + (touchesNotchNetwork ? 0 : 1)
+            work.terms[term] += toughness * simd_distance(a, b) * face.damage
+        }
+        require(abs(work.total - reading.dissipation) < 1e-10, "Notched-bend fracture-work partition does not close")
         if outcome.matched == nil && crackAdvance >= advance {
             let below = outcome.maxAdvance
             let fraction = (advance - below) / (crackAdvance - below)
-            let work = workAtLastAdvance + fraction * (reading.dissipation - workAtLastAdvance)
-            outcome.matched = (outcome.peakLoad, work, below, crackAdvance)
+            let interpolated = BendWork(terms: workAtLastAdvance.terms + fraction * (work.terms - workAtLastAdvance.terms))
+            outcome.matched = (outcome.peakLoad, interpolated, below, crackAdvance, SIMD2(workAtLastAdvance.total, work.total),
+                               outcome.peakTime, outcome.workAtPeak)
         }
-        if crackAdvance < advance { workAtLastAdvance = reading.dissipation }
+        if crackAdvance < advance { workAtLastAdvance = work }
         outcome.maxAdvance = max(outcome.maxAdvance, crackAdvance)
         outcome.exits = queue.filter { abs($0.y - halfHeight) < 1e-10 }.map(\.x).sorted()
     }
@@ -180,7 +242,7 @@ private func compareBends(_ first: BendOutcome, _ second: BendOutcome, label: St
     func directedExitGap(_ first: [Double], _ second: [Double]) -> Double {
         first.map { x in second.map { abs(x - $0) }.min()! }.max()!
     }
-    let load = percentChange(a.force, b.force), work = percentChange(a.work, b.work)
+    let load = percentChange(a.force, b.force), work = percentChange(a.work.total, b.work.total)
     let exits = max(directedExitGap(first.exits, second.exits), directedExitGap(second.exits, first.exits))
     let pass = load <= 5 && work <= 5 && exits <= exitTolerance + 1e-12
     print(String(format: "%@: %@, peak load %.2f%%, work %.2f%%, crack exits %.2f mm (limit %.2f)",
@@ -212,12 +274,18 @@ func notchedBendStudy() throws -> Bool {
         let bend = try notchedBend(test, stepLimit: commonStep, depth: depth)
         bends.append(bend)
         let match = bend.matched.map {
-            String(format: "%.2f N/m, %.4f J/m (advance bracket %.2f–%.2f mm)", $0.force, $0.work, $0.below * 1000, $0.above * 1000)
+            String(format: "%.2f N/m, %.4f J/m (advance bracket %.2f–%.2f mm, work bracket %.4f–%.4f J/m)",
+                   $0.force, $0.work.total, $0.below * 1000, $0.above * 1000, $0.rawWork.x, $0.rawWork.y)
         } ?? "unreached"
         print(String(format: "%@: %@; max crack advance %.2f mm, max load %.2f N/m, exits %@%@",
                      test.label, match, bend.maxAdvance * 1000, bend.peakLoad,
                      bend.exits.map { String(format: "%.2f", $0 * 1000) }.joined(separator: ", "),
                      bend.error.map { " STOPPED: " + $0 } ?? ""))
+        if let observation = bend.matched {
+            let w = observation.work.terms
+            print(String(format: "  Work (J/m): spent notch %.4f, spent elsewhere %.4f, partial at notch %.4f, partial elsewhere %.4f; max-load time %.3f ms, fracture work then %.4f J/m",
+                         w.x, w.y, w.z, w.w, observation.peakTime * 1000, observation.workAtPeak))
+        }
     }
     var crackPass = true
     for (a, b) in [(0, 1), (1, 2), (3, 4), (4, 5), (1, 4), (2, 5)] {
