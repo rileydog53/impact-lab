@@ -615,3 +615,34 @@ func receiverRefinementCheck(extended: Bool = false) throws {
             run.imbalance < 0.005 && max(run.momentum, run.angularMomentum) < 1e-9,
             "Receiver replay failed a contact or conservation check")
 }
+
+// Contact invariants under the production (recovered-stress) insertion
+// criterion, on whatever trajectory that criterion produces. Same invariants
+// as the pinned detachment replay, without its trajectory-specific piece count.
+func contactHandoffCheck() throws -> Bool {
+    var pass = true
+    for pattern in MaterialFractureSettings.MeshPattern.allCases {
+        var scene = AssemblyScene.bendingFractureExample()
+        scene.parts[0].fracture?.meshPattern = pattern
+        var s = try AssemblySimulation(scene, refinement: 3, stepLimit: .infinity)
+        s.probeDetachment = true
+        let initialP = s.momentum, initialL = s.angularMomentum
+        var imbalance = 0.0, momentum = 0.0, angular = 0.0
+        while s.step() {
+            imbalance = max(imbalance, abs(s.energies.total / s.initialEnergy - 1))
+            momentum = max(momentum, simd_distance(s.momentum, initialP))
+            angular = max(angular, abs(s.angularMomentum - initialL))
+        }
+        let attempted = max(s.peakRelativePenetration, s.rejectedPenetration ?? 0)
+        let detachment = s.detachmentProbes.map { abs($0.energyJump) }.max() ?? 0
+        let pieces = s.fractureReading(0)!.pieces
+        let ok = s.failure == nil && s.time >= scene.duration && !s.detachmentProbes.isEmpty
+            && max(detachment, s.maxInsertionContactJump, s.maxInterbodyTopologyJump) < 1e-10 * max(1, s.initialEnergy)
+            && attempted <= 0.02 && imbalance < 0.005 && max(momentum, angular) < 1e-9
+        print(String(format: "%@ ×3 production insertion: %d pieces, %d detachments; fixed-position contact change at detachment %.2e, splitting %.2e, interbody %.2e J/m; penetration %.3f%%, energy %.4f%%, ΔP %.2e, ΔL %.2e — %@%@",
+                     pattern.rawValue, pieces, s.detachmentProbes.count, detachment, s.maxInsertionContactJump, s.maxInterbodyTopologyJump,
+                     100 * attempted, 100 * imbalance, momentum, angular, ok ? "PASS" : "FAIL", s.failure.map { " (\($0))" } ?? ""))
+        pass = pass && ok
+    }
+    return pass
+}

@@ -367,6 +367,13 @@ package struct MaterialFracture: Sendable {
         }
     }
 
+    /// Verification access: recovery with the cached weights, and with weights
+    /// rebuilt from scratch for a given mesh.
+    package func cachedRecovery(_ piola: [ElementPiola]) -> [ElementPiola] { Self.recover(piola, weights: recovery) }
+    package static func freshRecovery(_ piola: [ElementPiola], mesh: Mesh) -> [ElementPiola] {
+        recover(piola, weights: recoveryWeights(mesh: mesh))
+    }
+
     private static func recover(_ piola: [ElementPiola], weights: [[(element: Int, weight: Double)]]) -> [ElementPiola] {
         weights.map { patch in
             var x = Point.zero, y = Point.zero

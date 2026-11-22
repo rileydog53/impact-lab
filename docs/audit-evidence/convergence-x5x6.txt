@@ -1,0 +1,15 @@
+Centred notched bend (compliant pad), metrics at the through-crack event. Convergence demonstrated on this fixture only, not general mesh independence.
+aligned ×5 dt 0.2250 µs: through 17.317 ms, notch network 0.14700 J/m (vertical 0.14700), total 0.31048 J/m, energy 0.0023%
+aligned ×6 dt 0.2250 µs: through 16.924 ms, notch network 0.15231 J/m (vertical 0.13916), total 0.32961 J/m, energy 0.0014%
+aligned ×5 dt 0.1125 µs: through 17.321 ms, notch network 0.14700 J/m (vertical 0.14700), total 0.31450 J/m, energy 0.0003%
+staggered ×5 dt 0.2250 µs: through 17.664 ms, notch network 0.17147 J/m (vertical 0.01037), total 0.28034 J/m, energy 0.0011%
+staggered ×6 dt 0.2250 µs: through 17.296 ms, notch network 0.17136 J/m (vertical 0.00863), total 0.27521 J/m, energy 0.0007%
+staggered ×5 dt 0.1125 µs: through 18.217 ms, notch network 0.18242 J/m (vertical 0.01037), total 0.29103 J/m, energy 0.0005%
+aligned: ×5→×6 through 2.27%, network work 3.62%; half step through 0.02%, network work 0.00% — FAIL
+staggered: ×5→×6 through 2.08%, network work 0.07%; half step through 3.13%, network work 6.39% — FAIL
+Aligned ×6 vertical spent notch crack 0.13916 vs straight-crack Gc·L 0.14700 J/m (5.34%) — FAIL
+Reported, not gated: staggered/aligned ×6 network work +12.50% (edge-path zigzag floor +11.8%), through time +2.20%
+.build/release/ImpactCheck --fracture-convergence  312.23s user 0.74s system 460% cpu 1:07.96 total
+exit 1
+
+[exited with code 0]

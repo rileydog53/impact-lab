@@ -104,6 +104,15 @@ if ["--legacy-insertion", "--sibling-contact", "--detachment-contact"].contains(
     MaterialFracture.recoveredInsertionStress = false
 }
 
+if CommandLine.arguments.dropFirst().contains("--contact-handoff") {
+    exit(try contactHandoffCheck() ? EXIT_SUCCESS : EXIT_FAILURE)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--fracture-convergence") {
+    let passed = try fractureConvergenceCheck(Array(CommandLine.arguments.dropFirst(index + 1)))
+    exit(passed ? EXIT_SUCCESS : EXIT_FAILURE)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--fracture-map") {
     let a = Array(CommandLine.arguments.dropFirst(index + 1))
     try fractureMapProbe(a[0], refinement: Int(a[1])!, dt: Double(a[2])! * 1e-6, duration: Double(a[3])! * 1e-3,
