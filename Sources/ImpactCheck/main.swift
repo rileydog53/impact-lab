@@ -123,3 +123,5 @@ require([nominal, stiff, fineSpace, fineTime, softWall, stiffWall].allSatisfy { 
 require(abs(stiff.arrival / nominal.arrival - 0.5) < 0.025 && repeatRun.trace == nominal.trace,
         "Stiffness scaling or repeatability check failed")
 patchCheck()
+
+ringCheck()
