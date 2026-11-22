@@ -330,7 +330,7 @@ package struct MaterialFracture: Sendable {
     // surfaces where plain nodal averaging underestimates bending stress.
     // The fit is a fixed linear operator of the element stresses, so its
     // weights are rebuilt only when the connectivity changes.
-    static func recoveryWeights(mesh: Mesh) -> [[(element: Int, weight: Double)]] {
+    package static func recoveryWeights(mesh: Mesh) -> [[(element: Int, weight: Double)]] {
         let count = mesh.reference.count
         var incident = Array(repeating: [Int](), count: count)
         for (i, e) in mesh.elements.enumerated() { for n in [e.a, e.b, e.c] { incident[n].append(i) } }

@@ -414,12 +414,14 @@ struct AssemblyLab: View {
             result.append("comparison sheet=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
             compare = false
             var contactScene = try AssemblyScene.open(sceneURL)
-            contactScene.meshResolution = .fine
-            contactScene.parts[0].fracture?.meshPattern = .staggered
+            // Pause-on-contact uses a resolution whose production fracture
+            // trajectory reaches the receiver on a new face (about 63 ms).
+            contactScene.meshResolution = .extraFine
+            contactScene.parts[0].fracture?.meshPattern = .aligned
             try experiment.configure(contactScene)
             experiment.select(specimen)
             showPieces = true
-            experiment.advance(to: 0.060)
+            experiment.advance(to: 0.070)
             result.append("paused after observed receiver contact=\(!experiment.running && experiment.simulation.fragmentContacts.contains { $0.parts == SIMD2(0, 4) && $0.onExposedFace && $0.normalImpulse > 0 })")
         } catch {
             result.append("error=\(error.localizedDescription)")

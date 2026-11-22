@@ -72,7 +72,7 @@ The signed 0.7 app and original checker are preserved locally in `.build/referen
 
 Run the default release `ImpactCheck` for regressions. Use `ImpactCheck --fracture-study` for the complete two-pattern, three-resolution study, which exits nonzero on a failed gate. Use `--notched-bend`, `--fracture-case staggered 2`, or `--fracture-stability` for isolated reproductions. Keep fracture work in 2D until a controlled crack-path test and contact handoff both meet their tolerances.
 
-## Independent audit and insertion-stress repair (branch `claude/fracture-audit`)
+## Independent audit and insertion-stress repair
 
 **The shipped notched bend measures a competition between crack sites, not path consistency.** The striker sits 18 mm off the notch. Under it the bending moment is about 29% higher than at the notch. With the compliant pad, the first insertion on every mesh is on the bottom surface under the striker, 18.5 mm from the notch tip. Top-surface cracks during the free-flight flexural wave follow. Whether the notch crack or the striker-side crack wins changes with mesh pattern and resolution under either insertion criterion, so its notch-connected metrics cannot converge. `ImpactCheck --fracture-map <pattern> <refinement> <dt µs> <ms> 0 quiet` runs the same pad fixture with the striker centred over the notch. There the notch crack crosses the ligament on every mesh from ×3 up. That fixture is the path-consistency control.
 
@@ -82,4 +82,51 @@ Run the default release `ImpactCheck` for regressions. Use `ImpactCheck --fractu
 
 **Centred fixture, recovered criterion, dt 0.225 µs.** Aligned spent notch crack: 0.1470 J/m at ×4, ×5 and ×6 (the single straight crack). Staggered notch-crack work went 0.2300 → 0.2296 J/m and total work 0.3049 → 0.3045 J/m from ×5 to ×6. Crack crossing of y = 2.5 mm: aligned 8.04, 7.99, 7.69 ms and staggered 9.30, 8.93, 8.53 ms at ×4–×6. At ×5–×6 the notch-crack work differs by 12–13% between patterns. The staggered pattern has no vertical edges, so its zigzag path is at least 11.8% longer. The remaining orientation difference is that geometric floor. Halving the step at ×5 changed crossing time by 0.15% (aligned) and 0.04% (staggered), and total work by 0.7% and 2.6%. Compliant-pad energy error stayed below 0.05%.
 
-**Limits of validity.** The Irwin length E·Gc/σ² is 7.8 mm, and convergence appears only at h ≤ 1.8 mm (×5). Production resolutions ×1–×3 (h = 9, 4.5, 3 mm) are under-resolved under either criterion. With the recovered criterion, the unnotched ×1 and ×2 scenes damage but do not split within 115 ms. The default `ImpactCheck` "Standard" gate therefore fails at ×1, and the 12-run study gives 3/12 receiver hits against 8/12 for legacy. Receiver trajectory and impulse downstream of competing nucleation sites remain chaotic at these resolutions. Crack paths remain restricted to mesh edges, and the staggered pattern carries the tortuosity penalty above.
+**Gates after integration.**
+- The default "Standard" fracture run is ×1 (h = 9 mm against an Irwin length E·Gc/σ² of 7.8 mm), which is under-resolved. It no longer has to split. It still enforces insertion balance, the seed traction, momentum, energy (0.8%) and penetration (5%), irreversibility, dissipation of at least Gc·L, and that damage nucleates. It prints "coarse fracture is under-resolved and qualitative only". At ×1 it now damages without separating within 115 ms.
+- `--fracture` also checks the recovery cache after every split against a full rebuild (difference 0), and checks that an affine stress field is reproduced to 1e−14 of strength at 1,023 node samples. That set includes free-surface and crack-flank nodes. Fragments of one or two elements cannot determine a linear field, so they use the patch mean by design and are excluded.
+- `--contact-handoff` repeats the detachment-replay invariants under production insertion at half the production step, as the replay does. Aligned and staggered ×3 give 3 pieces each, contact-energy changes at splitting and detachment of exactly 0, penetration of 1.72% and 1.07%, and energy error of 0.050% and 0.043%. At the production step, late fragment rattle against the receiver drifts aligned ×3 to 0.529%, above the 0.5% limit. This is penalty-contact integration error after 40 ms, not an insertion or handoff effect, and it remains open.
+- The app's pause-on-receiver-contact smoke now uses extra-fine aligned, whose production trajectory reaches the receiver on a new face.
+
+**Quantitative control, `ImpactCheck --fracture-convergence`.** It runs the centered pad bend at ×6, ×7 and ×6 with half the step, as six parallel processes in about 90 s of wall time. It measures at the through-crack event.
+
+| | ×6 | ×7 | ×6, half step | gated (2%) |
+| --- | ---: | ---: | ---: | --- |
+| Aligned notch-crack energy, J/m | 0.15231 | 0.15154 | 0.15231 | 0.51% / 0.00%, pass |
+| Staggered notch-crack energy, J/m | 0.17136 | 0.17156 | 0.17136 | 0.12% / 0.00%, pass |
+| Aligned through time, ms | 16.92 | 15.52 | 16.87 | reported: 8.3% / 0.3% |
+| Staggered through time, ms | 17.30 | 12.25 | 14.68 | reported: 29% / 15% |
+
+Fracture energy along the notch crack has converged on this fixture. Crack timing has not, because the last ligament lies in the compression zone under the striker. Staggered exceeds aligned by 13.2% at ×7, against the 11.8% zigzag floor. This demonstrates convergence for one fixture, not general mesh independence.
+
+**Limits of validity.**
+- ×1–×3 fracture is qualitative.
+- Crack paths are restricted to mesh edges.
+- Crack-completion timing and everything downstream of it are unconverged: fragment trajectories, receiver hits and receiver impulse.
+- The 12-run production study gives 3/12 receiver hits against 8/12 under the old criterion.
+
+## Performance audit (M4 MacBook Air, 4 performance and 6 efficiency cores, 16 GB)
+
+| Run | Wall time | Peak RSS | Peak footprint |
+| --- | ---: | ---: | ---: |
+| Production ×1, 115 ms | 0.91 s | 8.4 MB | 3.3 MB |
+| Production ×3, 115 ms | 17.2 s | 11.6 MB | 6.5 MB |
+| Centered ×5, 30 ms | 42.2 s | 15.6 MB | 10.2 MB |
+
+- Each process uses exactly one core (99–100%), with no swap and 79% of memory free while six run at once.
+- The earlier "7.38 MiB" figures are `getrusage` `ru_maxrss` for the entire checker process (executable, Swift runtime and touched library pages). The solver's own data is the smaller footprint above. The app is not measured.
+- Profile, by sample share at ×3 and ×5: bulk element stress and forces about 30%; self-contact candidate tests in `TriangleContact.separatedAtSharedVertex` 18–25%; `BoundaryContact.boundaryHit` between parts 15% and 7%; the crack-insertion face scan 3–4%; recovery 1.6%; copy-on-write checks about 3%.
+
+Highest-value opportunities:
+1. **Run independent cases as parallel processes.** Measured: the convergence control used 383 s of CPU in 90 s of wall time. `--fracture-study` still takes 4 minutes serially. Easy, with no numerical risk.
+2. **Prune self-contact candidates.** Every intact neighbor pair is retested every step. Edge-sharing pairs can be dropped when candidates are rebuilt, which gives identical results. Pairs that share only a vertex inside an intact fan need a proof or a guard. Easy to moderate, low risk.
+3. **Multicore assembly within a step** (bulk and contact, about 60%), for meshes beyond about 10⁴ elements, using fixed-order reductions to keep replay deterministic. Moderate difficulty, with reproducibility risk.
+
+Metal is speculative at present sizes: a ×5 step takes about 0.3 ms of CPU work, and an energy guard on every step would force a GPU round trip each time.
+
+## Handoff for the next development cycle
+- Use ×5 or finer (h ≤ 1.8 mm) for any quantitative fracture claim. Treat ×1–×3 fracture as illustration.
+- Use `--fracture-convergence` as the fracture control before trusting new fracture features, and `--contact-handoff` after contact changes.
+- Report crack timing and receiver outcomes as distributions or sensitivities, not single values.
+- `--legacy-insertion` is kept for A/B comparison only.
+- The open items are the edge-restricted path (isotropic or random meshes are the principled fix), late-time penalty-contact drift at the production step, and the opportunities above.

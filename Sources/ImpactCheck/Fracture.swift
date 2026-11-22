@@ -384,7 +384,7 @@ private func recoveryCacheCheck() throws {
         ElementPiola(Point(0.3 * strength + 40 * strength * x.y, 2 * strength * x.x),
                      Point(-5 * strength * x.y, 0.1 * strength + 9 * strength * x.x))
     }
-    var splits = 0, cacheError = 0.0, affineError = 0.0
+    var splits = 0, cacheError = 0.0, affineError = 0.0, checked = 0, excluded = 0
     for round in 0..<6 {
         // Bending-like tension that grows each round drives successive splits.
         let load = field(mesh) { x in ElementPiola(Point(strength * (1 + Double(round)) * max(0, -x.y) / 0.013, 0), .zero) }
@@ -399,14 +399,20 @@ private func recoveryCacheCheck() throws {
         for (a, b) in zip(specimen.cachedRecovery(noise), MaterialFracture.freshRecovery(noise, mesh: mesh)) {
             cacheError = max(cacheError, simd_length(a.x - b.x) + simd_length(a.y - b.y))
         }
+        // A linear field is determinable only where the connected patch holds
+        // at least three elements. Smaller detached fragments use the patch
+        // mean by design and have no intact faces left to insert.
         let exact = specimen.cachedRecovery(field(mesh, affine))
+        let weights = MaterialFracture.recoveryWeights(mesh: mesh)
         for (n, value) in exact.enumerated() {
+            guard weights[n].count >= 3 else { excluded += 1; continue }
+            checked += 1
             let target = affine(mesh.reference[n])
             affineError = max(affineError, simd_length(value.x - target.x) + simd_length(value.y - target.y))
         }
     }
-    print(String(format: "Recovery cache: %d splits, cached vs rebuilt %.2e, affine field residual %.2e of strength",
-                 splits, cacheError / strength, affineError / strength))
+    print(String(format: "Recovery cache: %d splits, cached vs rebuilt %.2e, affine residual %.2e of strength over %d node samples (%d samples on 1–2 element fragments excluded)",
+                 splits, cacheError / strength, affineError / strength, checked, excluded))
     require(splits >= 2 && cacheError / strength < 1e-12 && affineError / strength < 1e-10,
             "Stress-recovery cache or linear exactness failed after topology change")
 }

@@ -207,7 +207,7 @@ struct ElementEnergy: Sendable {
 // First Piola stress columns. Traction and cohesive quadrature both use
 // reference edge length, so there is no conversion to current-area stress.
 package struct ElementPiola: Sendable {
-    let x, y: Point
+    package let x, y: Point
     package init(_ x: Point, _ y: Point) { self.x = x; self.y = y }
     func traction(_ normal: Point) -> Point { normal.x * x + normal.y * y }
 
