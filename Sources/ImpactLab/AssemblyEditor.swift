@@ -127,7 +127,16 @@ struct AssemblyEditor: View {
                         experiment.updatePart(part.id) { $0.fracture?.energy = value }
                     }
                 }
-                Text("Cracks follow mesh edges. Compare resolutions before interpreting local peaks.")
+                if part.shape == .block {
+                    Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
+                        experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
+                    })) {
+                        ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) {
+                            Text($0.rawValue).tag($0)
+                        }
+                    }
+                }
+                Text("Experimental fracture. Crack paths and later contacts can change with the mesh.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             DisclosureGroup("Geometry and initial motion", isExpanded: $bodySettings) {

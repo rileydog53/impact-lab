@@ -5,6 +5,7 @@ struct ContactResult {
     var penetration = 0.0
     var relativePenetration = 0.0
     var exposedFaceContact = false
+    var normalLoad = 0.0
     var wallImpulse = 0.0
     var wallAngularImpulse = 0.0
 
@@ -13,6 +14,7 @@ struct ContactResult {
         penetration = max(penetration, other.penetration)
         relativePenetration = max(relativePenetration, other.relativePenetration)
         exposedFaceContact = exposedFaceContact || other.exposedFaceContact
+        normalLoad += other.normalLoad
         wallImpulse += other.wallImpulse
         wallAngularImpulse += other.wallAngularImpulse
     }
@@ -27,17 +29,18 @@ struct ContactSurface: Sendable {
         self.init(edges: body.mesh.boundary, reference: body.mesh.reference, young: body.material.young)
     }
 
-    init(edges: [Edge], reference: [Point], young: Double) {
+    init(edges: [Edge], reference: [Point], young: Double, sourceEdges: [Edge]? = nil) {
         self.edges = edges
+        let nodes = Set(edges.flatMap { [$0.a, $0.b] }).sorted()
         var lengths: [Int: Double] = [:]
-        for edge in edges {
+        for edge in sourceEdges ?? edges {
             let halfLength = 0.5 * simd_distance(reference[edge.a], reference[edge.b])
             lengths[edge.a, default: 0] += halfLength
             lengths[edge.b, default: 0] += halfLength
         }
-        nodes = lengths.keys.sorted()
+        self.nodes = nodes
         // The two passes each carry half the tributary-length quadrature.
-        stiffness = nodes.map { 0.5 * lengths[$0]! * young * 2500 }
+        stiffness = nodes.map { 0.5 * lengths[$0, default: 0] * young * 2500 }
     }
 }
 
@@ -107,12 +110,13 @@ struct BoundaryContact: Sendable {
                               to target: ContactSurface, at targetPosition: [Point], bounds: ContactBounds,
                               sourceForce: inout [Point], targetForce: inout [Point],
                               exposed: Set<SIMD2<Int>>, result: inout ContactResult) {
-        for (i, stiffness) in zip(source.nodes, source.stiffness) {
+        for (i, stiffness) in zip(source.nodes, source.stiffness) where stiffness > 0 {
             let node = sourcePosition[i]
             guard bounds.contains(node), let hit = boundaryHit(node, target: target, position: targetPosition) else {
                 continue
             }
             let load = stiffness * hit.distance
+            result.normalLoad += load
             let force = load * hit.normal
             sourceForce[i] += force
             targetForce[hit.edge.a] -= (1 - hit.fraction) * force
@@ -168,8 +172,8 @@ struct BoundaryContact: Sendable {
     }
 }
 
-extension Body {
-    package func boundaryClearance(to other: Body) -> Double {
+extension BoundaryContact {
+    static func clearance(_ edges: [Edge], at position: [Point], to otherEdges: [Edge], at otherPosition: [Point]) -> Double {
         func distanceSquared(_ point: Point, from origin: Point, along tangent: Point) -> Double {
             let delta = point - origin
             let fraction = min(1, max(0, simd_dot(delta, tangent) / simd_length_squared(tangent)))
@@ -177,11 +181,11 @@ extension Body {
         }
 
         var nearest = Double.infinity
-        for first in mesh.boundary {
+        for first in edges {
             let a = position[first.a], b = position[first.b]
             let ab = b - a
-            for second in other.mesh.boundary {
-                let c = other.position[second.a], d = other.position[second.b]
+            for second in otherEdges {
+                let c = otherPosition[second.a], d = otherPosition[second.b]
                 let cd = d - c
                 let det = cross2D(ab, cd)
                 if det != 0 {
@@ -194,5 +198,11 @@ extension Body {
             }
         }
         return nearest.squareRoot()
+    }
+}
+
+extension Body {
+    package func boundaryClearance(to other: Body) -> Double {
+        BoundaryContact.clearance(mesh.boundary, at: position, to: other.mesh.boundary, at: other.position)
     }
 }

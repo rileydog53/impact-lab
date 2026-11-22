@@ -37,6 +37,8 @@ public struct Triangle: Sendable {
         g0 = -g1 - g2
         area = twiceArea / 2
     }
+
+    var nodes: SIMD3<Int> { SIMD3(a, b, c) }
 }
 
 public struct Edge: Sendable {
@@ -67,6 +69,7 @@ public struct Mesh: Sendable {
     }
 
     static func rectangle(columns: Int, rows: Int, probeColumn: Int? = nil, interfaceColumn: Int? = nil,
+                          staggerDiagonals: Bool = false,
                           position: (Double, Double) -> Point) -> Mesh {
         precondition(columns >= 2 && rows >= 1)
         var nodes: [Point] = []
@@ -86,7 +89,10 @@ public struct Mesh: Sendable {
                 if let probeColumn, i == probeColumn - 1 || i == probeColumn {
                     probe.append(contentsOf: [triangles.count, triangles.count + 1])
                 }
-                if (i + j).isMultiple(of: 2) {
+                let forward = staggerDiagonals
+                    ? simd_length_squared(nodes[a] - nodes[c]) < simd_length_squared(nodes[b] - nodes[d])
+                    : (i + j).isMultiple(of: 2)
+                if forward {
                     triangles.append(contentsOf: [(a, b, c), (a, c, d)])
                 } else {
                     triangles.append(contentsOf: [(a, b, d), (b, c, d)])
@@ -198,6 +204,21 @@ struct ElementEnergy: Sendable {
     var total: Double { elastic + hardening + dissipation }
 }
 
+// First Piola stress columns. Traction and cohesive quadrature both use
+// reference edge length, so there is no conversion to current-area stress.
+package struct ElementPiola: Sendable {
+    let x, y: Point
+    package init(_ x: Point, _ y: Point) { self.x = x; self.y = y }
+    func traction(_ normal: Point) -> Point { normal.x * x + normal.y * y }
+
+    func accumulate(_ e: Triangle, into force: inout [Point]) {
+        let px = -e.area * x, py = -e.area * y
+        force[e.a] += px * e.g0.x + py * e.g0.y
+        force[e.b] += px * e.g1.x + py * e.g1.y
+        force[e.c] += px * e.g2.x + py * e.g2.y
+    }
+}
+
 struct BodyStep: Sendable {
     var body: Body
     var strain: [Double]
@@ -209,8 +230,9 @@ struct BodyStep: Sendable {
     var nextVelocity: [Point]
     var nextStrain: [Double]
     var history: ElementHistory?
+    var trialPiola: [ElementPiola] = []
 
-    init(_ body: Body, j2: J2Model? = nil) {
+    init(_ body: Body, j2: J2Model? = nil, recordsTraction: Bool = false) {
         self.body = body
         strain = Array(repeating: 0, count: body.mesh.elements.count)
         nextStrain = strain
@@ -221,6 +243,7 @@ struct BodyStep: Sendable {
         nextPosition = body.position
         nextVelocity = body.velocity
         history = j2.map { ElementHistory(model: $0, count: body.mesh.elements.count) }
+        if recordsTraction { trialPiola = Array(repeating: ElementPiola(.zero, .zero), count: strain.count) }
     }
 
     mutating func drift(_ dt: Double) -> Bool {
@@ -235,7 +258,43 @@ struct BodyStep: Sendable {
 
     mutating func assemble() -> ElementEnergy? {
         Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain,
-                            history: &history)
+                            history: &history, piola: &trialPiola)
+    }
+
+    // Drift already used the parent's acceleration. Redistribute the old
+    // force by new lumped mass so every daughter receives the same first
+    // half kick. The second half kick uses forces on the new connectivity.
+    mutating func splitNodes(mesh: Mesh, sources: [Int], dt: Double) -> InsertionBalance {
+        func balance(_ body: Body, _ positions: [Point], _ internalForce: [Point], _ appliedForce: [Point])
+            -> (momentum: Point, angular: Double, kinetic: Double) {
+            var result = (Point.zero, 0.0, 0.0)
+            for i in body.mass.indices {
+                let mass = body.mass[i]
+                let velocity = body.velocity[i] + (0.5 * dt / mass) * (internalForce[i] + appliedForce[i])
+                let momentum = mass * velocity
+                result.0 += momentum
+                result.1 += cross2D(positions[i], momentum)
+                result.2 += 0.5 * mass * simd_length_squared(velocity)
+            }
+            return result
+        }
+        let before = balance(body, nextPosition, internalForce, appliedForce)
+        let former = body
+        body = Body(mesh: mesh, material: former.material, position: sources.map { former.position[$0] },
+                    velocity: .zero, measuresVerticalStrain: former.measuresVerticalStrain,
+                    elementMaterials: former.elementMaterials, velocityPerturbation: sources.map { former.velocity[$0] })
+        nextPosition = sources.map { nextPosition[$0] }
+        internalForce = sources.enumerated().map { i, old in internalForce[old] * (body.mass[i] / former.mass[old]) }
+        appliedForce = sources.enumerated().map { i, old in appliedForce[old] * (body.mass[i] / former.mass[old]) }
+        let after = balance(body, nextPosition, internalForce, appliedForce)
+        nextVelocity = body.velocity
+        nextApplied = Array(repeating: .zero, count: sources.count)
+        nextInternal = nextApplied
+        for (i, e) in mesh.elements.enumerated() { trialPiola[i].accumulate(e, into: &nextInternal) }
+        return InsertionBalance(mass: abs(former.totalMass - body.totalMass),
+                                momentum: simd_distance(before.momentum, after.momentum),
+                                angularMomentum: abs(before.angular - after.angular),
+                                kinetic: abs(before.kinetic - after.kinetic))
     }
 
     mutating func kick(_ dt: Double) -> Bool {
@@ -660,6 +719,12 @@ public struct Simulation: Sendable {
 
     static func assemble(body: Body, position: [Point], forces: inout [Point],
                                      strain: inout [Double], history: inout ElementHistory?) -> ElementEnergy? {
+        var piola: [ElementPiola] = []
+        return assemble(body: body, position: position, forces: &forces, strain: &strain, history: &history, piola: &piola)
+    }
+
+    static func assemble(body: Body, position: [Point], forces: inout [Point], strain: inout [Double],
+                         history: inout ElementHistory?, piola: inout [ElementPiola]) -> ElementEnergy? {
         for i in forces.indices { forces[i] = .zero }
         let uniformMu = body.material.shear
         let uniformLambda = body.material.lambda
@@ -678,12 +743,11 @@ public struct Simulation: Sendable {
             let xx = simd_length_squared(fx)
             let yy = simd_length_squared(fy)
             strain[i] = 0.5 * ((body.measuresVerticalStrain ? yy : xx) - 1)
-            let px, py: Point
+            let stress: ElementPiola
             if let model = history?.model {
                 guard let response = model.update(x: fx, y: fy, from: history!.current[i]) else { return nil }
                 history!.next[i] = response.history
-                px = -e.area * response.piolaX
-                py = -e.area * response.piolaY
+                stress = ElementPiola(response.piolaX, response.piolaY)
                 let alpha = response.history.equivalentStrain
                 plasticArea += e.area
                 energy.meanPlasticStrain += e.area * alpha
@@ -696,16 +760,15 @@ public struct Simulation: Sendable {
                 // P = mu F + (lambda ln J - mu) F^(-T), with Fzz = 1.
                 let logJ = log(j)
                 let pressure = (lambda * logJ - mu) / j
-                px = -e.area * (mu * fx + pressure * Point(fy.y, -fy.x))
-                py = -e.area * (mu * fy + pressure * Point(-fx.y, fx.x))
+                stress = ElementPiola(mu * fx + pressure * Point(fy.y, -fy.x),
+                                      mu * fy + pressure * Point(-fx.y, fx.x))
                 energy.elastic += e.area * (0.5 * mu * (xx + yy - 2 - 2 * logJ) + 0.5 * lambda * logJ * logJ)
             }
-            guard px.x.isFinite && px.y.isFinite && py.x.isFinite && py.y.isFinite else {
+            guard stress.x.x.isFinite && stress.x.y.isFinite && stress.y.x.isFinite && stress.y.y.isFinite else {
                 return nil
             }
-            forces[e.a] += px * e.g0.x + py * e.g0.y
-            forces[e.b] += px * e.g1.x + py * e.g1.y
-            forces[e.c] += px * e.g2.x + py * e.g2.y
+            if !piola.isEmpty { piola[i] = stress }
+            stress.accumulate(e, into: &forces)
         }
         if plasticArea > 0 { energy.meanPlasticStrain /= plasticArea }
         return energy.total.isFinite ? energy : nil

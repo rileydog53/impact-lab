@@ -30,8 +30,11 @@ struct AssemblyComparison {
     var elementCount: Int { (0..<simulation.bodyCount).reduce(0) { $0 + simulation.body($1).mesh.elements.count } }
     var relativeName: String { scene.parts.first { $0.id == scene.relativeTo }?.name ?? "Lab frame" }
     var current: AssemblyComparison {
-        AssemblyComparison(details: "\(monitoredName) · \(scene.resolution.label) · \(elementCount) triangles",
-                           samples: samples, tracksFracture: scene.parts.contains { $0.fracture != nil })
+        let monitored = scene.parts.first { $0.id == scene.monitor } ?? scene.parts.first
+        let pattern = monitored.flatMap { $0.shape == .block ? $0.fracture?.pattern.rawValue : nil }
+        let details = [monitoredName, scene.resolution.label, pattern, "\(elementCount) triangles"].compactMap { $0 }
+        return AssemblyComparison(details: details.joined(separator: " · "), samples: samples,
+                                  tracksFracture: scene.parts.contains { $0.fracture != nil })
     }
 
     var canRefine: Bool { scene.resolution != .extraFine && samples.count > 1 }

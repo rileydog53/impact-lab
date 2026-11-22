@@ -7,6 +7,7 @@ public struct CrackFace: Sendable {
 }
 
 public struct MaterialFractureReading: Sendable {
+    public internal(set) var insertedEdges = 0
     public internal(set) var damagedEdges = 0
     public internal(set) var failedEdges = 0
     public internal(set) var pieces = 1
@@ -14,6 +15,23 @@ public struct MaterialFractureReading: Sendable {
     public internal(set) var separation = 0.0
     public internal(set) var storedEnergy = 0.0
     public internal(set) var dissipation = 0.0
+    public internal(set) var peakSeedTractionError = 0.0
+    public internal(set) var peakBulkTractionGap = 0.0
+    package var insertionBalance = InsertionBalance()
+}
+
+package struct InsertionBalance: Sendable {
+    package var mass = 0.0
+    package var momentum = 0.0
+    package var angularMomentum = 0.0
+    package var kinetic = 0.0
+
+    mutating func accumulate(_ other: Self) {
+        mass = max(mass, other.mass)
+        momentum = max(momentum, other.momentum)
+        angularMomentum = max(angularMomentum, other.angularMomentum)
+        kinetic = max(kinetic, other.kinetic)
+    }
 }
 
 public struct MaterialPiece: Identifiable, Sendable {
@@ -41,43 +59,76 @@ private struct Components {
     }
 }
 
-// The contact proxy closes sub-element jumps at connected vertices by averaging
-// their positions. The transpose of that map returns contact loads to FEM nodes.
 struct FractureSurface: Sendable {
     let id: Int
-    let stencil: [[Int]]
+    let nodes: [Int]
     let surface: ContactSurface
     let exposedEdges: Set<SIMD2<Int>>
 
-    func positions(_ position: [Point]) -> [Point] {
-        stencil.map { nodes in
-            nodes.reduce(.zero) { $0 + position[$1] } / Double(nodes.count)
-        }
-    }
+    func positions(_ position: [Point]) -> [Point] { nodes.map { position[$0] } }
 
     func apply(_ force: [Point], to result: inout [Point]) {
-        for node in surface.nodes {
-            let nodes = stencil[node]
-            let share = force[node] / Double(nodes.count)
-            for index in nodes { result[index] += share }
-        }
+        for i in surface.nodes { result[nodes[i]] += force[i] }
+    }
+}
+
+// A shifted radial law gives a finite initial traction with zero physical gap.
+// Translating by the virtual onset preserves an objective mixed-mode potential.
+// On the proportional loading ray the envelope is triangular over the physical
+// displacement 2 Gc / peak. Secant unloading keeps the maximum irreversible.
+private struct InsertedLaw: Sendable {
+    let peak, energy, closureStiffness, onset, finalOpening: Double
+    let offset: Point
+
+    init(traction: Point, energy: Double, stiffness: Double) {
+        peak = simd_length(traction)
+        self.energy = energy
+        closureStiffness = 4 * stiffness
+        onset = peak / stiffness
+        finalOpening = onset + 2 * energy / peak
+        offset = traction / stiffness
+    }
+
+    func progress(_ maximum: Double) -> Double {
+        min(1, max(0, (maximum - onset) / (finalOpening - onset)))
+    }
+
+    func evaluate(gap: Point, previous: Double, closes: Bool)
+        -> (traction: Point, maximum: Double, stored: Double, loss: Double, closure: Double) {
+        let shifted = gap + offset
+        let effective = Point(max(0, shifted.x), shifted.y)
+        let radiusSquared = simd_length_squared(effective)
+        let maximum = max(previous, radiusSquared.squareRoot())
+        let fraction = progress(maximum)
+        let secant = peak * (1 - fraction) / maximum
+        let compression = closes ? min(0, gap.x) : 0
+        // Remove the virtual preload energy in proportion to remaining
+        // envelope traction. Only the work available after insertion is Gc.
+        let stored = 0.5 * secant * (radiusSquared - onset * maximum)
+        return (secant * effective + Point(closureStiffness * compression, 0), maximum, stored,
+                energy * fraction, 0.5 * closureStiffness * compression * compression)
     }
 }
 
 package struct MaterialFracture: Sendable {
+    private struct Face: Sendable {
+        let left, right: Edge // Element corner IDs, both in the left triangle's orientation.
+        let normal: Point
+        let length, stiffness: Double
+        var a: Int { left.a / 3 }
+        var b: Int { right.a / 3 }
+    }
+
     private struct Interface: Sendable {
-        let a, b: Int
-        let left, right: Edge // Both directed along the left element's original edge.
-        let length: Double
-        let law: CohesiveLaw
-        var maxima = Point.zero
+        let face: Int
+        let law: InsertedLaw
+        var left, right: Edge // FEM node IDs.
+        var maxima: Point
         var handedOff = false
 
         var failed: Bool { min(maxima.x, maxima.y) >= law.finalOpening }
 
         func frame(_ positions: [Point]) -> (tangent: Point, normal: Point, length: Double) {
-            // A material face supplies the corotating frame. An average
-            // of opposite tangents can approach zero during fracture.
             let chord = positions[left.b] - positions[left.a]
             let length = simd_length(chord)
             let t = chord / length
@@ -89,186 +140,269 @@ package struct MaterialFracture: Sendable {
         }
     }
 
-    private var interfaces: [Interface]
-    private let exterior: [(Int, Edge)]
-    private let reference: [Point]
-    private let young: Double
-    private var pieces: [Int] = []
+    private let faces: [Face]
+    private let exterior: [Edge] // Element corner IDs.
+    private let young, density, strength, toughness: Double
+    private let cornerStiffness: [Double]
+    private var slots: [Int]
+    private var interfaces: [Interface] = []
+    private var pieces: [Int]
+    private var cornerNodes: [Int]
     private(set) var surfaces: [FractureSurface] = []
     private(set) var suppressedPairs: Set<SIMD2<Int>> = []
     package private(set) var reading = MaterialFractureReading()
-    private var failedCount = 0
+
+    mutating func record(_ balance: InsertionBalance) { reading.insertionBalance.accumulate(balance) }
 
     package init(body: Body, settings: MaterialFractureSettings) {
-        var pending: [SIMD2<Int>: (Int, Edge)] = [:]
-        var interfaces: [Interface] = []
-        var reference: [Point] = []
-        for (i, triangle) in body.mesh.elements.enumerated() {
-            let original = [triangle.a, triangle.b, triangle.c]
-            reference.append(contentsOf: original.map { body.mesh.reference[$0] })
+        let mesh = body.mesh
+        young = body.material.young
+        density = body.material.density
+        strength = young * settings.strengthFraction
+        toughness = settings.energy
+        cornerNodes = mesh.elements.flatMap { [$0.a, $0.b, $0.c] }
+        var pending: [SIMD2<Int>: Edge] = [:]
+        var faces: [Face] = []
+        var stiffnesses = Array(repeating: 0.0, count: cornerNodes.count)
+        for (i, triangle) in mesh.elements.enumerated() {
             for j in 0..<3 {
                 let k = (j + 1) % 3
-                let key = SIMD2(min(original[j], original[k]), max(original[j], original[k]))
-                if let (neighbor, left) = pending.removeValue(forKey: key) {
+                let a = triangle.nodes[j], b = triangle.nodes[k]
+                let key = SIMD2(min(a, b), max(a, b))
+                if let left = pending.removeValue(forKey: key) {
+                    let delta = mesh.reference[cornerNodes[left.b]] - mesh.reference[cornerNodes[left.a]]
+                    let length = simd_length(delta)
+                    let altitude = min(triangle.area, mesh.elements[left.a / 3].area) * 2 / length
+                    let stiffness = max(30 * young / altitude, 2 * strength * strength / toughness)
                     let right = Edge(3 * i + k, 3 * i + j)
-                    let length = simd_distance(reference[left.a], reference[left.b])
-                    let strength = body.material.young * settings.strengthFraction
-                    let altitude = min(triangle.area, body.mesh.elements[neighbor].area) * 2 / length
-                    let finalOpening = 2 * settings.energy / strength
-                    // Mesh-scaled initial compliance, with an onset below the
-                    // softening interval even for the lowest toughness settings.
-                    let stiffness = max(30 * body.material.young / altitude, 4 * strength / finalOpening)
-                    interfaces.append(Interface(a: neighbor, b: i, left: left, right: right, length: length,
-                                                law: CohesiveLaw(strength: strength, finalOpening: finalOpening,
-                                                                 initialStiffness: stiffness)))
+                    faces.append(Face(left: left, right: right, normal: Point(delta.y, -delta.x) / length,
+                                      length: length, stiffness: stiffness))
+                    for corner in [left.a, left.b, right.a, right.b] { stiffnesses[corner] += 4 * length * stiffness }
                 } else {
-                    pending[key] = (i, Edge(3 * i + j, 3 * i + k))
+                    pending[key] = Edge(3 * i + j, 3 * i + k)
                 }
             }
         }
-        self.reference = reference
-        young = body.material.young
-        self.interfaces = interfaces
-        exterior = pending.sorted {
-            ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y)
-        }.map(\.value)
-        rebuildTopology()
+        self.faces = faces
+        cornerStiffness = stiffnesses
+        exterior = pending.sorted { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }.map(\.value)
+        slots = Array(repeating: -1, count: faces.count)
+        pieces = Array(repeating: 0, count: mesh.elements.count)
+        rebuildSurfaces(reference: mesh.reference)
     }
 
-    package func discretize(_ body: Body) -> Body {
-        let triangles = body.mesh.elements.indices.map { (3 * $0, 3 * $0 + 1, 3 * $0 + 2) }
-        let position = body.mesh.elements.flatMap { [body.position[$0.a], body.position[$0.b], body.position[$0.c]] }
-        return Body(mesh: Mesh(reference: reference, triangles: triangles, boundary: exterior.map(\.1)),
-                    material: body.material, position: position, velocity: body.velocity[0])
+    // Bound every possible future vertex sector by its individual corner
+    // masses. A sector's stiffness/mass is a weighted average of these
+    // bounds, so topology changes do not require a different time grid.
+    func squaredFrequencyBound(body: Body, contactAllowance: Double, springs: [(Int, Double)]) -> Double {
+        var anchors = Array(repeating: 0.0, count: body.mesh.reference.count)
+        for (node, value) in springs { anchors[node] += value }
+        let bulk = density * body.material.waveSpeed * body.material.waveSpeed
+        var bound = 0.0
+        for (i, e) in body.mesh.elements.enumerated() {
+            let g = Point(simd_length(e.g0), simd_length(e.g1))
+            let third = simd_length(e.g2)
+            let scale = bulk * e.area * (g.x + g.y + third)
+            let mass = density * e.area / 3
+            for (j, gradient) in [g.x, g.y, third].enumerated() {
+                let stiffness = scale * gradient + cornerStiffness[3 * i + j] + contactAllowance + anchors[e.nodes[j]]
+                bound = max(bound, stiffness / mass)
+            }
+        }
+        return bound
     }
 
-    func stiffnessBudget(contactAllowance: Double) -> [(Int, Double)] {
-        // Local penalty and consistent two-point quadrature; row-sum bound
-        // includes both sides of an interface and all potential boundary nodes.
-        var springs = Array(repeating: contactAllowance, count: reference.count)
+    private func edge(_ corners: Edge) -> Edge { Edge(cornerNodes[corners.a], cornerNodes[corners.b]) }
+
+    private func sectors(excluding cuts: [Bool]) -> Components {
+        var fans = Components(cornerNodes.count)
+        for (i, face) in faces.enumerated() where slots[i] < 0 && !cuts[i] {
+            fans.join(face.left.a, face.right.a)
+            fans.join(face.left.b, face.right.b)
+        }
+        return fans
+    }
+
+    package mutating func insert(position: [Point], piola: [ElementPiola], mesh: Mesh) -> (mesh: Mesh, sources: [Int])? {
+        var pending: [(index: Int, traction: Point, bulkGap: Double)] = []
+        let strengthSquared = strength * strength
+        // A cheap upper bound avoids projecting every face in weak elastic
+        // waves. The remaining candidates are evaluated in fixed mesh order.
+        if !piola.contains(where: { simd_length_squared($0.x) + simd_length_squared($0.y) >= strengthSquared }) {
+            return nil
+        }
+        for (i, face) in faces.enumerated() where slots[i] < 0 {
+            let left = piola[face.a].traction(face.normal), right = piola[face.b].traction(face.normal)
+            let mean = 0.5 * (left + right)
+            guard simd_length_squared(mean) >= strengthSquared else { continue }
+            let direction = edge(face.left)
+            let tangent = simd_normalize(position[direction.b] - position[direction.a])
+            let normal = Point(tangent.y, -tangent.x)
+            let traction = Point(simd_dot(mean, normal), simd_dot(mean, tangent))
+            // Opening and shear fracture are supported under noncompressive
+            // normal traction. Matching-face closure is separately unilateral.
+            guard traction.x >= 0 else { continue }
+            pending.append((i, traction, simd_distance(left, right) / strength))
+        }
+        guard !pending.isEmpty else { return nil }
+        var cuts = Array(repeating: false, count: faces.count)
+        for item in pending { cuts[item.index] = true }
+        var fans = sectors(excluding: cuts)
+        pending.removeAll { item in
+            let face = faces[item.index]
+            return fans.root(face.left.a) == fans.root(face.right.a) && fans.root(face.left.b) == fans.root(face.right.b)
+        }
+        // Reinstating a face whose ends were already joined cannot change
+        // the groups. Each retained cut releases at least one endpoint.
+        guard !pending.isEmpty else { return nil }
+        var rootForNode = Array(repeating: -1, count: mesh.reference.count)
+        var nodeForRoot = Array(repeating: -1, count: cornerNodes.count)
+        var sources = Array(mesh.reference.indices)
+        for corner in cornerNodes.indices {
+            let root = fans.root(corner)
+            if nodeForRoot[root] < 0 {
+                let parent = cornerNodes[corner]
+                if rootForNode[parent] < 0 {
+                    rootForNode[parent] = root
+                    nodeForRoot[root] = parent
+                } else {
+                    nodeForRoot[root] = sources.count
+                    sources.append(parent)
+                }
+            }
+            cornerNodes[corner] = nodeForRoot[root]
+        }
+        for i in interfaces.indices {
+            let face = faces[interfaces[i].face]
+            interfaces[i].left = edge(face.left)
+            interfaces[i].right = edge(face.right)
+        }
+        for item in pending {
+            let face = faces[item.index]
+            let law = InsertedLaw(traction: item.traction, energy: toughness, stiffness: face.stiffness)
+            let seed = law.evaluate(gap: .zero, previous: law.onset, closes: true)
+            reading.peakSeedTractionError = max(reading.peakSeedTractionError, simd_distance(seed.traction, item.traction) / strength)
+            reading.peakBulkTractionGap = max(reading.peakBulkTractionGap, item.bulkGap)
+            slots[item.index] = interfaces.count
+            interfaces.append(Interface(face: item.index, law: law, left: edge(face.left), right: edge(face.right),
+                                        maxima: Point(repeating: law.onset)))
+        }
+        reading.insertedEdges = interfaces.count
+        let reference = sources.map { mesh.reference[$0] }
+        let triangles = mesh.elements.indices.map { i in
+            (cornerNodes[3 * i], cornerNodes[3 * i + 1], cornerNodes[3 * i + 2])
+        }
+        rebuildSurfaces(reference: reference)
+        let remeshed = Mesh(reference: reference, triangles: triangles, boundary: exterior.map(edge), probe: mesh.probe)
+        return (remeshed, sources)
+    }
+
+    private mutating func rebuildSurfaces(reference: [Point]) {
+        var components = Components(cornerNodes.count / 3)
+        for (i, face) in faces.enumerated() where slots[i] < 0 || !interfaces[slots[i]].failed {
+            components.join(face.a, face.b)
+        }
+        pieces = pieces.indices.map { components.root($0) }
+        var boundaries: [Int: [(edge: Edge, lip: Bool, failed: Bool)]] = [:]
+        for exteriorEdge in exterior {
+            boundaries[pieces[exteriorEdge.a / 3], default: []].append((edge(exteriorEdge), false, false))
+        }
         for seam in interfaces {
-            let bound = seam.length * seam.law.contactStiffness
-            for i in [seam.left.a, seam.left.b, seam.right.a, seam.right.b] { springs[i] += bound }
+            let face = faces[seam.face]
+            boundaries[pieces[face.a], default: []].append((seam.left, true, seam.failed))
+            boundaries[pieces[face.b], default: []].append((Edge(seam.right.b, seam.right.a), true, seam.failed))
         }
-        return springs.enumerated().map { ($0.offset, $0.element) }
-    }
-
-    private mutating func rebuildTopology() {
-        var corners = Components(reference.count)
-        var elements = Components(reference.count / 3)
-        for seam in interfaces where !seam.failed {
-            elements.join(seam.a, seam.b)
-            corners.join(seam.left.a, seam.right.a)
-            corners.join(seam.left.b, seam.right.b)
-        }
-        pieces = (0..<(reference.count / 3)).map { elements.root($0) }
-
-        var faces: [Int: [(Edge, Bool)]] = [:]
-        for (element, edge) in exterior { faces[pieces[element], default: []].append((edge, false)) }
-        for seam in interfaces where seam.failed {
-            faces[pieces[seam.a], default: []].append((seam.left, true))
-            faces[pieces[seam.b], default: []].append((Edge(seam.right.b, seam.right.a), true))
-        }
-        let exposedCorners = Set(faces.values.flatMap { $0.flatMap { [$0.0.a, $0.0.b] } }.map { corners.root($0) })
-        var members: [Int: [Int]] = [:]
-        for i in reference.indices {
-            let root = corners.root(i)
-            if exposedCorners.contains(root) { members[root, default: []].append(i) }
-        }
-        surfaces = faces.keys.sorted().map { id in
+        surfaces = boundaries.keys.sorted().map { id in
             var index: [Int: Int] = [:]
-            var stencil: [[Int]] = []
-            var points: [Point] = []
+            var nodes: [Int] = []
             func locate(_ node: Int) -> Int {
-                let root = corners.root(node)
-                if let existing = index[root] { return existing }
-                let next = stencil.count
-                index[root] = next
-                stencil.append(members[root]!)
-                points.append(reference[node])
+                if let existing = index[node] { return existing }
+                let next = nodes.count
+                index[node] = next
+                nodes.append(node)
                 return next
             }
             var exposed: Set<SIMD2<Int>> = []
-            let edges = faces[id]!.map { edge, cracked in
-                let face = Edge(locate(edge.a), locate(edge.b))
-                if cracked { exposed.insert(SIMD2(face.a, face.b)) }
+            var sourceEdges: [Edge] = []
+            let edges = boundaries[id]!.map { item in
+                let face = Edge(locate(item.edge.a), locate(item.edge.b))
+                if item.lip { exposed.insert(SIMD2(face.a, face.b)) }
+                if !item.lip || item.failed { sourceEdges.append(face) }
                 return face
             }
-            return FractureSurface(id: id, stencil: stencil, surface: ContactSurface(edges: edges, reference: points, young: young),
-                                   exposedEdges: exposed)
+            let surface = ContactSurface(edges: edges, reference: nodes.map { reference[$0] }, young: young, sourceEdges: sourceEdges)
+            return FractureSurface(id: id, nodes: nodes, surface: surface, exposedEdges: exposed)
         }
     }
 
-    // Positive opening and sliding share one effective separation and toughness.
-    // Compression is reversible and independent of cohesive damage.
-    package mutating func accumulate(position: [Point], force: inout [Point]) -> Double? {
-        var values = MaterialFractureReading()
+    package mutating func accumulate(position: [Point], reference: [Point], force: inout [Point]) -> Double? {
+        guard !interfaces.isEmpty else { return 0 }
+        var values = reading
+        values.damagedEdges = 0
+        values.failedEdges = 0
+        values.crackLength = 0
+        values.separation = 0
+        values.storedEnergy = 0
+        values.dissipation = 0
         var contactEnergy = 0.0
-        let abscissa = Point(repeating: 0.5) + Point(-1, 1) / (2 * Double(3).squareRoot())
         for i in interfaces.indices {
             var seam = interfaces[i]
+            let length = faces[seam.face].length
             if seam.handedOff {
-                let (a, b) = seam.gap(position)
                 values.damagedEdges += 1
                 values.failedEdges += 1
-                values.crackLength += seam.length
-                values.separation = max(values.separation, simd_length(a), simd_length(b))
-                values.dissipation += seam.length * seam.law.fractureEnergy
+                values.crackLength += length
+                values.dissipation += length * toughness
+                let (gapA, gapB) = seam.gap(position)
+                values.separation = max(values.separation, simd_length(gapA), simd_length(gapB))
                 continue
             }
             let frame = seam.frame(position)
-            guard frame.length > 0.15 * seam.length else { return nil }
+            guard frame.length.isFinite && frame.length > 0.15 * length else { return nil }
             let (gapA, gapB) = seam.gap(position)
-            let openingA = simd_dot(gapA, frame.normal), openingB = simd_dot(gapB, frame.normal)
-            let weight = 0.5 * seam.length
+            let weight = 0.5 * length
             for q in 0..<2 {
-                let b = abscissa[q], a = 1 - b
-                let opening = a * openingA + b * openingB
-                let shear = simd_dot(a * gapA + b * gapB, frame.tangent)
-                let effective = simd_length(Point(max(0, opening), shear))
-                let sample = seam.law.evaluate(opening: effective, previousMaximum: seam.maxima[q], canSeparate: true)
-                seam.maxima[q] = sample.maximumOpening
-                let secant = (1 - seam.law.damage(at: sample.maximumOpening)) * seam.law.stiffness
-                let compression = min(0, opening) * seam.law.contactStiffness
-                let normal = secant * max(0, opening) + compression
-                let tangential = secant * shear
-                let traction = weight * (normal * frame.normal + tangential * frame.tangent)
-                // Gradient through the rotating face frame, so cohesive forces
-                // remain objective and their total torque is zero under sliding.
-                let rotation = -weight * (normal * shear - tangential * opening) / frame.length * frame.normal
+                let b = q == 0 ? 0.21132486540518713 : 0.7886751345948129
+                let a = 1 - b
+                let gap = a * gapA + b * gapB
+                let local = Point(simd_dot(gap, frame.normal), simd_dot(gap, frame.tangent))
+                let sample = seam.law.evaluate(gap: local, previous: seam.maxima[q], closes: true)
+                seam.maxima[q] = sample.maximum
+                let traction = weight * (sample.traction.x * frame.normal + sample.traction.y * frame.tangent)
+                // Differentiate the rotating local frame as well as the gap.
+                let rotation = -weight * (sample.traction.x * local.y - sample.traction.y * local.x)
+                    / frame.length * frame.normal
                 force[seam.left.a] += a * traction + rotation
                 force[seam.left.b] += b * traction - rotation
                 force[seam.right.a] -= a * traction
                 force[seam.right.b] -= b * traction
-                values.storedEnergy += weight * sample.bondEnergy
-                values.dissipation += weight * sample.dissipated
-                contactEnergy += 0.5 * weight * compression * opening
+                values.storedEnergy += weight * sample.stored
+                values.dissipation += weight * sample.loss
+                contactEnergy += weight * sample.closure
             }
-            if max(seam.maxima.x, seam.maxima.y) > seam.law.onset { values.damagedEdges += 1 }
+            if max(seam.maxima.x, seam.maxima.y) > seam.law.onset + 1e-14 { values.damagedEdges += 1 }
             if seam.failed {
                 values.failedEdges += 1
-                values.crackLength += seam.length
+                values.crackLength += length
                 values.separation = max(values.separation, simd_length(gapA), simd_length(gapB))
             }
             interfaces[i] = seam
         }
-        if values.failedEdges != failedCount {
-            failedCount = values.failedEdges
-            rebuildTopology()
-        }
+        if values.failedEdges != reading.failedEdges { rebuildSurfaces(reference: reference) }
         values.pieces = surfaces.count
         reading = values
         return contactEnergy
     }
 
-    // Switch from face closure to ordinary fragment contact only at zero
-    // local penalty energy, and only after *all* shared broken faces are clear.
+    // Keep matching closure while any paired lips remain bonded or overlapping.
+    // Hand over to ordinary collision at zero local contact energy.
     mutating func prepareFragmentContact(position: [Point]) {
         suppressedPairs.removeAll(keepingCapacity: true)
         guard surfaces.count > 1 else { return }
         var pending: [(Int, SIMD2<Int>)] = []
         for (i, seam) in interfaces.enumerated() where seam.failed && !seam.handedOff {
-            let a = pieces[seam.a], b = pieces[seam.b]
+            let face = faces[seam.face]
+            let a = pieces[face.a], b = pieces[face.b]
             guard a != b else { continue }
             let pair = SIMD2(min(a, b), max(a, b))
             let frame = seam.frame(position)
@@ -282,9 +416,8 @@ package struct MaterialFracture: Sendable {
     }
 
     func crackFaces(position: [Point]) -> [CrackFace] {
-        interfaces.compactMap { seam in
-            let damage = 0.5 * (seam.law.damage(at: seam.maxima.x) + seam.law.damage(at: seam.maxima.y))
-            if damage == 0 { return nil }
+        interfaces.map { seam in
+            let damage = 0.5 * (seam.law.progress(seam.maxima.x) + seam.law.progress(seam.maxima.y))
             let (a, b) = seam.gap(position)
             return CrackFace(first: seam.left, second: seam.right, damage: damage,
                              separation: 0.5 * (simd_length(a) + simd_length(b)))
@@ -294,9 +427,10 @@ package struct MaterialFracture: Sendable {
     func elementDamage() -> [Double] {
         var result = Array(repeating: 0.0, count: pieces.count)
         for seam in interfaces {
-            let value = max(seam.law.damage(at: seam.maxima.x), seam.law.damage(at: seam.maxima.y))
-            result[seam.a] = max(result[seam.a], value)
-            result[seam.b] = max(result[seam.b], value)
+            let face = faces[seam.face]
+            let value = seam.law.progress(max(seam.maxima.x, seam.maxima.y))
+            result[face.a] = max(result[face.a], value)
+            result[face.b] = max(result[face.b], value)
         }
         return result
     }
@@ -304,12 +438,13 @@ package struct MaterialFracture: Sendable {
     func pieceMotion(_ body: Body) -> [MaterialPiece] {
         var totals: [Int: (mass: Double, center: Point, momentum: Point)] = [:]
         for (element, id) in pieces.enumerated() {
+            let triangle = body.mesh.elements[element]
+            let mass = density * triangle.area / 3
             var sum = totals[id] ?? (0, .zero, .zero)
-            for i in (3 * element)..<(3 * element + 3) {
-                let mass = body.mass[i]
+            for node in [triangle.a, triangle.b, triangle.c] {
                 sum.mass += mass
-                sum.center += mass * body.position[i]
-                sum.momentum += mass * body.velocity[i]
+                sum.center += mass * body.position[node]
+                sum.momentum += mass * body.velocity[node]
             }
             totals[id] = sum
         }

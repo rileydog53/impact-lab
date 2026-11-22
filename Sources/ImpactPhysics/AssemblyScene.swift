@@ -2,10 +2,17 @@ import Foundation
 import simd
 
 public struct MaterialFractureSettings: Codable, Equatable, Sendable {
+    public enum MeshPattern: String, CaseIterable, Codable, Sendable {
+        case aligned = "Aligned"
+        case staggered = "Staggered"
+    }
+
     public static let strengthRange = 0.005...0.08
     public static let energyRange = 0.5...50.0
     public var strengthFraction = 0.030
     public var energy = 7.0
+    public var meshPattern: MeshPattern?
+    public var pattern: MeshPattern { meshPattern ?? .aligned }
 
     public init() {}
 
@@ -52,14 +59,24 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && plasticity.isValid && (fracture?.isValid ?? true) && !name.isEmpty && name.count <= 48
     }
 
-    func makeBody(refinement: Int) -> Body {
+    func makeBody(refinement: Int, notchDepth: Double = 0) -> Body {
         let mesh: Mesh
         switch shape {
         case .block:
-            let nx = max(3, Int((size.x / 0.009).rounded())) * refinement
+            let columns = max(3, Int((size.x / 0.009).rounded()))
+            let nx = columns * refinement
             let ny = max(3, Int((size.y / 0.009).rounded())) * refinement
-            mesh = .rectangle(columns: nx, rows: ny) { u, v in
-                Point((u - 0.5) * size.x, (v - 0.5) * size.y)
+            let staggered = fracture?.pattern == .staggered
+            mesh = .rectangle(columns: nx, rows: ny, staggerDiagonals: staggered) { u, v in
+                var x = (u - 0.5) * size.x
+                if staggered && u > 0 && u < 1 && v > 0 && v < 1 {
+                    let row = Int((v * Double(ny)).rounded())
+                    x += (row.isMultiple(of: 2) ? 0.24 : -0.24) * size.x / Double(nx)
+                }
+                // Verification uses a triangular notch with the same physical
+                // boundary at each refinement and both interior mesh patterns.
+                let rise = notchDepth * max(0, 1 - abs(x) * Double(columns) / size.x)
+                return Point(x, (v - 0.5) * size.y + rise * (1 - v))
             }
         case .enclosure:
             mesh = .enclosure(size: size, wall: wall, refinement: refinement)

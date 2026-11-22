@@ -153,9 +153,7 @@ struct AssemblyLab: View {
             $0.onExposedFace && ($0.parts.x == index || $0.parts.y == index)
         }
         return DisclosureGroup(isExpanded: $showPieces) {
-            let events = experiment.simulation.fragmentContacts.filter {
-                $0.onExposedFace && ($0.parts.x == index || $0.parts.y == index)
-            }
+            let events = experiment.simulation.fragmentContacts.filter { $0.parts.x == index || $0.parts.y == index }
             let pieces = experiment.simulation.materialPieces(index)
             ScrollView {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
@@ -177,7 +175,8 @@ struct AssemblyLab: View {
                         let event = events[i]
                         let names = experiment.scene.parts
                         let a = names[event.parts.x].name, b = names[event.parts.y].name
-                        Text("New face · \(a) #\(event.pieces.x + 1) / \(b) #\(event.pieces.y + 1) · \(event.time * 1000, specifier: "%.2f") ms")
+                        let label = event.onExposedFace ? "New face" : "Contact"
+                        Text("\(label) · \(a) #\(event.pieces.x + 1) / \(b) #\(event.pieces.y + 1) · \(event.time * 1000, specifier: "%.2f") ms · \(event.normalImpulse, specifier: "%.3f") N·s/m")
                             .gridCellColumns(4)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).font(.caption2.monospacedDigit())
@@ -185,11 +184,11 @@ struct AssemblyLab: View {
         } label: {
             HStack(spacing: 10) {
                 metric("Pieces", String(reading.pieces))
-                metric("Broken / damaged edges", "\(reading.failedEdges) / \(reading.damagedEdges)")
+                metric("Broken / inserted edges", "\(reading.failedEdges) / \(reading.insertedEdges)")
                 metric("Crack length", reading.crackLength * 1000, "mm")
                 metric("Face separation", reading.separation * 1000, "mm")
                 metric("Material fracture", reading.dissipation, "J/m")
-                if let first { metric("New-face contact", first.time * 1000, "ms") }
+                if let first = first?.firstExposedTime { metric("New-face contact", first * 1000, "ms") }
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
@@ -386,7 +385,9 @@ struct AssemblyLab: View {
             try experiment.scene.save(to: sceneURL)
             experiment.advance(to: experiment.scene.duration)
             let base = experiment.samples
-            result.append("detached and receiver hit a new face=\(experiment.finished && experiment.simulation.materialPieces(0).count > 1 && experiment.simulation.fragmentContacts.contains { $0.parts == SIMD2(0, 4) && $0.onExposedFace })")
+            result.append("finished with dynamically inserted faces=\(experiment.finished && (experiment.simulation.fractureReading(0)?.insertedEdges ?? 0) > 0)")
+            result.append("detached pieces=\(experiment.simulation.materialPieces(0).count)")
+            result.append("receiver hit a new face=\(experiment.simulation.fragmentContacts.contains { $0.parts == SIMD2(0, 4) && $0.onExposedFace })")
             experiment.pin()
             try experiment.configure(AssemblyScene.open(sceneURL))
             experiment.advance(to: experiment.scene.duration)
@@ -408,6 +409,14 @@ struct AssemblyLab: View {
             try? await Task.sleep(for: .milliseconds(450))
             result.append("native window=\(NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" })")
             result.append("comparison sheet=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
+            compare = false
+            var contactScene = try AssemblyScene.open(sceneURL)
+            contactScene.meshResolution = .extraFine
+            try experiment.configure(contactScene)
+            experiment.select(specimen)
+            showPieces = true
+            experiment.advance(to: 0.0402)
+            result.append("paused after observed receiver contact=\(!experiment.running && experiment.simulation.fragmentContacts.contains { $0.parts == SIMD2(0, 4) && $0.onExposedFace && $0.normalImpulse > 0 })")
         } catch {
             result.append("error=\(error.localizedDescription)")
         }

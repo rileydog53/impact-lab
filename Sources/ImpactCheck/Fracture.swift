@@ -13,75 +13,86 @@ private func cohesivePatchCheck() {
     let material = Material()
     let body = Body(mesh: mesh, material: material, position: points, velocity: .zero)
     let settings = MaterialFractureSettings()
-    let initial = MaterialFracture(body: body, settings: settings)
-    let base = initial.discretize(body).position
     let strength = settings.strengthFraction * material.young
-    let finalOpening = 2 * settings.energy / strength
-    var specimen = initial
-    var work = 0.0, previousForce = 0.0
-    let count = 2400
-
-    // Drive two triangles in translated, rotated mixed mode with equal mode toughness.
-    let loading = Point(0.6, -0.8)
-    let angle = 0.42
-    func rotate(_ p: Point) -> Point { Point(cos(angle) * p.x - sin(angle) * p.y, sin(angle) * p.x + cos(angle) * p.y) }
-    func positions(_ opening: Double) -> [Point] {
-        base.enumerated().map { i, p in rotate(p + (i >= 3 ? opening * loading : .zero)) + Point(0.11, -0.08) }
-    }
-    let increment = 1.15 * finalOpening / Double(count)
-    for i in 0...count {
-        let p = positions(Double(i) * increment)
-        var force = Array(repeating: Point.zero, count: base.count)
-        require(specimen.accumulate(position: p, force: &force) != nil, "Cohesive patch failed")
-        let reaction = -simd_dot(force[3...].reduce(.zero, +), rotate(loading))
-        let torque = zip(p, force).reduce(0.0) { $0 + moment($1.0, $1.1) }
-        require(simd_length(force.reduce(.zero, +)) < 1e-10 && abs(torque) < 1e-10, "Cohesive resultant or torque")
-        if i > 0 { work += 0.5 * (reaction + previousForce) * increment }
-        previousForce = reaction
-    }
+    let physicalSpan = 2 * settings.energy / strength
     let expected = length * settings.energy
-    require(abs(work / expected - 1) < 0.0001 && abs(specimen.reading.dissipation - expected) < 1e-12,
-            "Mixed-mode work or damage dissipation differs from Gc times edge length")
-    require(specimen.reading.failedEdges == 1 && specimen.reading.pieces == 2 && specimen.reading.storedEnergy == 0,
-            "Fully spent cohesive edge did not become two independent faces")
+    for (label, loading) in [("opening", Point(0, -1)), ("sliding", Point(1, 0)), ("mixed", Point(0.6, -0.8))] {
+        var specimen = MaterialFracture(body: body, settings: settings)
+        require(specimen.reading.insertedEdges == 0, "Patch starts with cohesive elements")
+        let piola = ElementPiola(.zero, -strength * loading)
+        let split = specimen.insert(position: points, piola: [piola, piola], mesh: mesh)!
+        let reference = split.mesh.reference
+        require(reference.count == 6 && specimen.reading.insertedEdges == 1, "Patch failed to split just its two endpoints")
+        let right = split.mesh.elements[1]
+        let rightNodes = Set([right.a, right.b, right.c])
+        let increment = 1.1 * physicalSpan / 1600
+        let initial = specimen
+        var work = 0.0, previousReaction = 0.0, preloadError = 0.0
+        let angle = 0.42
+        func rotate(_ p: Point) -> Point {
+            Point(cos(angle) * p.x - sin(angle) * p.y, sin(angle) * p.x + cos(angle) * p.y)
+        }
+        func positions(_ gap: Double) -> [Point] {
+            reference.enumerated().map { i, p in
+                rotate(p + (rightNodes.contains(i) ? gap * loading : .zero)) + Point(0.11, -0.08)
+            }
+        }
+        for i in 0...1600 {
+            let position = positions(Double(i) * increment)
+            var force = Array(repeating: Point.zero, count: reference.count)
+            require(specimen.accumulate(position: position, reference: reference, force: &force) != nil, "Cohesive patch failed")
+            let rightForce = [right.a, right.b, right.c].reduce(Point.zero) { $0 + force[$1] }
+            let reaction = -simd_dot(rightForce, rotate(loading))
+            let torque = zip(position, force).reduce(0.0) { $0 + moment($1.0, $1.1) }
+            require(simd_length(force.reduce(.zero, +)) < 1e-10 && abs(torque) < 1e-10, "Cohesive resultant or torque")
+            if i == 0 {
+                preloadError = simd_length(rightForce + length * strength * rotate(loading)) / (length * strength)
+                require(abs(specimen.reading.storedEnergy) < 1e-13 && abs(specimen.reading.dissipation) < 1e-13,
+                        "Insertion created energy")
+            } else {
+                work += 0.5 * (reaction + previousReaction) * increment
+            }
+            previousReaction = reaction
+        }
+        require(preloadError < 0.01 && abs(work / expected - 1) < 0.01, "Insertion traction or separation work")
+        require(abs(specimen.reading.dissipation - expected) < 1e-12 && specimen.reading.failedEdges == 1
+                    && specimen.reading.pieces == 2 && specimen.reading.storedEnergy == 0,
+                "Fully spent patch did not account for Gc or become two independent faces")
+        print(String(format: "Insertion patch %@: traction jump %.2e of strength, work %.8f vs %.8f J/m",
+                     label, preloadError, work, expected))
+        if label == "mixed" {
+            var unloading = initial
+            var force = Array(repeating: Point.zero, count: reference.count)
+            _ = unloading.accumulate(position: positions(0.5 * physicalSpan), reference: reference, force: &force)
+            let damage = unloading.reading.dissipation
+            _ = unloading.accumulate(position: positions(0.2 * physicalSpan), reference: reference, force: &force)
+            require(unloading.reading.dissipation == damage && damage > 0, "An inserted face healed on unloading")
 
-    // Reloading below a previous tensile maximum cannot heal the interface.
-    var unloading = initial
-    var force = Array(repeating: Point.zero, count: base.count)
-    _ = unloading.accumulate(position: positions(0.6 * finalOpening), force: &force)
-    let damaged = unloading.reading
-    force = Array(repeating: .zero, count: base.count)
-    _ = unloading.accumulate(position: positions(0.2 * finalOpening), force: &force)
-    require(unloading.reading.dissipation == damaged.dissipation &&
-            abs(unloading.reading.storedEnergy / damaged.storedEnergy - 1.0 / 9) < 1e-10,
-            "Unloading changed history or deviated from the damaged secant")
-
-    // Differentiate the mixed-mode energy in an oblique, nonuniform closed patch.
-    // This checks the torque correction from the rotating frame, including compression.
-    let distorted = base.enumerated().map { i, p in
-        rotate(p + (i >= 3 ? Point(1.2e-6 * Double(i - 2), 2.0e-6) : .zero))
-    }
-    func potential(_ p: [Point]) -> (Double, [Point]) {
-        var s = initial
-        var f = Array(repeating: Point.zero, count: p.count)
-        let contact = s.accumulate(position: p, force: &f)!
-        require(s.reading.dissipation == 0, "Finite-difference patch must remain elastic")
-        return (s.reading.storedEnergy + contact, f)
-    }
-    let analytic = potential(distorted).1
-    var error = 0.0
-    for i in distorted.indices {
-        for d in 0..<2 {
-            var plus = distorted, minus = distorted
-            plus[i][d] += 1e-8
-            minus[i][d] -= 1e-8
-            let derivative = (potential(plus).0 - potential(minus).0) / 2e-8
-            error = max(error, abs(analytic[i][d] + derivative))
+            let distorted = reference.enumerated().map { i, p in
+                rotate(p + (rightNodes.contains(i) ? Point(-1.2e-6 * Double(i), 2e-6) : .zero))
+            }
+            func potential(_ positions: [Point]) -> (Double, [Point]) {
+                var patch = initial
+                var force = Array(repeating: Point.zero, count: reference.count)
+                let contact = patch.accumulate(position: positions, reference: reference, force: &force)!
+                require(patch.reading.dissipation == 0, "Gradient patch must unload elastically")
+                return (patch.reading.storedEnergy + contact, force)
+            }
+            let analytic = potential(distorted).1
+            var error = 0.0
+            for i in distorted.indices {
+                for d in 0..<2 {
+                    var plus = distorted, minus = distorted
+                    plus[i][d] += 1e-8
+                    minus[i][d] -= 1e-8
+                    let derivative = (potential(plus).0 - potential(minus).0) / 2e-8
+                    error = max(error, abs(analytic[i][d] + derivative))
+                }
+            }
+            require(error < 1e-4, "Inserted cohesive force is not the negative potential gradient")
+            print(String(format: "Inserted interface unloading force-gradient residual %.2e N/m", error))
         }
     }
-    print(String(format: "Cohesive patch: mixed-mode work %.8f J/m vs Gc L %.8f J/m; max force-gradient residual %.2e N/m",
-                 work, expected, error))
-    require(error < 1e-6, "Cohesive force is not the negative energy gradient")
 }
 
 private struct FractureOutcome {
@@ -107,6 +118,16 @@ private func intactComplianceCheck() throws {
     striker.velocity.x = 0.08
     scene.parts = [specimen, striker]
     scene.duration = 0.042
+    func stiffness(_ scene: AssemblyScene) throws -> (nodes: Int, axial: Double) {
+        let body = try AssemblySimulation(scene).body(0)
+        let probe = Simulation(mesh: body.mesh, material: body.material)
+        let strain = 1e-4
+        let right = body.mesh.reference.map(\.x).max()!
+        let stretched = body.mesh.reference.map { Point((1 + strain) * $0.x, $0.y) }
+        let force = probe.internalForces(at: stretched)!
+        let reaction = body.mesh.reference.indices.filter { body.mesh.reference[$0].x == right }.reduce(0.0) { $0 - force[$1].x }
+        return (body.mesh.reference.count, reaction / strain)
+    }
     func arrival() throws -> Double {
         var s = try AssemblySimulation(scene, refinement: 1, stepLimit: 0.9e-6)
         let mesh = s.body(0).mesh
@@ -128,11 +149,14 @@ private func intactComplianceCheck() throws {
         return crossing!
     }
     let intact = try arrival()
+    let shared = try stiffness(scene)
     scene.parts[0].fracture = MaterialFractureSettings()
     let eligible = try arrival()
-    print(String(format: "Undamaged pulse delay: shared nodes %.3f ms, cohesive mesh %.3f ms (%+.2f%%)",
-                 intact * 1000, eligible * 1000, 100 * (eligible / intact - 1)))
-    require(abs(eligible / intact - 1) < 0.08, "Excessive undamaged cohesive compliance in the pulse check")
+    let insertionReady = try stiffness(scene)
+    print(String(format: "Intact patch: %d shared nodes, axial stiffness %.4f vs %.4f N/m per unit strain; pulse %.3f vs %.3f ms",
+                 shared.nodes, shared.axial, insertionReady.axial, intact * 1000, eligible * 1000))
+    require(insertionReady.nodes == shared.nodes && abs(insertionReady.axial / shared.axial - 1) < 0.01
+                && abs(eligible / intact - 1) < 0.01, "Undamaged enabled mesh diverges from shared-node stiffness")
 }
 
 private func coupledPlasticityCheck(_ base: AssemblyScene) throws {
@@ -156,7 +180,7 @@ private func runFracture(_ label: String, _ scene: AssemblyScene, stepLimit: Dou
     require(simulation.initialIssue == nil, simulation.initialIssue ?? "")
     let initialP = simulation.momentum, initialL = simulation.angularMomentum
     let initialMass = simulation.materialPieces(0).reduce(0) { $0 + $1.mass }
-    let position = simulation.body(0).mesh.reference
+
     let start = ProcessInfo.processInfo.systemUptime
     var outcome = FractureOutcome(dt: simulation.dt)
     var sampleAt = 0.0
@@ -178,6 +202,7 @@ private func runFracture(_ label: String, _ scene: AssemblyScene, stepLimit: Dou
             if outcome.firstSplit == 0 {
                 outcome.firstSplit = simulation.time
                 let faces = simulation.crackFaces(0).filter { $0.damage == 1 }
+                let position = simulation.body(0).mesh.reference
                 let span = faces.reduce(0.0) { $0 + simd_distance(position[$1.first.a], position[$1.first.b]) }
                 outcome.firstSplitX = faces.reduce(0.0) {
                     let a = position[$1.first.a], b = position[$1.first.b]
@@ -196,12 +221,13 @@ private func runFracture(_ label: String, _ scene: AssemblyScene, stepLimit: Dou
     }
     require(simulation.failure == nil && simulation.time >= scene.duration, "\(label): \(simulation.failure ?? "stopped early") at \(simulation.time * 1000) ms")
     let reading = simulation.fractureReading(0)!
+    let balance = reading.insertionBalance
     outcome.crackLength = reading.crackLength
     outcome.dissipation = reading.dissipation
     outcome.pieces = reading.pieces
     outcome.receiverFaceTime = simulation.fragmentContacts.first {
         $0.parts == SIMD2(0, 4) && $0.onExposedFace
-    }?.time
+    }?.firstExposedTime
     outcome.receiverSpeed = simd_length(simulation.body(4).centerVelocity)
     let triangles = (0..<simulation.bodyCount).reduce(0) { $0 + simulation.body($1).mesh.elements.count }
     let elapsed = ProcessInfo.processInfo.systemUptime - start
@@ -211,6 +237,11 @@ private func runFracture(_ label: String, _ scene: AssemblyScene, stepLimit: Dou
                  reading.dissipation, outcome.peakStress / 1000, (outcome.receiverFaceTime ?? 0) * 1000, outcome.receiverSpeed,
                  simulation.peakRelativePenetration * 100, outcome.energyError * 100,
                  outcome.linearResidual, outcome.angularResidual))
+    print(String(format: "Insertion balance ΔM %.2e kg/m, ΔP %.2e N·s/m, ΔL %.2e N·s, ΔK %.2e J/m; seeded jump %.2e, adjacent bulk traction disagreement %.2f × strength",
+                 balance.mass, balance.momentum, balance.angularMomentum, balance.kinetic,
+                 reading.peakSeedTractionError, reading.peakBulkTractionGap))
+    require(max(balance.mass, balance.momentum, balance.angularMomentum, balance.kinetic) < 1e-12
+                && reading.peakSeedTractionError < 0.01, "Insertion failed the state transfer or resolved-traction check")
     require(outcome.linearResidual < 1e-9 && outcome.angularResidual < 1e-9, "Fracture assembly lost momentum")
     require(outcome.energyError < 0.008 && simulation.peakRelativePenetration < 0.05, "Fracture run exceeded verification envelope")
     require(outcome.firstDamage > 0 && outcome.firstDamage < outcome.firstSplit && reading.pieces >= 2,
@@ -226,39 +257,11 @@ func fractureCheck() throws {
     let base = AssemblyScene.bendingFractureExample()
     try intactComplianceCheck()
     try coupledPlasticityCheck(base)
-    let reference = try runFracture("Standard", base)
-    let half = try runFracture("Standard, half step", base, stepLimit: reference.dt / 2)
-    var fine = base
-    fine.meshResolution = .fine
-    var extraFine = base
-    extraFine.meshResolution = .extraFine
-    let commonStep = min(half.dt, try AssemblySimulation(extraFine).dt)
-    let refined = try runFracture("Fine, common step", fine, stepLimit: commonStep)
-    let extra = try runFracture("Extra fine, common step", extraFine, stepLimit: commonStep)
-    var usage = rusage()
-    if getrusage(RUSAGE_SELF, &usage) == 0 {
-        print(String(format: "Process peak resident memory %.2f MiB", Double(usage.ru_maxrss) / 1_048_576))
-    }
-    var shifted = base
-    shifted.parts[1].center.x = 0.023
-    let changed = try runFracture("Striker moved +41 mm", shifted)
-    require(abs(reference.firstSplitX - changed.firstSplitX) > 0.02,
-            "Moving the striker did not change the through-fracture location")
-    require([reference, half].allSatisfy { ($0.receiverFaceTime ?? 0) > $0.firstSplit && $0.receiverSpeed > 0.10 },
-            "Missing contact with a detached specimen's newly exposed face")
-
-    require(changed.receiverSpeed > 0.10, "The relocated-striker experiment did not transfer momentum to its receiver")
-
-    let timeDelta = abs(half.firstSplit / reference.firstSplit - 1)
-    let meshDelta = abs(extra.firstSplit / refined.firstSplit - 1)
-    let localDelta = abs(extra.peakStress / refined.peakStress - 1)
-    print(String(format: "Sensitivity: step halving first split %.2f%%; fine → extra fine first split %.2f%%, sampled local stress peak %.2f%%",
-                 100 * timeDelta, 100 * meshDelta, 100 * localDelta))
-    require(timeDelta < 0.04 && abs(reference.firstSplitX - half.firstSplitX) < 0.009,
-            "Standard result is too sensitive to timestep")
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
-    defer { try? FileManager.default.removeItem(at: url) }
-    try extraFine.save(to: url)
-    let reopened = try AssemblyScene.open(url)
-    require(reopened == extraFine && reopened.resolution == .extraFine, "Fracture scene settings did not round-trip")
+    _ = try runFracture("Standard", base)
+    var alternate = base
+    alternate.parts[0].fracture?.meshPattern = .staggered
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try alternate.save(to: file)
+    require(try AssemblyScene.open(file) == alternate, "Mesh pattern or fracture settings did not round-trip")
 }

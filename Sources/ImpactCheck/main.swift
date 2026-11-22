@@ -102,6 +102,28 @@ if CommandLine.arguments.dropFirst().contains("--fracture") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--fracture-study") {
+    let gatesPassed = try fractureStudy()
+    exit(gatesPassed ? EXIT_SUCCESS : EXIT_FAILURE)
+}
+
+if CommandLine.arguments.dropFirst().contains("--notched-bend") {
+    let gatePassed = try notchedBendStudy()
+    exit(gatePassed ? EXIT_SUCCESS : EXIT_FAILURE)
+}
+
+if CommandLine.arguments.dropFirst().contains("--fracture-stability") {
+    try fractureStabilityProbe()
+    exit(EXIT_SUCCESS)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--fracture-case") {
+    let values = Array(CommandLine.arguments.dropFirst(index + 1))
+    require(values.count == 2, "Usage: --fracture-case aligned|staggered 1|2|3")
+    try fractureAssemblyCase(values[0], values[1])
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--assembly") {
     try assemblyCheck()
     exit(EXIT_SUCCESS)
