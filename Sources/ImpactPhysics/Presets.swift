@@ -5,6 +5,7 @@ public enum Preset: String, CaseIterable, Identifiable, Sendable {
     case bar = "Bar impact"
     case ring = "Ring impact"
     case block = "Tilted block"
+    case twoBars = "Two-bar collision"
 
     public var id: Self { self }
 
@@ -18,6 +19,8 @@ public enum Preset: String, CaseIterable, Identifiable, Sendable {
         case .block:
             Simulation(mesh: .roundedBlock(), material: material, speed: speed, gap: 0.004,
                        tilt: mirrored ? -Self.blockTilt : Self.blockTilt)
+        case .twoBars:
+            Simulation.alignedBars(material: material, speed: speed)
         }
     }
 }

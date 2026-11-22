@@ -114,12 +114,17 @@ public struct Body: Sendable {
     let wallStiffness: [Double]
 
     init(mesh: Mesh, material: Material, speed: Double, gap: Double, penalty: Double, tilt: Double) {
-        self.mesh = mesh
-        self.material = material
         let c = cos(tilt), s = sin(tilt)
         let rotated = mesh.reference.map { Point(c * $0.x - s * $0.y, s * $0.x + c * $0.y) }
         let offset = Point(rotated.map(\.x).max()! + gap, 0)
-        position = rotated.map { $0 - offset }
+        self.init(mesh: mesh, material: material, position: rotated.map { $0 - offset },
+                  speed: speed, wallPenalty: penalty)
+    }
+
+    init(mesh: Mesh, material: Material, position: [Point], speed: Double, wallPenalty: Double = 0) {
+        self.mesh = mesh
+        self.material = material
+        self.position = position
         velocity = Array(repeating: Point(speed, 0), count: position.count)
         var nodalMass = Array(repeating: 0.0, count: position.count)
         for e in mesh.elements {
@@ -138,7 +143,11 @@ public struct Body: Sendable {
             tributaryLength[edge.b] += halfLength
         }
         boundaryNodes = tributaryLength.indices.filter { tributaryLength[$0] > 0 }
-        wallStiffness = tributaryLength.map { $0 * material.young * penalty }
+        wallStiffness = tributaryLength.map { $0 * material.young * wallPenalty }
+    }
+
+    public var centerVelocity: Point {
+        zip(mass, velocity).reduce(.zero) { $0 + $1.0 * $1.1 } / totalMass
     }
 }
 
@@ -149,51 +158,20 @@ public struct Diagnostics: Sendable {
     public let angularMomentum: Double
 }
 
-public struct Simulation: Sendable {
-    public let dt: Double
-    public let gap: Double
-    public private(set) var body: Body
-    public private(set) var time = 0.0
-    public private(set) var strain: [Double]
-    public private(set) var failure: String?
-    public private(set) var wallImpulse = 0.0
-    public private(set) var wallAngularImpulse = 0.0
-    public private(set) var peakPenetration = 0.0
-    private let initialKinetic: Double
-    private var elasticEnergy = 0.0
-    private var contactEnergy = 0.0
-    private var internalForce: [Point]
-    private var contactForce: [Point]
-    private var nextInternal: [Point]
-    private var nextContact: [Point]
-    private var nextPosition: [Point]
-    private var nextVelocity: [Point]
-    private var nextStrain: [Double]
+private struct BodyStep: Sendable {
+    var body: Body
+    var strain: [Double]
+    var internalForce: [Point]
+    var contactForce: [Point]
+    var nextInternal: [Point]
+    var nextContact: [Point]
+    var nextPosition: [Point]
+    var nextVelocity: [Point]
+    var nextStrain: [Double]
 
-    public init(mesh: Mesh = .bar(), material: Material = Material(), speed: Double = 0.4,
-                gap: Double = 0.0005, penalty: Double = 2500, stepScale: Double = 1, tilt: Double = 0) {
-        precondition(material.young > 0 && material.density > 0 && abs(material.poisson) < 0.5)
-        precondition(gap >= 0 && penalty > 0 && stepScale > 0 && stepScale <= 1)
-        body = Body(mesh: mesh, material: material, speed: speed, gap: gap, penalty: penalty, tilt: tilt)
-        self.gap = gap
-        initialKinetic = 0.5 * body.totalMass * speed * speed
-        var stiffness = Array(repeating: 0.0, count: body.mass.count)
-        for e in mesh.elements {
-            // A lumped-mass bound on the initial elastic spectral radius.
-            let gradientSum = simd_length(e.g0) + simd_length(e.g1) + simd_length(e.g2)
-            let scale = e.area * material.density * pow(material.waveSpeed, 2) * gradientSum
-            stiffness[e.a] += scale * simd_length(e.g0)
-            stiffness[e.b] += scale * simd_length(e.g1)
-            stiffness[e.c] += scale * simd_length(e.g2)
-        }
-        var omegaSquared = 0.0
-        for i in body.mass.indices {
-            omegaSquared = max(omegaSquared, (stiffness[i] + body.wallStiffness[i]) / body.mass[i])
-        }
-        // Central difference is linearly stable for dt * omega < 2.
-        // The margin also accommodates changes in the tangent during impact.
-        dt = stepScale * 0.8 / sqrt(omegaSquared)
-        strain = Array(repeating: 0, count: mesh.elements.count)
+    init(_ body: Body) {
+        self.body = body
+        strain = Array(repeating: 0, count: body.mesh.elements.count)
         nextStrain = strain
         internalForce = Array(repeating: .zero, count: body.mass.count)
         contactForce = internalForce
@@ -201,6 +179,107 @@ public struct Simulation: Sendable {
         nextContact = internalForce
         nextPosition = body.position
         nextVelocity = body.velocity
+    }
+
+    mutating func drift(_ dt: Double) -> Bool {
+        for i in body.mass.indices {
+            let acceleration = (internalForce[i] + contactForce[i]) / body.mass[i]
+            let position = body.position[i] + dt * (body.velocity[i] + 0.5 * dt * acceleration)
+            guard position.x.isFinite && position.y.isFinite else { return false }
+            nextPosition[i] = position
+        }
+        return true
+    }
+
+    mutating func assemble() -> Double? {
+        Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain)
+    }
+
+    mutating func kick(_ dt: Double) -> Bool {
+        for i in body.mass.indices {
+            let force = internalForce[i] + contactForce[i] + nextInternal[i] + nextContact[i]
+            let velocity = body.velocity[i] + (0.5 * dt / body.mass[i]) * force
+            guard velocity.x.isFinite && velocity.y.isFinite else { return false }
+            nextVelocity[i] = velocity
+        }
+        return true
+    }
+
+    mutating func accept() {
+        swap(&body.velocity, &nextVelocity)
+        swap(&body.position, &nextPosition)
+        swap(&internalForce, &nextInternal)
+        swap(&contactForce, &nextContact)
+        swap(&strain, &nextStrain)
+    }
+}
+
+public struct Simulation: Sendable {
+    public let dt: Double
+    public let gap: Double
+    public var body: Body { primary.body }
+    public var strain: [Double] { primary.strain }
+    public var secondBody: Body? { secondary?.body }
+    public var secondStrain: [Double]? { secondary?.strain }
+    public private(set) var time = 0.0
+    public private(set) var failure: String?
+    public private(set) var wallImpulse = 0.0
+    public private(set) var wallAngularImpulse = 0.0
+    public private(set) var peakPenetration = 0.0
+    private let initialKinetic: Double
+    private var elasticEnergy = 0.0
+    private var contactEnergy = 0.0
+    private var primary: BodyStep
+    private var secondary: BodyStep?
+    private let barContact: BarContact?
+
+    public init(mesh: Mesh = .bar(), material: Material = Material(), speed: Double = 0.4,
+                gap: Double = 0.0005, penalty: Double = 2500, stepScale: Double = 1, tilt: Double = 0) {
+        precondition(gap >= 0 && penalty > 0)
+        let body = Body(mesh: mesh, material: material, speed: speed, gap: gap, penalty: penalty, tilt: tilt)
+        self.init(primary: body, gap: gap, stepScale: stepScale)
+    }
+
+    init(primary: Body, secondary: Body? = nil, barContact: BarContact? = nil,
+         gap: Double, stepScale: Double) {
+        let material = primary.material
+        precondition(material.young > 0 && material.density > 0 && abs(material.poisson) < 0.5)
+        precondition(stepScale > 0 && stepScale <= 1)
+        precondition((secondary == nil) == (barContact == nil))
+        self.primary = BodyStep(primary)
+        self.secondary = secondary.map(BodyStep.init)
+        self.barContact = barContact
+        self.gap = gap
+        // Each body starts at a uniform velocity.
+        func kineticEnergy(_ body: Body) -> Double {
+            0.5 * body.totalMass * simd_length_squared(body.velocity[0])
+        }
+        initialKinetic = kineticEnergy(primary) + (secondary.map(kineticEnergy) ?? 0)
+        let firstOmega = Self.squaredFrequency(of: primary, contact: barContact?.left)
+        let secondOmega = secondary.map { Self.squaredFrequency(of: $0, contact: barContact?.right) } ?? 0
+        // Central difference is linearly stable for dt * omega < 2.
+        // The margin also accommodates changes in the tangent during impact.
+        dt = stepScale * 0.8 / sqrt(max(firstOmega, secondOmega))
+    }
+
+    private static func squaredFrequency(of body: Body, contact: BarFace?) -> Double {
+        let material = body.material
+        var stiffness = Array(repeating: 0.0, count: body.mass.count)
+        for e in body.mesh.elements {
+            // A lumped-mass bound on the initial elastic spectral radius.
+            let gradientSum = simd_length(e.g0) + simd_length(e.g1) + simd_length(e.g2)
+            let scale = e.area * material.density * pow(material.waveSpeed, 2) * gradientSum
+            stiffness[e.a] += scale * simd_length(e.g0)
+            stiffness[e.b] += scale * simd_length(e.g1)
+            stiffness[e.c] += scale * simd_length(e.g2)
+        }
+        if let contact {
+            // A face node can carry its own spring plus endpoint reactions from
+            // the opposing face. Budget both in the lumped row-sum estimate.
+            let allowance = 8 * (contact.stiffness.max() ?? 0)
+            for i in contact.nodes { stiffness[i] += allowance }
+        }
+        return body.mass.indices.reduce(0) { max($0, (stiffness[$1] + body.wallStiffness[$1]) / body.mass[$1]) }
     }
 
     public var probeStrain: Double {
@@ -211,12 +290,16 @@ public struct Simulation: Sendable {
         var kinetic = 0.0
         var momentum = Point.zero
         var angularMomentum = 0.0
-        for i in body.mass.indices {
-            let nodalMomentum = body.mass[i] * body.velocity[i]
-            momentum += nodalMomentum
-            angularMomentum += cross2D(body.position[i], nodalMomentum)
-            kinetic += 0.5 * body.mass[i] * simd_length_squared(body.velocity[i])
+        func accumulate(_ body: Body) {
+            for i in body.mass.indices {
+                let nodalMomentum = body.mass[i] * body.velocity[i]
+                momentum += nodalMomentum
+                angularMomentum += cross2D(body.position[i], nodalMomentum)
+                kinetic += 0.5 * body.mass[i] * simd_length_squared(body.velocity[i])
+            }
         }
+        accumulate(body)
+        if let secondBody { accumulate(secondBody) }
         let relativeError = (kinetic + elasticEnergy + contactEnergy - initialKinetic)
             / max(initialKinetic, Double.leastNormalMagnitude)
         return Diagnostics(kinetic: kinetic, elastic: elasticEnergy, contact: contactEnergy,
@@ -225,7 +308,7 @@ public struct Simulation: Sendable {
     }
 
     package func internalForces(at position: [Point]) -> [Point]? {
-        var forces = internalForce
+        var forces = primary.internalForce
         var strain = strain
         guard Self.assemble(body: body, position: position, forces: &forces, strain: &strain) != nil
         else { return nil }
@@ -236,62 +319,59 @@ public struct Simulation: Sendable {
 
     @discardableResult public mutating func step() -> Bool {
         guard failure == nil else { return false }
-        for i in body.mass.indices {
-            let acceleration = (internalForce[i] + contactForce[i]) / body.mass[i]
-            let position = body.position[i] + dt * (body.velocity[i] + 0.5 * dt * acceleration)
-            guard position.x.isFinite && position.y.isFinite else {
-                failure = "Position became non-finite."
-                return false
-            }
-            nextPosition[i] = position
+        guard primary.drift(dt), secondary?.drift(dt) ?? true else {
+            failure = "Position became non-finite."
+            return false
         }
-        guard let nextElastic = Self.assemble(body: body, position: nextPosition,
-                                               forces: &nextInternal, strain: &nextStrain) else {
+        guard let firstElastic = primary.assemble(),
+              let secondElastic = secondary == nil ? 0 : secondary?.assemble() else {
             failure = "An element inverted or its stress became non-finite."
             return false
         }
-        var nextContactEnergy = 0.0
-        var impulse = 0.0
-        var angularImpulse = 0.0
-        var penetration = 0.0
-        for i in body.boundaryNodes {
-            let overlap = max(0, nextPosition[i].x)
-            let reaction = body.wallStiffness[i] * overlap
-            nextContact[i] = Point(-reaction, 0)
-            penetration = max(penetration, overlap)
-            nextContactEnergy += 0.5 * reaction * overlap
-            // Trapezoidal wall kicks match the velocity updates. Torque is
-            // evaluated about the wall origin at each kick's own position.
-            impulse += 0.5 * dt * (reaction - contactForce[i].x)
-            angularImpulse += 0.5 * dt * (nextPosition[i].y * reaction
-                                         - body.position[i].y * contactForce[i].x)
+        let nextElastic = firstElastic + secondElastic
+        var contact = ContactResult()
+        if let barContact {
+            contact = barContact.assemble(left: primary.nextPosition, right: secondary!.nextPosition,
+                                          leftForce: &primary.nextContact, rightForce: &secondary!.nextContact)
+        } else {
+            contact = wallContact()
         }
-        guard (nextContactEnergy + nextElastic).isFinite, (wallImpulse + impulse).isFinite,
-              (wallAngularImpulse + angularImpulse).isFinite else {
+        guard (contact.energy + nextElastic).isFinite, (wallImpulse + contact.wallImpulse).isFinite,
+              (wallAngularImpulse + contact.wallAngularImpulse).isFinite else {
             failure = "Contact energy or impulse became non-finite."
             return false
         }
-        for i in body.mass.indices {
-            let force = internalForce[i] + contactForce[i] + nextInternal[i] + nextContact[i]
-            let velocity = body.velocity[i] + (0.5 * dt / body.mass[i]) * force
-            guard velocity.x.isFinite && velocity.y.isFinite else {
-                failure = "Velocity became non-finite."
-                return false
-            }
-            nextVelocity[i] = velocity
+        guard primary.kick(dt), secondary?.kick(dt) ?? true else {
+            failure = "Velocity became non-finite."
+            return false
         }
-        swap(&body.velocity, &nextVelocity)
-        swap(&body.position, &nextPosition)
-        swap(&internalForce, &nextInternal)
-        swap(&contactForce, &nextContact)
-        swap(&strain, &nextStrain)
+        primary.accept()
+        secondary?.accept()
         time += dt
         elasticEnergy = nextElastic
-        contactEnergy = nextContactEnergy
-        wallImpulse += impulse
-        wallAngularImpulse += angularImpulse
-        peakPenetration = max(peakPenetration, penetration)
+        contactEnergy = contact.energy
+        wallImpulse += contact.wallImpulse
+        wallAngularImpulse += contact.wallAngularImpulse
+        peakPenetration = max(peakPenetration, contact.penetration)
         return true
+    }
+
+    private mutating func wallContact() -> ContactResult {
+        var result = ContactResult()
+        for i in primary.body.boundaryNodes {
+            let overlap = max(0, primary.nextPosition[i].x)
+            let reaction = primary.body.wallStiffness[i] * overlap
+            let previousReaction = primary.contactForce[i].x
+            primary.nextContact[i] = Point(-reaction, 0)
+            result.penetration = max(result.penetration, overlap)
+            result.energy += 0.5 * reaction * overlap
+            // Trapezoidal wall kicks match the velocity updates. Torque is
+            // evaluated about the wall origin at each kick's own position.
+            result.wallImpulse += 0.5 * dt * (reaction - previousReaction)
+            result.wallAngularImpulse += 0.5 * dt * (primary.nextPosition[i].y * reaction
+                                                    - primary.body.position[i].y * previousReaction)
+        }
+        return result
     }
 
     static func assemble(body: Body, position: [Point], forces: inout [Point],

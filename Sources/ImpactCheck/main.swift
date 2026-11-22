@@ -126,3 +126,4 @@ patchCheck()
 
 ringCheck()
 blockCheck()
+twoBarCheck()
