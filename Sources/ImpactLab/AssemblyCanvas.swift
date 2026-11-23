@@ -12,40 +12,132 @@ private let crackColor = Color(red: 1, green: 0.39, blue: 0.33)
 enum AssemblyField: String, CaseIterable {
     case strain = "Axial strain"
     case stress = "Von Mises stress"
+    case maximum = "Maximum principal stress"
+    case minimum = "Minimum principal stress"
     case pressure = "Mean pressure"
     case plastic = "Plastic strain"
     case damage = "Interface damage"
     case separation = "Crack separation"
+    case speed = "Material speed"
 
-    var scale: Double {
+    var signed: Bool { self == .strain || self == .pressure || self == .maximum || self == .minimum }
+    var isStress: Bool { self == .stress || self == .pressure || self == .maximum || self == .minimum }
+
+    var definition: String {
         switch self {
-        case .strain, .plastic: 0.08
-        case .stress, .pressure: 60_000
+        case .strain: "Element Green–Lagrange axial strain. Negative is compression."
+        case .stress: "Von Mises equivalent stress from the 3D Cauchy tensor in plane strain."
+        case .maximum: "Largest principal Cauchy stress, including the out-of-plane component. Positive is tension."
+        case .minimum: "Smallest principal Cauchy stress, including the out-of-plane component. Negative is compression."
+        case .pressure: "Minus one third of the Cauchy stress trace. Positive is compression."
+        case .plastic: "Accumulated equivalent plastic strain from the J2 history. Elastic bodies have no plastic field."
+        case .damage: "Largest damage of adjacent cohesive faces (0 intact, 1 failed). Permanent layer bonds share nodes."
+        case .separation: "Mean distance between matching face nodes, including slip. Failed faces can reclose."
+        case .speed: "Magnitude of the mean nodal velocity in each element. Arrows show body mean velocity."
+        }
+    }
+
+    var provenance: String {
+        switch self {
+        case .strain, .plastic, .damage, .separation: "Solver output"
+        default: "Derived from the recorded solver state"
+        }
+    }
+
+    func values(_ result: AssemblyReplayBody) -> [Double] {
+        switch self {
+        case .strain: return result.strain
+        case .stress: return result.stress.map(\.equivalent)
+        case .maximum: return result.stress.map(\.maximumPrincipal)
+        case .minimum: return result.stress.map(\.minimumPrincipal)
+        case .pressure: return result.stress.map(\.pressure)
+        case .plastic: return result.plasticStrain
+        case .damage: return result.damage
+        case .separation: return []
+        case .speed:
+            let v = result.body.velocity
+            return result.body.mesh.elements.map { simd_length((v[$0.a] + v[$0.b] + v[$0.c]) / 3) }
+        }
+    }
+
+    func defaultLimit(metal: Bool) -> Double {
+        switch self {
+        case .strain: metal ? 0.01 : 0.08
+        case .stress, .maximum, .minimum, .pressure: metal ? 300e6 : 60e3
+        case .plastic: metal ? 0.025 : 0.08
         case .damage: 1
         case .separation: 0.010
+        case .speed: metal ? 30 : 1.5
         }
     }
 
-    var legend: String {
+    func display(_ value: Double, limit: Double) -> String {
         switch self {
-        case .strain: "Axial strain · −8% compression / +8% tension"
-        case .stress: "Cauchy von Mises stress · 0–60 kPa"
-        case .pressure: "Cauchy pressure · −60 kPa tension / +60 kPa compression"
-        case .plastic: "Accumulated equivalent plastic strain · 0–8%"
-        case .damage: "Interface damage · 0–1 · red lines mark failed faces"
-        case .separation: "Face separation · 0–10 mm · color on faces"
+        case .stress, .maximum, .minimum, .pressure:
+            let mpa = limit >= 1e6
+            return String(format: "%.3g %@", value / (mpa ? 1e6 : 1000), mpa ? "MPa" : "kPa")
+        case .strain, .plastic: return String(format: "%.3g%%", value * 100)
+        case .separation: return String(format: "%.3g mm", value * 1000)
+        case .speed: return String(format: "%.3g m/s", value)
+        case .damage: return String(format: "%.3g", value)
         }
     }
 
-    func values(_ index: Int, in simulation: AssemblySimulation) -> [Double] {
-        switch self {
-        case .strain: simulation.strain(index)
-        case .stress: simulation.stress(index)
-        case .pressure: simulation.pressure(index)
-        case .plastic: simulation.plasticStrain(index)
-        case .damage: simulation.materialDamage(index)
-        case .separation: []
+    func shade(_ bin: Int) -> Color {
+        let strength = Double(abs(bin)) / 6
+        let base = (r: 0.16, g: 0.21, b: 0.26)
+        let end = bin < 0 ? (r: 0.34, g: 0.67, b: 0.98)
+            : (self == .damage || self == .separation ? (r: 1.0, g: 0.33, b: 0.29) : (r: 1.0, g: 0.71, b: 0.28))
+        return Color(red: base.r + strength * (end.r - base.r), green: base.g + strength * (end.g - base.g),
+                     blue: base.b + strength * (end.b - base.b))
+    }
+
+    func bin(_ value: Double, limit: Double) -> Int {
+        Int((6 * min(1, max(-1, value / limit))).rounded())
+    }
+
+    func limit(for range: AssemblyFieldRange, frame: AssemblyReplayFrame?, metal: Bool) -> Double {
+        let standard = defaultLimit(metal: metal)
+        if self == .damage { return 1 }
+        switch range {
+        case .detail: return standard / 10
+        case .standard: return standard
+        case .wide: return standard * 4
+        case .automatic:
+            let peak = frame?.bodies.reduce(0.0) { prior, body in
+                let values = self == .separation ? body.cracks.map(\.separation) : self.values(body)
+                return max(prior, values.lazy.map(abs).max() ?? 0)
+            } ?? 0
+            return peak > 0 ? peak : standard
         }
+    }
+}
+
+enum AssemblyFieldRange: String, CaseIterable {
+    case standard = "Standard"
+    case detail = "Detail (10× narrower)"
+    case wide = "Wide (4× wider)"
+    case automatic = "Fit current frame"
+}
+
+struct AssemblyFieldLegend: View {
+    let field: AssemblyField
+    let limit: Double
+
+    var body: some View {
+        let low = field.signed ? -limit : 0
+        HStack(spacing: 6) {
+            Text(field.display(low, limit: limit))
+            HStack(spacing: 0) {
+                ForEach((field.signed ? -6 : 0)...6, id: \.self) { bin in field.shade(bin) }
+            }.frame(width: 108, height: 8).clipShape(.capsule)
+            Text(field.display(limit, limit: limit))
+            if field.signed { Text("· center 0").foregroundStyle(.secondary) }
+        }
+        .font(.caption.monospacedDigit())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Color scale \(field.display(low, limit: limit)) to \(field.display(limit, limit: limit))")
+        .help("Values outside the scale use the end colors. Local readings retain their full values.")
     }
 }
 
@@ -69,7 +161,7 @@ private struct AssemblyCamera {
         var lower = Point(repeating: .infinity)
         var upper = Point(repeating: -.infinity)
         for index in indices {
-            for point in experiment.simulation.body(index).position where point.x.isFinite && point.y.isFinite {
+            for point in experiment.displayedBody(index).position where point.x.isFinite && point.y.isFinite {
                 lower = Point(min(lower.x, point.x), min(lower.y, point.y))
                 upper = Point(max(upper.x, point.x), max(upper.y, point.y))
             }
@@ -135,6 +227,9 @@ struct AssemblyCanvas: View {
     let experiment: AssemblyExperiment
     let field: AssemblyField
     var showMesh: Bool
+    var showInitial = false
+    var showVelocity = false
+    var limit = 1.0
     @State private var camera = AssemblyCamera()
     @State private var drag: Drag?
     @State private var dragStart = CGPoint.zero
@@ -171,11 +266,42 @@ struct AssemblyCanvas: View {
                 let part = experiment.scene.parts[i]
                 drawBody(i, context: context, projection: projection, preview: preview[part.id])
             }
+            if showInitial, let first = experiment.frames.first {
+                for body in first.bodies {
+                    let points = body.body.position.map(projection.screen)
+                    context.stroke(edgePath(body.body.mesh.boundary, nodes: points),
+                                   with: .color(assemblyInk.opacity(0.65)),
+                                   style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                }
+            }
             drawConnections(context, projection: projection, preview: preview)
             drawGauges(context, projection: projection, preview: preview)
             if experiment.canEdit {
                 for part in experiment.scene.parts where part.velocity != .zero {
-                    drawInitialVelocity(preview[part.id] ?? part, context: context, projection: projection)
+                    let shown = preview[part.id] ?? part
+                    drawVelocity(shown.velocity, at: shown.center, context: context, projection: projection)
+                }
+            }
+            if let frame = experiment.frame {
+                if showVelocity {
+                    for state in frame.bodies {
+                        drawVelocity(state.body.centerVelocity, at: state.body.centerOfMass, context: context, projection: projection)
+                    }
+                }
+                for contact in frame.contacts {
+                    guard let p = contact.position, contact.force > 0 else { continue }
+                    let at = projection.screen(p)
+                    let dot = Path(ellipseIn: CGRect(x: at.x - 4, y: at.y - 4, width: 8, height: 8))
+                    context.fill(dot, with: .color(.white))
+                    context.stroke(dot, with: .color(.black), lineWidth: 1)
+                }
+                if let i = experiment.probeBody, let e = experiment.probeElement {
+                    let body = frame.bodies[i].body
+                    let triangle = body.mesh.elements[e]
+                    let point = (body.position[triangle.a] + body.position[triangle.b] + body.position[triangle.c]) / 3
+                    let at = projection.screen(point)
+                    let dot = Path(ellipseIn: CGRect(x: at.x - 5, y: at.y - 5, width: 10, height: 10))
+                    context.stroke(dot, with: .color(.white), lineWidth: 1.5)
                 }
             }
             if let anchor = experiment.linkPlacement?.first { drawAnchor(anchor, in: context, projection: projection) }
@@ -196,13 +322,15 @@ struct AssemblyCanvas: View {
             }, with: .color(assemblyInk.opacity(0.6)))
             let caption = millimetres >= 1_000 ? "\((millimetres / 1_000).formatted()) m" : "\(millimetres.formatted()) mm"
             context.draw(Text(caption).font(.caption2.monospaced()), at: CGPoint(x: x, y: y - 7), anchor: .bottomLeading)
-            if !experiment.canEdit {
-                context.draw(Text(fieldLegend).font(.caption2).foregroundStyle(assemblyInk.opacity(0.86)),
+            if experiment.frame != nil {
+                context.draw(Text("True scale · 1×").font(.caption2.monospaced()),
                              at: CGPoint(x: size.width - 19, y: y), anchor: .trailing)
             }
         }
         .accessibilityLabel("Assembly workspace")
-        .accessibilityHint("Scroll or pinch to zoom. Drag the background to pan. Drag a body to move it. The circle rotates and the square resizes. Shift-click adds to the selection.")
+        .accessibilityHint(experiment.frame == nil
+            ? "Scroll or pinch to zoom. Drag the background to pan. Drag a body to move it. Shift-click adds to the selection."
+            : "Scroll or pinch to zoom. Drag to pan. Click a triangle to inspect its recorded field value.")
         .overlay {
             AssemblyCanvasInput { event, location in
                 handle(event, at: location, viewport: viewport)
@@ -331,6 +459,10 @@ struct AssemblyCanvas: View {
         case .body(_, let handle) where distance >= 2 && experiment.canEdit:
             updateDrag(at: location, projection: projection)
             experiment.commitPreview(handle == .rotate ? "Rotate Body" : "Resize Body")
+        case .pan where distance < 4 && experiment.frame != nil:
+            let hit = element(at: projection.world(location))
+            experiment.probeBody = hit?.body
+            experiment.probeElement = hit?.element
         default:
             break
         }
@@ -440,37 +572,12 @@ struct AssemblyCanvas: View {
         return preview.center + rotated(local, by: preview.angle)
     }
 
-    private var usesMetalScale: Bool {
-        experiment.scene.parts.contains {
-            $0.material.provenance != nil || $0.bondedLayer?.material.provenance != nil
-                || $0.bondedLayer?.third?.material.provenance != nil
-        }
-    }
-
-    private var fieldLegend: String {
-        guard usesMetalScale else { return field.legend }
-        switch field {
-        case .stress: return "Cauchy von Mises stress · 0–300 MPa"
-        case .pressure: return "Cauchy pressure · −300 MPa tension / +300 MPa compression"
-        case .plastic: return "Accumulated equivalent plastic strain · 0–1%"
-        default: return field.legend
-        }
-    }
-
-    private var fieldScale: Double {
-        guard usesMetalScale else { return field.scale }
-        switch field {
-        case .stress, .pressure: return 300e6
-        case .plastic: return 0.01
-        default: return field.scale
-        }
-    }
-
-    private func drawInitialVelocity(_ part: AssemblyPart, context: GraphicsContext, projection: AssemblyProjection) {
-        let speed = simd_length(part.velocity)
-        let direction = Point(part.velocity.x, -part.velocity.y) / speed
+    private func drawVelocity(_ velocity: Point, at position: Point, context: GraphicsContext, projection: AssemblyProjection) {
+        let speed = simd_length(velocity)
+        guard speed > 1e-10 else { return }
+        let direction = Point(velocity.x, -velocity.y) / speed
         let normal = Point(-direction.y, direction.x)
-        let center = projection.screen(part.center)
+        let center = projection.screen(position)
         let start = Point(center.x, center.y)
         let end = start + direction * min(57, 26 + 10 * log1p(speed))
         let base = end - 7 * direction
@@ -485,30 +592,22 @@ struct AssemblyCanvas: View {
 
     private func drawBody(_ i: Int, context: GraphicsContext, projection: AssemblyProjection, preview: AssemblyPart?) {
         let part = experiment.scene.parts[i]
-        let body = experiment.simulation.body(i)
+        let body = experiment.displayedBody(i)
         let positions = body.position.map { previewPosition($0, relativeTo: part, preview: preview) }
         let nodes = positions.map(projection.screen)
-        let values = experiment.canEdit ? [] : field.values(i, in: experiment.simulation)
+        let values = experiment.frame.map { field.values($0.bodies[i]) } ?? []
         let color = assemblyColor(i)
-        let scale = fieldScale
         var buckets = Array(repeating: Path(), count: 13)
         for (index, triangle) in body.mesh.elements.enumerated() {
             let value = values.isEmpty ? 0 : values[index]
-            let level = min(1, abs(value) / scale)
-            let step = Int((level * 6).rounded())
-            let slot = value < 0 ? 6 - step : 6 + step
+            let slot = 6 + field.bin(value, limit: limit)
             buckets[slot].move(to: nodes[triangle.a])
             buckets[slot].addLine(to: nodes[triangle.b])
             buckets[slot].addLine(to: nodes[triangle.c])
             buckets[slot].closeSubpath()
         }
         for (i, path) in buckets.enumerated() where !path.isEmpty {
-            context.fill(path, with: .color(color.opacity(0.25)))
-            if i != 6 {
-                let diverging = field == .strain || field == .pressure
-                let shade = field == .damage ? crackColor : (diverging && i > 6 ? assemblyMint : assemblyAmber)
-                context.fill(path, with: .color(shade.opacity(Double(abs(i - 6)) / 6 * 0.9)))
-            }
+            context.fill(path, with: .color(values.isEmpty ? color.opacity(0.20) : field.shade(i - 6)))
             if showMesh { context.stroke(path, with: .color(assemblyInk.opacity(0.17)), lineWidth: 0.45) }
         }
         if showMesh, experiment.canEdit, preview == nil {
@@ -523,13 +622,8 @@ struct AssemblyCanvas: View {
             }
             context.stroke(warning, with: .color(assemblyAmber.opacity(0.85)), lineWidth: 1)
         }
-        let outline = Path { p in
-            for edge in body.mesh.boundary {
-                p.move(to: nodes[edge.a])
-                p.addLine(to: nodes[edge.b])
-            }
-        }
-        let active = experiment.simulation.activeContacts.contains { $0.x == i || $0.y == i }
+        let outline = edgePath(body.mesh.boundary, nodes: nodes)
+        let active = experiment.frame?.contacts.contains { $0.force > 0 && ($0.pair.x == i || $0.pair.y == i) } ?? false
         let selected = experiment.selectedParts.contains(part.id)
         context.stroke(outline, with: .color(active ? .white : color), lineWidth: selected ? 2.3 : 1.3)
         for line in body.mesh.interfaceLines {
@@ -541,26 +635,20 @@ struct AssemblyCanvas: View {
             context.stroke(bond, with: .color(assemblyInk.opacity(0.85)),
                            style: StrokeStyle(lineWidth: 1.4, dash: [4, 3]))
         }
-        let cracks = experiment.simulation.crackFaces(i)
-        for crack in cracks where crack.damage == 1 || field == .damage || field == .separation {
-            let ratio = min(1, crack.separation / field.scale)
-            let shade = field == .separation ? Color(red: 0.6 + 0.4 * ratio, green: 0.8 - 0.44 * ratio, blue: 0.2) : crackColor
-            let opacity = field == .separation ? 0.4 + 0.6 * ratio : 0.25 + 0.75 * crack.damage
-            let faces = Path { p in
-                for edge in [crack.first, crack.second] {
-                    p.move(to: nodes[edge.a])
-                    p.addLine(to: nodes[edge.b])
-                }
-            }
-            context.stroke(faces, with: .color(shade.opacity(opacity)), lineWidth: crack.damage == 1 ? 2.5 : 1.2)
+        let cracks = experiment.frame?.bodies[i].cracks ?? []
+        for crack in cracks {
+            let shade = field == .separation ? field.shade(field.bin(crack.separation, limit: limit)) : crackColor
+            let faces = edgePath([crack.first, crack.second], nodes: nodes)
+            context.stroke(faces, with: .color(shade.opacity(crack.failed ? 1 : 0.45 + 0.5 * crack.damage)),
+                           style: StrokeStyle(lineWidth: crack.failed ? 2 : 1, dash: crack.failed ? [] : [3, 2]))
         }
         let center = previewPosition(body.centerOfMass, relativeTo: part, preview: preview)
         let bottom = positions.map(\.y).min()!
         let top = positions.map(\.y).max()!
         let interior = experiment.scene.parts.enumerated().contains { j, other in
             other.shape == .enclosure && j != i
-                && abs(experiment.simulation.body(j).centerOfMass.x - center.x) < other.size.x * 0.38
-                && abs(experiment.simulation.body(j).centerOfMass.y - center.y) < other.size.y * 0.38
+                && abs(experiment.displayedBody(j).centerOfMass.x - center.x) < other.size.x * 0.38
+                && abs(experiment.displayedBody(j).centerOfMass.y - center.y) < other.size.y * 0.38
         }
         let topLabel = i.isMultiple(of: 2) && !(selected && experiment.canEdit)
         var labelPosition = projection.screen(Point(center.x, interior ? center.y : topLabel ? top : bottom))
@@ -571,7 +659,7 @@ struct AssemblyCanvas: View {
 
     private func drawConnections(_ context: GraphicsContext, projection: AssemblyProjection, preview: [UUID: AssemblyPart]) {
         let scene = experiment.scene
-        for link in experiment.simulation.linkReadings {
+        for link in experiment.displayedLinks {
             let connection = scene.connections[link.connection]
             let selected = experiment.selectedConnection == connection.id
             let first = scene.parts.first { $0.id == connection.first }
@@ -596,15 +684,19 @@ struct AssemblyCanvas: View {
     }
 
     private func part(at point: Point) -> UUID? {
+        element(at: point).map { experiment.scene.parts[$0.body].id }
+    }
+
+    private func element(at point: Point) -> (body: Int, element: Int)? {
         for i in experiment.displayIndices {
-            let body = experiment.simulation.body(i)
-            for triangle in body.mesh.elements {
+            let body = experiment.displayedBody(i)
+            for (index, triangle) in body.mesh.elements.enumerated() {
                 let a = body.position[triangle.a], b = body.position[triangle.b], c = body.position[triangle.c]
                 func side(_ start: Point, _ end: Point) -> Double {
                     let edge = end - start, offset = point - start
                     return edge.x * offset.y - edge.y * offset.x
                 }
-                if min(side(a, b), side(b, c), side(c, a)) >= -1e-12 { return experiment.scene.parts[i].id }
+                if min(side(a, b), side(b, c), side(c, a)) >= -1e-12 { return (i, index) }
             }
         }
         return nil
@@ -612,7 +704,7 @@ struct AssemblyCanvas: View {
 
     private func drawGauges(_ context: GraphicsContext, projection: AssemblyProjection, preview: [UUID: AssemblyPart]) {
         for (index, gauge) in experiment.gauges.enumerated() {
-            let position = experiment.simulation.gaugePosition(index)
+            let position = experiment.displayedGauge(index).position
             let part = experiment.scene.parts.first { $0.id == gauge.body }
             let at = projection.screen(part.map { previewPosition(position, relativeTo: $0, preview: preview[$0.id]) } ?? position)
             let dot = Path(ellipseIn: CGRect(x: at.x - 4, y: at.y - 4, width: 8, height: 8))
@@ -620,6 +712,15 @@ struct AssemblyCanvas: View {
             context.stroke(dot, with: .color(.white), lineWidth: 1.5)
             context.draw(Text(gauge.name).font(.caption2.monospaced()).foregroundStyle(.white),
                          at: CGPoint(x: at.x + 7, y: at.y - 7), anchor: .bottomLeading)
+        }
+    }
+}
+
+func edgePath(_ edges: [ImpactPhysics.Edge], nodes: [CGPoint]) -> Path {
+    Path { path in
+        for edge in edges {
+            path.move(to: nodes[edge.a])
+            path.addLine(to: nodes[edge.b])
         }
     }
 }

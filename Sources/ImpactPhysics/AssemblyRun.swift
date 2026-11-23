@@ -1,4 +1,4 @@
-public struct AssemblyRun {
+public struct AssemblyRun: Sendable {
     public private(set) var simulation: AssemblySimulation
     public private(set) var samples: [TraceSample]
     private let monitoredIndex: Int?

@@ -6,6 +6,8 @@ struct AssemblyComparison {
     let details: String
     let samples: [TraceSample]
     let tracksFracture: Bool
+    let replay: AssemblyReplay?
+    let scene: AssemblyScene
 }
 
 @MainActor @Observable final class AssemblyExperiment {
@@ -18,6 +20,15 @@ struct AssemblyComparison {
     }
 
     private var run: AssemblyRun
+    private(set) var replay: AssemblyReplay?
+    private(set) var frameIndex = 0
+    private(set) var solving = false
+    @ObservationIgnored private var solveTask: Task<(AssemblyRun, AssemblyReplay), Never>?
+    @ObservationIgnored private var solveID: UUID?
+    private var playbackTime = 0.0
+    var playbackSpeed = 1.0
+    var probeBody: Int?
+    var probeElement: Int?
     private var savedScene: AssemblyScene
     private var undoEdits: [Edit] = []
     private var redoEdits: [Edit] = []
@@ -28,8 +39,6 @@ struct AssemblyComparison {
     private(set) var meshQuality: [WorkshopMeshQuality]
     private(set) var running = false
     private var lastTick: Double?
-    private var budget = 0.0
-    var slow = false
     var error: String?
     private(set) var selectedPart: UUID?
     private(set) var selectedParts: Set<UUID> = []
@@ -51,9 +60,16 @@ struct AssemblyComparison {
     var scene: AssemblyScene { run.simulation.scene }
     var simulation: AssemblySimulation { run.simulation }
     var samples: [TraceSample] { run.samples }
-    var relativeMotion: Point { run.relativeMotion }
-    var canRun: Bool { simulation.initialIssue == nil && simulation.failure == nil && !scene.parts.isEmpty && !run.finished }
-    var canEdit: Bool { !running && simulation.time == 0 }
+    var relativeMotion: Point { frame?.relativeMotion ?? run.relativeMotion }
+    var frames: [AssemblyReplayFrame] { replay?.frames ?? [] }
+    var frame: AssemblyReplayFrame? { replay?.frames[frameIndex] }
+    var playbackDuration: Double { frames.last?.time ?? 0 }
+    var displayTime: Double { frame?.time ?? 0 }
+    func displayedBody(_ index: Int) -> Body { frame?.bodies[index].body ?? simulation.body(index) }
+    func displayedGauge(_ index: Int) -> AssemblyGaugeReading { frame?.gauges[index] ?? simulation.gaugeReading(index) }
+    var displayedLinks: [AssemblyLinkReading] { frame?.links ?? simulation.linkReadings }
+    var canRun: Bool { !solving && simulation.initialIssue == nil && simulation.failure == nil && !scene.parts.isEmpty && !run.finished }
+    var canEdit: Bool { !solving && replay == nil && simulation.time == 0 }
     var isDirty: Bool { scene != savedScene }
     var undoAction: String? { undoEdits.last?.action }
     var redoAction: String? { redoEdits.last?.action }
@@ -73,7 +89,7 @@ struct AssemblyComparison {
         let mesh = monitored?.refinement ?? scene.resolution
         let details = [monitoredName, monitored?.material.provenance?.name, mesh.label, pattern, "\(elementCount) triangles"].compactMap { $0 }
         return AssemblyComparison(details: details.joined(separator: " · "), samples: samples,
-                                  tracksFracture: scene.parts.contains { $0.fracture != nil })
+                                  tracksFracture: scene.parts.contains { $0.fracture != nil }, replay: replay, scene: scene)
     }
 
     var initialMotionNote: String? {
@@ -110,13 +126,21 @@ struct AssemblyComparison {
         guard canRefine, let resolution = AssemblyScene.Resolution(rawValue: scene.resolution.rawValue + 1) else { return }
         pin()
         edit("Refine Assembly Mesh") { $0.meshResolution = resolution }
-        if self.scene.resolution == resolution { toggle() }
+        if self.scene.resolution == resolution { calculate() }
     }
 
     func configure(_ scene: AssemblyScene) throws {
         let next = try AssemblyRun(scene)
         let meshChanged = self.scene.parts != scene.parts || self.scene.meshResolution != scene.meshResolution
         pause()
+        solveTask?.cancel()
+        solveTask = nil
+        solveID = nil
+        solving = false
+        replay = nil
+        frameIndex = 0
+        probeBody = nil
+        probeElement = nil
         placingGauge = false
         linkPlacement = nil
         previewParts.removeAll()
@@ -316,45 +340,82 @@ struct AssemblyComparison {
     func pause() {
         running = false
         lastTick = nil
-        budget = 0
     }
 
-    func toggle() {
-        if running { pause() }
-        else if canRun {
-            placingGauge = false
-            linkPlacement = nil
-            previewParts.removeAll()
-            running = true
-        }
-    }
-
-    func tick(now: Double = ProcessInfo.processInfo.systemUptime) {
-        guard running else { return }
-        defer { if running { lastTick = now } }
-        guard let lastTick else { return }
-        budget += min(0.05, max(0, now - lastTick)) * (slow ? 0.003 : 0.015)
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.008
-        while budget >= simulation.dt {
-            guard advance(), running else { return }
-            budget -= simulation.dt
-            if ProcessInfo.processInfo.systemUptime > deadline {
-                budget = min(budget, simulation.dt)
-                return
-            }
-        }
-    }
-
-    @discardableResult func advance() -> Bool {
-        let advanced = run.step()
-        if !advanced || run.finished { pause() }
-        return advanced
-    }
-
-    func advance(to time: Double) {
+    func calculate() {
+        guard canRun else { return }
         pause()
         placingGauge = false
         linkPlacement = nil
-        while simulation.time < time && advance() {}
+        previewParts.removeAll()
+        let existing = run
+        let recording = replay ?? AssemblyReplay(existing)
+        let id = UUID()
+        solveID = id
+        solving = true
+        let worker = Task.detached(priority: .userInitiated) {
+            var solver = existing
+            var next = recording
+            while !Task.isCancelled && solver.step() { next.record(solver) }
+            next.finish(solver)
+            return (solver, next)
+        }
+        solveTask = worker
+        Task { [weak self] in
+            let (solved, recorded) = await worker.value
+            guard let self, solveID == id else { return }
+            solveID = nil
+            solveTask = nil
+            run = solved
+            replay = recorded
+            frameIndex = recorded.frames.count - 1
+            solving = false
+        }
+    }
+
+    func cancelCalculation() { solveTask?.cancel() }
+
+    func seek(to time: Double) {
+        guard let replay else { return }
+        pause()
+        frameIndex = replay.index(at: time)
+    }
+
+    func stepFrame(by increment: Int) {
+        guard !frames.isEmpty else { return }
+        pause()
+        frameIndex = min(frames.count - 1, max(0, frameIndex + increment))
+    }
+
+    func toggle() {
+        if running { pause(); return }
+        guard frames.count > 1, !solving else { return }
+        if frameIndex == frames.count - 1 { frameIndex = 0 }
+        playbackTime = displayTime
+        lastTick = nil
+        running = true
+    }
+
+    func tick(now: Double = ProcessInfo.processInfo.systemUptime) {
+        guard running, let replay else { return }
+        defer { if running { lastTick = now } }
+        guard let lastTick else { return }
+        // 1× plays the recorded interval in five wall-clock seconds.
+        playbackTime += max(0, now - lastTick) * playbackDuration * playbackSpeed / 5
+        frameIndex = replay.index(at: playbackTime)
+        if playbackTime >= playbackDuration { pause() }
+    }
+
+    // Used by the existing inspection and verification entry points.
+    func advance(to time: Double) {
+        guard time > simulation.time else { return }
+        pause()
+        placingGauge = false
+        linkPlacement = nil
+        var recorded = replay ?? AssemblyReplay(run)
+        while simulation.time < time && run.step() { recorded.record(run) }
+        recorded.finish(run)
+        frameIndex = recorded.frames.count - 1
+        replay = recorded
     }
 }

@@ -1,6 +1,12 @@
 import simd
 
+struct ContactLocation: Sendable {
+    let position: Point
+    let load: Double
+}
+
 struct ContactResult {
+    var location: ContactLocation?
     var energy = 0.0
     var penetration = 0.0
     var relativePenetration = 0.0
@@ -176,6 +182,9 @@ struct BoundaryContact: Sendable {
                                                     normal: hit.normal, closureSeam: closure))
             }
             if closure != nil { continue } // Omitted only by the legacy probe.
+            if load > (result.location?.load ?? 0) {
+                result.location = ContactLocation(position: node + hit.distance * hit.normal, load: load)
+            }
             result.normalLoad += load
             let force = load * hit.normal
             sourceForce[i] += force

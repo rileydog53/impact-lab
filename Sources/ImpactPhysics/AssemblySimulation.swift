@@ -209,6 +209,17 @@ public struct AssemblySimulation: Sendable {
     private var energy: AssemblyEnergy
     public let initialEnergy: Double
 
+    var recordedNormalLoads: [SIMD2<Int>: Double] { normalLoads }
+    var recordedContactPositions: [SIMD2<Int>: ContactLocation] = [:]
+
+    func replayBody(_ index: Int) -> AssemblyReplayBody {
+        let step = steps[index]
+        return AssemblyReplayBody(body: step.body, strain: step.strain,
+            plasticStrain: plasticStrain(index), damage: materialDamage(index),
+            stress: step.body.mesh.elements.indices.map(step.replayStress),
+            cracks: crackFaces(index), fracture: fractureReading(index), pieces: materialPieces(index))
+    }
+
     public var bodyCount: Int { steps.count }
     public func body(_ index: Int) -> Body { steps[index].body }
     public func strain(_ index: Int) -> [Double] { steps[index].strain }
@@ -475,7 +486,7 @@ public struct AssemblySimulation: Sendable {
     private mutating func fractureContact(fractures: [MaterialFracture?], energy: inout AssemblyEnergy,
                                           penetration: inout Double, active: inout [SIMD2<Int>],
                                           loads: inout [FragmentPair: FragmentLoad], normal: inout [SIMD2<Int>: Double],
-                                          deepest: inout SIMD4<Int>?) {
+                                          deepest: inout SIMD4<Int>?, locations: inout [SIMD2<Int>: ContactLocation]) {
         // Keep the existing boundary penetration measurement as an independent
         // check against deep crossings spanning more than one target triangle.
         var domains: [ContactDomain] = []
@@ -524,6 +535,7 @@ public struct AssemblySimulation: Sendable {
                 if result.penetration > 0 {
                     if !active.contains(partPair) { active.append(partPair) }
                     normal[partPair, default: 0] += result.normalLoad
+                    if let hit = result.location, hit.load > (locations[partPair]?.load ?? 0) { locations[partPair] = hit }
                     if domains[a].proxy != nil || domains[b].proxy != nil {
                         let key = FragmentPair(parts: partPair, pieces: pieces)
                         loads[key] = FragmentLoad(load: result.normalLoad, onExposedFace: result.exposedFaceContact)
@@ -567,7 +579,7 @@ public struct AssemblySimulation: Sendable {
     }
 
     private mutating func intactContact(energy: inout AssemblyEnergy, penetration: inout Double,
-                                        active: inout [SIMD2<Int>], normal: inout [SIMD2<Int>: Double]) {
+                                        active: inout [SIMD2<Int>], normal: inout [SIMD2<Int>: Double], locations: inout [SIMD2<Int>: ContactLocation]) {
         let bounds = steps.indices.map { ContactBounds(surface: surfaces[$0], position: steps[$0].nextPosition) }
         let contacts = pairs
         steps.withUnsafeMutableBufferPointer { buffer in
@@ -584,6 +596,7 @@ public struct AssemblySimulation: Sendable {
                     let key = SIMD2(pair.a, pair.b)
                     active.append(key)
                     normal[key] = result.normalLoad
+                    if let hit = result.location, hit.load > (locations[key]?.load ?? 0) { locations[key] = hit }
                 }
             }
         }
@@ -592,6 +605,7 @@ public struct AssemblySimulation: Sendable {
 
     @discardableResult public mutating func step() -> Bool {
         guard initialIssue == nil, failure == nil, !steps.isEmpty, time < scene.duration else { return false }
+        var locations: [SIMD2<Int>: ContactLocation] = [:]
         var trial = AssemblyEnergy(kinetic: 0, elastic: 0, contact: 0, connection: 0, hardening: 0, plastic: 0, fracture: 0)
         for i in steps.indices {
             guard steps[i].drift(dt), let element = steps[i].assemble() else {
@@ -669,9 +683,9 @@ public struct AssemblySimulation: Sendable {
                         active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest)
             if nextFractures.contains(where: { ($0?.reading.insertedEdges ?? 0) > 0 }) {
                 fractureContact(fractures: nextFractures, energy: &trial, penetration: &penetration,
-                                active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest)
+                                active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest, locations: &locations)
             } else {
-                intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal)
+                intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal, locations: &locations)
             }
             guard penetration <= 0.10 else {
                 rejectedPenetration = penetration
@@ -681,7 +695,7 @@ public struct AssemblySimulation: Sendable {
                 return false
             }
         } else {
-            intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal)
+            intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal, locations: &locations)
         }
 
         var nextPadCompression = padPeakCompression
@@ -772,6 +786,7 @@ public struct AssemblySimulation: Sendable {
         for pair in active where firstContactTimes[pair] == nil { firstContactTimes[pair] = time }
         activeContacts = active
         normalLoads = nextNormal
+        recordedContactPositions = locations
         padPeakCompression = nextPadCompression
         if penetration > peakRelativePenetration {
             peakRelativePenetration = penetration

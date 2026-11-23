@@ -7,6 +7,11 @@ struct AssemblyLab: View {
     @State private var experiment = AssemblyExperiment()
     @State private var field = AssemblyField.strain
     @State private var showMesh = false
+    @State private var showInitial = false
+    @State private var showVelocity = false
+    @State private var range = AssemblyFieldRange.standard
+    @State private var measurements = false
+    @State private var definition = false
     @State private var showMeshReport = false
     @State private var showPieces = false
     @State private var compare = false
@@ -31,10 +36,12 @@ struct AssemblyLab: View {
             header
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 10) {
-                    AssemblyCanvas(experiment: experiment, field: field, showMesh: showMesh)
-                        .frame(minHeight: 230, maxHeight: .infinity)
+                    AssemblyCanvas(experiment: experiment, field: field, showMesh: showMesh,
+                                   showInitial: showInitial, showVelocity: showVelocity, limit: fieldLimit)
+                        .frame(minHeight: experiment.frame == nil ? 230 : 170, maxHeight: .infinity)
                     indicators
                     trace
+                    if experiment.frames.count > 1 { timeline }
                     status
                 }
                 AssemblyEditor(experiment: experiment).frame(width: 315)
@@ -48,10 +55,19 @@ struct AssemblyLab: View {
         .task { await startup() }
         .sheet(isPresented: $compare) {
             if let reference = experiment.reference {
-                ComparisonView(reference: reference, current: experiment.current)
+                let current = experiment.current
+                if let first = reference.replay, let second = current.replay {
+                    AssemblyFieldComparison(reference: reference, current: current, first: first, second: second, field: field)
+                } else {
+                    ComparisonView(reference: reference, current: current)
+                }
             }
         }
         .sheet(isPresented: $showMeshReport) { meshReport }
+        .sheet(isPresented: $measurements) {
+            ReplayMeasurements(scene: experiment.scene, frames: experiment.frames,
+                               events: experiment.replay?.events ?? [], time: experiment.displayTime)
+        }
         .sheet(isPresented: $study) {
             studyView
         }
@@ -171,33 +187,77 @@ struct AssemblyLab: View {
         }
     }
 
+    private var metalScale: Bool {
+        experiment.scene.parts.contains {
+            $0.material.provenance != nil || $0.bondedLayer?.material.provenance != nil
+                || $0.bondedLayer?.third?.material.provenance != nil
+        }
+    }
+
+    private var fieldLimit: Double { field.limit(for: range, frame: experiment.frame, metal: metalScale) }
+
+    private var timeline: some View {
+        HStack(spacing: 7) {
+            Button("Restart Replay", systemImage: "backward.end.fill") { experiment.seek(to: 0) }
+                .labelStyle(.iconOnly)
+            Button("Previous Frame", systemImage: "backward.frame.fill") { experiment.stepFrame(by: -1) }
+                .labelStyle(.iconOnly).disabled(experiment.frameIndex == 0)
+            Slider(value: Binding(get: { experiment.displayTime }, set: { experiment.seek(to: $0) }),
+                   in: 0...max(1e-12, experiment.playbackDuration)) { Text("Replay time") }
+                .accessibilityValue(replayTime(experiment.displayTime))
+            Button("Next Frame", systemImage: "forward.frame.fill") { experiment.stepFrame(by: 1) }
+                .labelStyle(.iconOnly).disabled(experiment.frameIndex == experiment.frames.count - 1)
+            Text(replayTime(experiment.displayTime)).font(.caption.monospacedDigit()).fixedSize()
+            Menu("Events") {
+                ForEach(experiment.replay?.events ?? []) { event in
+                    Button("\(event.label) · \(replayTime(event.time))") { experiment.seek(to: event.time) }
+                }
+            }.fixedSize().disabled(experiment.replay?.events.isEmpty != false)
+        }
+        .controlSize(.small)
+        .disabled(experiment.solving)
+    }
+
     private var status: some View {
         HStack(spacing: 8) {
-            Button(experiment.running ? "Pause" : "Run", systemImage: experiment.running ? "pause.fill" : "play.fill") {
-                experiment.toggle()
+            if experiment.solving {
+                ProgressView().controlSize(.small)
+                Text("Calculating…")
+                Button("Cancel", action: experiment.cancelCalculation)
+            } else if experiment.frames.count > 1 {
+                Button(experiment.running ? "Pause" : "Play", systemImage: experiment.running ? "pause.fill" : "play.fill") {
+                    experiment.toggle()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.space, modifiers: [])
+                Picker("Replay speed", selection: Binding(get: { experiment.playbackSpeed }, set: { experiment.playbackSpeed = $0 })) {
+                    ForEach([0.25, 0.5, 1, 2, 4], id: \.self) { Text("\($0.formatted())×").tag($0) }
+                }.labelsHidden().fixedSize()
+                .help("At 1×, replay takes five seconds to show the recorded interval.")
+                if experiment.canRun { Button("Resume Calculation", action: experiment.calculate) }
+            } else {
+                Button("Calculate", systemImage: "play.fill", action: experiment.calculate)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!experiment.canRun)
+                    .keyboardShortcut(.space, modifiers: [])
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(!experiment.running && !experiment.canRun)
-            .keyboardShortcut(.space, modifiers: [])
-            Button("+1 ms") { experiment.advance(to: experiment.simulation.time + 0.001) }
-                .disabled(experiment.running || !experiment.canRun)
-            Button("Reset Run", systemImage: "arrow.counterclockwise") { experiment.reset() }
-                .disabled(experiment.canEdit)
-                .help("Return to the authored assembly and discard the current run’s results")
-            Toggle("Slow", isOn: Binding(get: { experiment.slow }, set: { experiment.slow = $0 }))
-                .toggleStyle(.checkbox).help("Play at one fifth of normal playback speed")
+            Button("Reset Run", systemImage: "arrow.counterclockwise", action: experiment.reset)
+                .labelStyle(.iconOnly)
+                .disabled(experiment.canEdit || experiment.solving)
+                .help("Return to the authored assembly and clear this run.")
             Spacer()
-            Button("Pin", systemImage: "pin") { experiment.pin() }
-                .disabled(experiment.samples.count < 2)
-            Button("Compare", systemImage: "chart.xyaxis.line") { experiment.pause(); compare = true }
-                .disabled(experiment.reference == nil || experiment.samples.count < 2)
-            Button("Refine", systemImage: "square.grid.3x3") { experiment.refine() }
+            Button("Measurements", systemImage: "chart.xyaxis.line") { experiment.pause(); measurements = true }
+                .disabled(experiment.frames.count < 2 || experiment.solving)
+            Button("Pin", systemImage: "pin", action: experiment.pin)
+                .disabled(experiment.samples.count < 2 || experiment.solving)
+            Button("Compare") { experiment.pause(); compare = true }
+                .disabled(experiment.reference == nil || experiment.samples.count < 2 || experiment.solving)
+            Button("Refine", systemImage: "square.grid.3x3", action: experiment.refine)
+                .labelStyle(.iconOnly)
                 .help("Pin this run and refine bodies that use the assembly mesh")
-                .disabled(!experiment.canRefine)
-            Text(String(format: "%.2f ms", experiment.simulation.time * 1000))
-                .font(.system(.body, design: .monospaced)).frame(minWidth: 84, alignment: .trailing)
+                .disabled(!experiment.canRefine || experiment.solving)
         }
-        .font(.callout)
+        .font(.callout).controlSize(.small)
     }
 
     private var indicators: some View {
@@ -212,27 +272,37 @@ struct AssemblyLab: View {
                     }
                     .fixedSize()
                     .help("Snap dragged body centers to a world-coordinate grid")
-                } else {
+                } else if experiment.frame != nil {
                     Picker("Result field", selection: $field) {
                         ForEach(AssemblyField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }.labelsHidden().frame(width: 160)
+                    }.labelsHidden().fixedSize()
+                    Picker("Color range", selection: $range) {
+                        ForEach(AssemblyFieldRange.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.labelsHidden().fixedSize().disabled(field == .damage)
+                    Menu("Overlays") {
+                        Toggle("Initial geometry", isOn: $showInitial)
+                        Toggle("Body velocity", isOn: $showVelocity)
+                            .help("Arrows indicate center-of-mass velocity direction. Length uses a compressed display scale.")
+                    }.fixedSize()
                 }
                 Toggle("Show mesh", isOn: $showMesh).toggleStyle(.checkbox)
                     .help("Draw the actual simulation mesh. Amber outlines indicate thin reference triangles.")
-                Button("Mesh Report", systemImage: "square.grid.3x3") {
-                    showMesh = true
-                    showMeshReport = true
-                }
-                .disabled(experiment.scene.parts.isEmpty)
-                .help("Check triangle counts and shape quality for the starting assembly")
-                if experiment.linkPlacement != nil {
-                    Button("Cancel Link", role: .cancel) { experiment.linkPlacement = nil }
-                        .keyboardShortcut(.cancelAction)
-                } else {
-                    Button(experiment.placingGauge ? "Cancel gauge" : "Place gauge", systemImage: "scope") {
-                        experiment.placingGauge.toggle()
+                if experiment.canEdit {
+                    Button("Mesh Report", systemImage: "square.grid.3x3") {
+                        showMesh = true
+                        showMeshReport = true
                     }
-                    .disabled(!experiment.canEdit || experiment.scene.parts.isEmpty || experiment.gauges.count >= AssemblyGauge.limit)
+                    .disabled(experiment.scene.parts.isEmpty)
+                    .help("Check triangle counts and shape quality for the starting assembly")
+                    if experiment.linkPlacement != nil {
+                        Button("Cancel Link", role: .cancel) { experiment.linkPlacement = nil }
+                            .keyboardShortcut(.cancelAction)
+                    } else {
+                        Button(experiment.placingGauge ? "Cancel gauge" : "Place gauge", systemImage: "scope") {
+                            experiment.placingGauge.toggle()
+                        }
+                        .disabled(!experiment.canEdit || experiment.scene.parts.isEmpty || experiment.gauges.count >= AssemblyGauge.limit)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -254,29 +324,57 @@ struct AssemblyLab: View {
                 Label(reason, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(assemblyAmber)
             } else if let note = experiment.initialMotionNote {
                 Label(note, systemImage: "info.circle").font(.caption).foregroundStyle(assemblyAmber)
-            } else if !experiment.canEdit {
-                playbackIndicator
+            }
+            if let frame = experiment.frame {
+                playbackIndicator(frame)
             }
             if !experiment.scene.parts.isEmpty { readout }
-            if let index = experiment.selectedIndex, let reading = experiment.simulation.fractureReading(index) {
+            if let index = experiment.selectedIndex,
+               let reading = experiment.frame?.bodies[index].fracture ?? experiment.simulation.fractureReading(index) {
                 fractureReadout(index, reading)
             }
         }
     }
 
-    @ViewBuilder private var playbackIndicator: some View {
-        if let pair = experiment.simulation.firstContactTimes.min(by: { $0.value < $1.value }) {
-            let names = experiment.scene.parts
-            Text("First contact · \(names[pair.key.x].name) / \(names[pair.key.y].name) · \(pair.value * 1000, specifier: "%.2f") ms")
-                .font(.caption).monospacedDigit().lineLimit(1)
+    @ViewBuilder private func playbackIndicator(_ frame: AssemblyReplayFrame) -> some View {
+        HStack(spacing: 9) {
+            AssemblyFieldLegend(field: field, limit: fieldLimit)
+            Text(field.provenance).foregroundStyle(.secondary)
+            Button("Field definition", systemImage: "info.circle") { definition = true }
+                .labelStyle(.iconOnly).help(field.definition)
+                .popover(isPresented: $definition) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(field.rawValue).font(.headline)
+                        Text(field.definition)
+                        Text("Geometry and local values are from the selected recorded frame. Element colors are constant within each triangle. The legend clips values beyond its end colors.").foregroundStyle(.secondary)
+                    }.font(.callout).padding(14).frame(width: 310)
+                }
+        }.font(.caption)
+        if let index = experiment.selectedIndex {
+            let state = frame.bodies[index]
+            let values = field == .separation ? state.cracks.map(\.separation) : field.values(state)
+            let reading = if let element = experiment.probeElement, experiment.probeBody == index, values.indices.contains(element), field != .separation {
+                "Element \(element + 1) · \(field.display(values[element], limit: fieldLimit))"
+            } else if let high = values.max() {
+                field.signed ? "\(field.display(values.min() ?? 0, limit: fieldLimit)) to \(field.display(high, limit: fieldLimit))"
+                    : "Peak \(field.display(high, limit: fieldLimit))"
+            } else {
+                field == .separation ? "No inserted faces" : "Field unavailable on this body"
+            }
+            Text("\(experiment.scene.parts[index].name) · \(reading)")
+                .font(.caption.monospacedDigit()).lineLimit(1)
+                .help("Click a triangle in the viewer to follow its recorded element value.")
         }
-        if let index = experiment.selectedIndex, field == .stress || field == .plastic {
-            let peak = field.values(index, in: experiment.simulation).max() ?? 0
-            Text(field == .stress
-                 ? String(format: peak >= 1e6 ? "Selected body · %.3g MPa peak" : "Selected body · %.3g kPa peak",
-                                 peak / (peak >= 1e6 ? 1e6 : 1000))
-                 : String(format: "Selected body · %.2f%% peak", peak * 100))
-                .font(.caption).monospacedDigit()
+        let active = frame.contacts.filter { $0.force > 0 }
+        let contactLabel = active.max(by: { $0.force < $1.force }).map {
+            let title = replayPairName($0.pair, scene: experiment.scene)
+            return "Active contact · \(title) · \($0.force.formatted(.number.precision(.significantDigits(1...4)))) N/m"
+        } ?? "No active contact in this frame"
+        Text(contactLabel).font(.caption.monospacedDigit()).lineLimit(1)
+            .help("White outlines show bodies in active contact. A dot marks the largest recorded boundary-contact contribution when available.")
+        if experiment.scene.parts.contains(where: { $0.bondedLayer != nil || $0.fracture != nil }) {
+            Text("Dashed gray · permanent bond    Dashed red · cohesive interface    Solid faces · failed interface")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 
@@ -316,12 +414,12 @@ struct AssemblyLab: View {
     }
 
     private func fractureReadout(_ index: Int, _ reading: MaterialFractureReading) -> some View {
-        let first = experiment.simulation.fragmentContacts.first {
+        let first = (experiment.frame?.fragments ?? []).first {
             $0.onExposedFace && ($0.parts.x == index || $0.parts.y == index)
         }
         return DisclosureGroup(isExpanded: $showPieces) {
-            let events = experiment.simulation.fragmentContacts.filter { $0.parts.x == index || $0.parts.y == index }
-            let pieces = experiment.simulation.materialPieces(index)
+            let events = (experiment.frame?.fragments ?? []).filter { $0.parts.x == index || $0.parts.y == index }
+            let pieces = experiment.frame?.bodies[index].pieces ?? experiment.simulation.materialPieces(index)
             ScrollView {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
                     GridRow {
@@ -364,11 +462,12 @@ struct AssemblyLab: View {
 
     private var readout: some View {
         let s = experiment.simulation
-        let e = s.energies
+        let frame = experiment.frame
+        let e = frame?.energies ?? s.energies
         let motion = experiment.relativeMotion
         let error = s.initialEnergy > 0 ? 100 * (e.total / s.initialEnergy - 1) : 0
-        let maxForce = s.linkReadings.map { abs($0.force) }.max() ?? 0
-        let broken = s.linkReadings.filter { $0.damage >= 1 }.count
+        let maxForce = experiment.displayedLinks.map { abs($0.force) }.max() ?? 0
+        let broken = experiment.displayedLinks.filter { $0.damage >= 1 }.count
         return DisclosureGroup {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
                 GridRow {
@@ -381,16 +480,16 @@ struct AssemblyLab: View {
                     metric("Fracture", e.fracture, "J/m")
                     metric("Stored cohesive", e.cohesive, "J/m")
                     metric("Max link load", maxForce, "N/m")
-                    metric("Peak overlap", s.peakRelativePenetration * 100, "%")
+                    metric("Peak overlap", (frame?.peakRelativePenetration ?? 0) * 100, "%")
                 }
                 GridRow {
-                    metric("Momentum X", s.momentum.x, "N·s/m")
-                    metric("Momentum Y", s.momentum.y, "N·s/m")
-                    metric("Angular momentum", s.angularMomentum, "N·m·s/m")
+                    metric("Momentum X", (frame?.momentum ?? s.momentum).x, "N·s/m")
+                    metric("Momentum Y", (frame?.momentum ?? s.momentum).y, "N·s/m")
+                    metric("Angular momentum", frame?.angularMomentum ?? s.angularMomentum, "N·m·s/m")
                     metric("Energy error", error, "%")
                 }
             }.padding(.top, 8)
-            let contacts = s.firstContactTimes.sorted { $0.value < $1.value }
+            let contacts = s.firstContactTimes.filter { $0.value <= experiment.displayTime }.sorted { $0.value < $1.value }
             if !contacts.isEmpty {
                 let names = experiment.scene.parts
                 ScrollView {
@@ -429,7 +528,7 @@ struct AssemblyLab: View {
 
     private var trace: some View {
         let samples = experiment.samples
-        let duration = experiment.scene.duration
+        let duration = max(experiment.scene.duration, experiment.playbackDuration)
         let traceSignals: [(String, String, KeyPath<TraceSample, Double>)] = [
             ("Relative X", "mm", \.values.x), ("Body kinetic", "J/m", \.values.y),
             ("Link energy", "J/m", \.connectionEnergy), ("Material fracture", "J/m", \.materialFracture),
@@ -452,7 +551,7 @@ struct AssemblyLab: View {
                 let low = min(0, values.min() ?? 0)
                 let high = max(signal == 0 ? 1 : 0.1, values.max() ?? 0)
                 let inset = 8.0
-                let left = 59.0, right = size.width - 15
+                let left = 92.0, right = size.width - 15
                 let height = size.height - 25
                 func y(_ value: Double) -> Double { inset + (high - value) / (high - low) * height }
                 for value in [low, high] {
@@ -461,7 +560,7 @@ struct AssemblyLab: View {
                         p.move(to: CGPoint(x: left, y: row))
                         p.addLine(to: CGPoint(x: right, y: row))
                     }, with: .color(assemblyInk.opacity(0.16)))
-                    context.draw(Text(String(format: "%.2f %@", value, unit)).font(.caption2.monospaced()),
+                    context.draw(Text(String(format: "%.5g %@", value, unit)).font(.caption2.monospaced()),
                                  at: CGPoint(x: left - 6, y: row), anchor: .trailing)
                 }
                 let path = Path { p in
@@ -471,7 +570,19 @@ struct AssemblyLab: View {
                     }
                 }
                 context.stroke(path, with: .color(color), lineWidth: 1.6)
-                context.draw(Text(String(format: "%g ms", 1000 * duration)).font(.caption2.monospaced()),
+                for event in experiment.replay?.events ?? [] {
+                    let x = left + event.time / duration * (right - left)
+                    context.stroke(Path { p in
+                        p.move(to: CGPoint(x: x, y: inset)); p.addLine(to: CGPoint(x: x, y: inset + 6))
+                    }, with: .color(assemblyMint))
+                }
+                if experiment.frame != nil {
+                    let x = left + experiment.displayTime / duration * (right - left)
+                    context.stroke(Path { p in
+                        p.move(to: CGPoint(x: x, y: inset)); p.addLine(to: CGPoint(x: x, y: inset + height))
+                    }, with: .color(assemblyInk.opacity(0.65)))
+                }
+                context.draw(Text(replayTime(duration)).font(.caption2.monospaced()),
                              at: CGPoint(x: right, y: size.height - 5), anchor: .bottomTrailing)
             }.frame(height: 78)
                 .accessibilityLabel("Sampled assembly measurements over time")
@@ -666,8 +777,8 @@ struct AssemblyLab: View {
             try experiment.configure(AssemblyScene.open(sceneURL))
             experiment.advance(to: experiment.scene.duration)
             experiment.refine()
-            result.append("refine pinned and remeshed=\(experiment.reference?.samples == base && experiment.scene.resolution == .fine && experiment.running)")
-            experiment.advance(to: experiment.scene.duration)
+            result.append("refine pinned and remeshed=\(experiment.reference?.samples == base && experiment.scene.resolution == .fine && experiment.solving)")
+            while experiment.solving { try await Task.sleep(for: .milliseconds(25)) }
             let matched = SceneTrace.matching(base, experiment.samples)
             result.append("refinement aligned fracture output=\(experiment.finished && matched.count == base.count && matched.contains { $0.referenceSample.crackLength != $0.currentSample.crackLength })")
             NSApplication.shared.activate(ignoringOtherApps: true)
@@ -732,18 +843,18 @@ struct AssemblyLab: View {
             let url = report.deletingPathExtension().appendingPathExtension("impact-assembly.json")
             try experiment.scene.save(to: url)
 
+            experiment.advance(to: experiment.scene.duration)
+            let finishedTime = experiment.simulation.time
+            experiment.seek(to: 0.023)
             experiment.toggle()
-            for _ in 0..<40 where experiment.simulation.time < 0.023 {
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            experiment.pause()
-            result.append("timer advanced to contact=\(experiment.simulation.time >= 0.023 && !experiment.simulation.firstContactTimes.isEmpty)")
-            let paused = experiment.simulation.time
             try? await Task.sleep(for: .milliseconds(100))
-            result.append("paused=\(paused == experiment.simulation.time)")
-            experiment.advance(to: paused + 0.001)
-            result.append("millisecond step=\(experiment.simulation.time - paused >= 0.000999999)")
-            while experiment.advance() {}
+            experiment.pause()
+            let paused = experiment.displayTime
+            try? await Task.sleep(for: .milliseconds(100))
+            result.append("timer advanced replay without solving=\(paused >= 0.023 && experiment.simulation.time == finishedTime)")
+            result.append("paused=\(paused == experiment.displayTime)")
+            experiment.stepFrame(by: 1)
+            result.append("recorded frame step=\(experiment.displayTime > paused)")
             let trace = experiment.samples
             let success = experiment.finished && experiment.simulation.energies.fracture > 0
                 && experiment.simulation.firstContactTimes[SIMD2(0, 1)] != nil
@@ -751,11 +862,11 @@ struct AssemblyLab: View {
             experiment.pin()
 
             try experiment.configure(AssemblyScene.open(url))
-            while experiment.advance() {}
+            experiment.advance(to: experiment.scene.duration)
             result.append("saved trace replay=\(trace == experiment.samples)")
             let mount = experiment.scene.connections.first!.id
             experiment.updateConnection(mount) { $0.stiffness *= 1.6 }
-            while experiment.advance() {}
+            experiment.advance(to: experiment.scene.duration)
             let matches = SceneTrace.matching(trace, experiment.samples)
             result.append("edited stiffness changes response=\(matches.contains { abs($0.current.x - $0.reference.x) > 1 })")
             compare = true
@@ -771,7 +882,7 @@ struct AssemblyLab: View {
             experiment.updatePart(c) { $0.center = Point(0.115, -0.016); $0.material.density = 1300 }
             experiment.addConnection(first: b, second: c)
             experiment.edit { $0.monitor = c; $0.relativeTo = b }
-            while experiment.advance() {}
+            experiment.advance(to: experiment.scene.duration)
             result.append("different three-body build=\(experiment.finished && experiment.simulation.firstContactTimes[SIMD2(0, 1)] != nil && experiment.simulation.kineticEnergy(2) > 0.005)")
         } catch {
             result.append("smoke=false \(error.localizedDescription)")

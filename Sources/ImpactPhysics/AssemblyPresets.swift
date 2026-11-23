@@ -170,6 +170,10 @@ extension AssemblyScene {
         scene.parts = [target, striker]
         scene.duration = 0.00015
         scene.monitor = target.id
+        scene.gauges = [
+            AssemblyGauge(body: target.id, name: "Near impact face", location: Point(-0.018, 0)),
+            AssemblyGauge(body: target.id, name: "Near rear face", location: Point(0.018, 0))
+        ]
         return scene
     }
 }

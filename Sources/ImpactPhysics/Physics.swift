@@ -790,6 +790,38 @@ public struct Simulation: Sendable {
 }
 
 extension BodyStep {
+    func replayStress(_ index: Int) -> AssemblyStress {
+        let e = body.mesh.elements[index]
+        let u = body.position[e.b] - body.position[e.a]
+        let v = body.position[e.c] - body.position[e.a]
+        let x = u * e.g1.x + v * e.g2.x
+        let y = u * e.g1.y + v * e.g2.y
+        let j = cross2D(x, y)
+        let xx, yy, xy, zz: Double
+        if let history, let response = history.model.update(x: x, y: y, from: history.current[index]) {
+            // Cauchy stress is P Fᵀ / J. Average the two shear components
+            // to remove floating-point asymmetry.
+            let px = response.piolaX, py = response.piolaY
+            xx = (px.x * x.x + py.x * y.x) / j
+            yy = (px.y * x.y + py.y * y.y) / j
+            xy = (px.x * x.y + py.x * y.y + px.y * x.x + py.y * y.x) / (2 * j)
+            zz = response.cauchyZZ
+        } else {
+            let material = body.elementMaterials?[index] ?? body.material
+            let mu = material.shear
+            let volumetric = material.lambda * log(j)
+            xx = (mu * (x.x * x.x + y.x * y.x - 1) + volumetric) / j
+            yy = (mu * (x.y * x.y + y.y * y.y - 1) + volumetric) / j
+            xy = mu * (x.x * x.y + y.x * y.y) / j
+            zz = volumetric / j
+        }
+        let center = (xx + yy) / 2
+        let radius = hypot((xx - yy) / 2, xy)
+        let q = ((xx - yy) * (xx - yy) + (xx - zz) * (xx - zz) + (yy - zz) * (yy - zz)) / 2 + 3 * xy * xy
+        return AssemblyStress(equivalent: q.squareRoot(), pressure: -(xx + yy + zz) / 3,
+                              maximumPrincipal: max(center + radius, zz), minimumPrincipal: min(center - radius, zz))
+    }
+
     func equivalentCauchyStress() -> [Double] {
         body.mesh.elements.indices.map { cauchyFields($0, includePressure: false).equivalent }
     }

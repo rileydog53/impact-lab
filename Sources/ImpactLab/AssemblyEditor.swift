@@ -525,7 +525,7 @@ struct AssemblyEditor: View {
     private func gaugeEditor(_ part: AssemblyPart) -> some View {
         ForEach(experiment.gauges.filter { $0.body == part.id }) { gauge in
             if let index = experiment.gauges.firstIndex(where: { $0.id == gauge.id }) {
-                let value = experiment.simulation.gaugeReading(index)
+                let value = experiment.displayedGauge(index)
                 let fractions = gauge.usesBodyFractions == true
                 let unit = fractions ? "% half-size" : "mm"
                 let scale = fractions ? 100.0 : 1000.0
@@ -589,7 +589,7 @@ struct AssemblyEditor: View {
                 }
             }
             if let index = experiment.scene.connections.firstIndex(where: { $0.id == link.id }) {
-                let readings = experiment.simulation.linkReadings.filter { $0.connection == index }
+                let readings = experiment.displayedLinks.filter { $0.connection == index }
                 let maxLoad = readings.map { abs($0.force) }.max() ?? 0
                 let stored = readings.reduce(0) { $0 + $1.storedEnergy }
                 let lost = readings.reduce(0) { $0 + $1.fractureDissipation }

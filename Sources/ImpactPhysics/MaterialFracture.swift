@@ -4,6 +4,7 @@ public struct CrackFace: Sendable {
     public let first, second: Edge
     public let damage: Double
     public let separation: Double
+    public let failed: Bool
     public let seed: Point // Normal and shear traction at insertion.
 }
 
@@ -496,7 +497,7 @@ package struct MaterialFracture: Sendable {
             let damage = 0.5 * (seam.law.progress(seam.maxima.x) + seam.law.progress(seam.maxima.y))
             let (a, b) = seam.gap(position)
             return CrackFace(first: seam.left, second: seam.right, damage: damage,
-                             separation: 0.5 * (simd_length(a) + simd_length(b)), seed: seam.law.seed)
+                             separation: 0.5 * (simd_length(a) + simd_length(b)), failed: seam.failed, seed: seam.law.seed)
         }
     }
 

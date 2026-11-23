@@ -5,7 +5,7 @@ The recovery plan started at checkpoint `15e8a6d`. The [original recovery cards]
 - [x] Card 1 — Make the Application Usable
 - [x] Card 2 — Build a Genuine Assembly Workshop
 - [x] Card 3 core (3A and 3B) — Material profiles and verified metal mechanics
-- [ ] Card 4 — Make the Calculated Physics Visible
+- [x] Card 4 — Make the Calculated Physics Visible
 - [ ] Card 5 — Scale the Computational Engine
 - [ ] Card 7 — Build the Experimental Scenario Library
 - [ ] Card 6 — Prove the Complete Product Works
@@ -30,6 +30,8 @@ Run `ImpactCheck --metal-profiles` for the tabulated return-map, work balance, c
 ### Card 4 — Calculated physics and visualization
 
 Extend the existing replay, field inspection, and instrumentation work with equivalent and principal stress, plastic strain, damage, material-interface state, recoverable energy, dissipated energy, and comparisons of constitutive response where the solver supports them. Give each field a definition, stress measure where relevant, units, and limitations. Show whether a displayed value comes from the solver, a valid derivation, or display interpolation. Distinguish permanent bonds, damaged interfaces, and physical separation. Keep the original playback, gauges, Study comparisons, and export criteria.
+
+Assembly calculates in the background and replays sampled, accepted states at true scale. Event jumps select the accepted frames for first contact, interface damage, failure, detachment, and new-face contact. Use **Measurements** for frame-aligned energy, conservation, gauge, connection, and contact histories and CSV export. **Pin → Compare** shows both runs at a common requested time with actual frame times and shared geometry and color scales. Run `ImpactCheck --assembly-replay` for recorded-state checks.
 
 ### Card 5 — Computational scaling
 
