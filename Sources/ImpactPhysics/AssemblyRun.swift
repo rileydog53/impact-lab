@@ -38,7 +38,7 @@ public struct AssemblyRun {
     }
 
     @discardableResult public mutating func step() -> Bool {
-        let next = Double(samples.count) * SceneRun.sampleInterval
+        let next = Double(samples.count) * simulation.scene.sampleInterval
         let crosses = simulation.time + simulation.dt >= next && next <= simulation.scene.duration
         let before = crosses ? current : nil
         guard simulation.step() else { return false }
@@ -54,7 +54,7 @@ public struct AssemblyRun {
                                            crackLength: before.crackLength, // Topology changes discretely at acceptance.
                                            crackSeparation: before.crackSeparation + fraction * (after.crackSeparation - before.crackSeparation),
                                            peakStress: before.peakStress + fraction * (after.peakStress - before.peakStress)))
-                time = Double(samples.count) * SceneRun.sampleInterval
+                time = Double(samples.count) * simulation.scene.sampleInterval
             }
         }
         return true

@@ -37,12 +37,28 @@ package struct J2Model: Sendable {
     let shear, bulk: Double
     let yieldStress: Double?
     let hardening: Double
+    private let table: HardeningTable?
 
     package init(material: Material, yieldStress: Double? = nil, hardening: Double = 0) {
         shear = material.shear
         bulk = material.lambda + 2 * shear / 3
         self.yieldStress = yieldStress
         self.hardening = hardening
+        table = nil
+    }
+
+    package init(material: Material, table: HardeningTable) {
+        shear = material.shear
+        bulk = material.lambda + 2 * shear / 3
+        yieldStress = table.points[0].stress
+        hardening = 0
+        self.table = table
+    }
+
+    private func plasticIncrement(trial: Double, strain: Double) -> Double {
+        if let table { return table.plasticIncrement(trial: trial, oldStrain: strain, threeShear: 3 * shear) }
+        guard let yieldStress, trial > yieldStress + hardening * strain else { return 0 }
+        return (trial - yieldStress - hardening * strain) / (3 * shear + hardening)
     }
 
     package func update(x: Point, y: Point, from old: J2History) -> J2Response? {
@@ -70,8 +86,10 @@ package struct J2Model: Sendable {
 
         var history = old
         var scale = 1.0
-        if let yieldStress, trialStress > yieldStress + hardening * old.equivalentStrain {
-            let increment = (trialStress - yieldStress - hardening * old.equivalentStrain) / (3 * shear + hardening)
+        // The Hencky law returns Kirchhoff stress. Cauchy stress is tau/J;
+        // these tabulated flow stresses are interpreted as Kirchhoff values.
+        let increment = plasticIncrement(trial: trialStress, strain: old.equivalentStrain)
+        if increment > 0 {
             history.equivalentStrain += increment
             scale = max(0, 1 - 3 * shear * increment / trialStress)
 
@@ -100,6 +118,7 @@ package struct J2Model: Sendable {
         else { return nil }
         return J2Response(history: history, piolaX: columnX, piolaY: columnY, cauchyZZ: tau.zz / jacobian,
                           equivalentStress: scale * trialStress, elasticEnergy: elastic,
-                          hardeningEnergy: 0.5 * hardening * alpha * alpha, dissipation: (yieldStress ?? 0) * alpha)
+                          hardeningEnergy: table?.storedEnergy(at: alpha) ?? 0.5 * hardening * alpha * alpha,
+                          dissipation: (yieldStress ?? 0) * alpha)
     }
 }

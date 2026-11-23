@@ -173,6 +173,11 @@ struct AssemblyCanvas: View {
             }
             drawConnections(context, projection: projection, preview: preview)
             drawGauges(context, projection: projection, preview: preview)
+            if experiment.canEdit {
+                for part in experiment.scene.parts where part.velocity != .zero {
+                    drawInitialVelocity(preview[part.id] ?? part, context: context, projection: projection)
+                }
+            }
             if let anchor = experiment.linkPlacement?.first { drawAnchor(anchor, in: context, projection: projection) }
             if experiment.canEdit, !experiment.placingGauge, experiment.linkPlacement == nil,
                experiment.selectedParts.count == 1, let part = selected,
@@ -192,7 +197,7 @@ struct AssemblyCanvas: View {
             let caption = millimetres >= 1_000 ? "\((millimetres / 1_000).formatted()) m" : "\(millimetres.formatted()) mm"
             context.draw(Text(caption).font(.caption2.monospaced()), at: CGPoint(x: x, y: y - 7), anchor: .bottomLeading)
             if !experiment.canEdit {
-                context.draw(Text(field.legend).font(.caption2).foregroundStyle(assemblyInk.opacity(0.86)),
+                context.draw(Text(fieldLegend).font(.caption2).foregroundStyle(assemblyInk.opacity(0.86)),
                              at: CGPoint(x: size.width - 19, y: y), anchor: .trailing)
             }
         }
@@ -435,6 +440,49 @@ struct AssemblyCanvas: View {
         return preview.center + rotated(local, by: preview.angle)
     }
 
+    private var usesMetalScale: Bool {
+        experiment.scene.parts.contains {
+            $0.material.provenance != nil || $0.bondedLayer?.material.provenance != nil
+                || $0.bondedLayer?.third?.material.provenance != nil
+        }
+    }
+
+    private var fieldLegend: String {
+        guard usesMetalScale else { return field.legend }
+        switch field {
+        case .stress: return "Cauchy von Mises stress · 0–300 MPa"
+        case .pressure: return "Cauchy pressure · −300 MPa tension / +300 MPa compression"
+        case .plastic: return "Accumulated equivalent plastic strain · 0–1%"
+        default: return field.legend
+        }
+    }
+
+    private var fieldScale: Double {
+        guard usesMetalScale else { return field.scale }
+        switch field {
+        case .stress, .pressure: return 300e6
+        case .plastic: return 0.01
+        default: return field.scale
+        }
+    }
+
+    private func drawInitialVelocity(_ part: AssemblyPart, context: GraphicsContext, projection: AssemblyProjection) {
+        let speed = simd_length(part.velocity)
+        let direction = Point(part.velocity.x, -part.velocity.y) / speed
+        let normal = Point(-direction.y, direction.x)
+        let center = projection.screen(part.center)
+        let start = Point(center.x, center.y)
+        let end = start + direction * min(57, 26 + 10 * log1p(speed))
+        let base = end - 7 * direction
+        context.stroke(Path { path in
+            path.move(to: CGPoint(x: start.x, y: start.y))
+            path.addLine(to: CGPoint(x: end.x, y: end.y))
+            path.move(to: CGPoint(x: base.x + 4 * normal.x, y: base.y + 4 * normal.y))
+            path.addLine(to: CGPoint(x: end.x, y: end.y))
+            path.addLine(to: CGPoint(x: base.x - 4 * normal.x, y: base.y - 4 * normal.y))
+        }, with: .color(assemblyInk), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+    }
+
     private func drawBody(_ i: Int, context: GraphicsContext, projection: AssemblyProjection, preview: AssemblyPart?) {
         let part = experiment.scene.parts[i]
         let body = experiment.simulation.body(i)
@@ -442,10 +490,11 @@ struct AssemblyCanvas: View {
         let nodes = positions.map(projection.screen)
         let values = experiment.canEdit ? [] : field.values(i, in: experiment.simulation)
         let color = assemblyColor(i)
+        let scale = fieldScale
         var buckets = Array(repeating: Path(), count: 13)
         for (index, triangle) in body.mesh.elements.enumerated() {
             let value = values.isEmpty ? 0 : values[index]
-            let level = min(1, abs(value) / field.scale)
+            let level = min(1, abs(value) / scale)
             let step = Int((level * 6).rounded())
             let slot = value < 0 ? 6 - step : 6 + step
             buckets[slot].move(to: nodes[triangle.a])

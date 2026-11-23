@@ -123,6 +123,7 @@ public struct AssemblyStudy: Sendable {
                 normalImpulses: contacts.map(\.impulse),
                 fractures: (0..<simulation.bodyCount).map(simulation.fractureReading))
         }
+        let sampleInterval = simulation.scene.sampleInterval
         var samples = [sample()]
         var steps = 0
         var next = 1

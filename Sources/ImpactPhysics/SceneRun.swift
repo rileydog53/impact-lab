@@ -17,6 +17,19 @@ public struct TraceSample: Equatable, Sendable {
         self.crackSeparation = crackSeparation
         self.peakStress = peakStress
     }
+
+    func interpolated(to next: Self, at time: Double) -> Self {
+        if time == next.time { return next }
+        let fraction = (time - self.time) / (next.time - self.time)
+        func blend(_ a: Double, _ b: Double) -> Double { a + fraction * (b - a) }
+        return Self(time: time, values: values + fraction * (next.values - values),
+                    plasticDissipation: blend(plasticDissipation, next.plasticDissipation),
+                    connectionEnergy: blend(connectionEnergy, next.connectionEnergy),
+                    materialFracture: blend(materialFracture, next.materialFracture),
+                    crackLength: crackLength, // Topology changes discretely.
+                    crackSeparation: blend(crackSeparation, next.crackSeparation),
+                    peakStress: blend(peakStress, next.peakStress))
+    }
 }
 
 public struct SceneTrace: Sendable {
@@ -41,9 +54,19 @@ public struct SceneTrace: Sendable {
     }
 
     public static func matching(_ reference: [TraceSample], _ current: [TraceSample]) -> [Match] {
-        zip(reference, current).map {
-            // Both traces record the same simulation-time grid.
-            Match(time: $0.time, referenceSample: $0, currentSample: $1)
+        guard let referenceStart = reference.first?.time, let referenceEnd = reference.last?.time,
+              let currentStart = current.first?.time, let currentEnd = current.last?.time else { return [] }
+        let start = max(referenceStart, currentStart), end = min(referenceEnd, currentEnd)
+        let times = Set(reference.map(\.time) + current.map(\.time)).sorted()
+        var i = 0, j = 0
+        func sample(_ values: [TraceSample], index: inout Int, at time: Double) -> TraceSample {
+            while index + 1 < values.count && values[index + 1].time <= time { index += 1 }
+            if values[index].time == time { return values[index] }
+            return values[index].interpolated(to: values[index + 1], at: time)
+        }
+        return times.filter { start <= $0 && $0 <= end }.map { time in
+            Match(time: time, referenceSample: sample(reference, index: &i, at: time),
+                  currentSample: sample(current, index: &j, at: time))
         }
     }
 }

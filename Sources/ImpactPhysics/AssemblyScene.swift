@@ -62,9 +62,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         var isValid: Bool {
             let range = Self.minimumFraction...(1 - Self.minimumFraction)
             return regions.allSatisfy { fraction, material in
-                range.contains(fraction) && SceneConfiguration.youngRange.contains(material.young)
-                    && SceneConfiguration.densityRange.contains(material.density)
-                    && SceneConfiguration.poissonRange.contains(material.poisson)
+                range.contains(fraction) && material.isValidForAssembly
             } && (third.map { $0.interfaceFraction - interfaceFraction >= Self.minimumFraction - 1e-12 } ?? true)
         }
     }
@@ -74,6 +72,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         case enclosure = "Enclosure"
         case round = "Round body"
     }
+
+    public static let velocityRange = -150.0...150.0
 
     public var id = UUID()
     public var name: String
@@ -102,12 +102,10 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         (0.025...0.30).contains(size.x) && (0.025...0.30).contains(size.y)
             && (-1...1).contains(center.x) && (-1...1).contains(center.y)
             && (-360...360).contains(angle)
-            && (-1.5...1.5).contains(velocity.x) && (-1.5...1.5).contains(velocity.y)
+            && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
             && (shape != .enclosure || (0.005...0.4 * min(size.x, size.y)).contains(wall))
-            && SceneConfiguration.youngRange.contains(material.young)
-            && SceneConfiguration.densityRange.contains(material.density)
-            && SceneConfiguration.poissonRange.contains(material.poisson)
-            && plasticity.isValid && (fracture.map { shape != .round && $0.isValid } ?? true)
+            && material.isValidForAssembly
+            && plasticity.isValid && (fracture.map { shape != .round && material.provenance == nil && $0.isValid } ?? true)
             && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)
             && (bondedLayer.map { shape == .block && $0.isValid && fracture == nil && notch == nil
@@ -254,6 +252,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     public private(set) var assemblyVersion = 1
     public var parts: [AssemblyPart] = []
     public var connections: [AssemblyConnection] = []
+    public static let durationRange = 0.0001...0.25
     public var duration = 0.12
     public var monitor: UUID?
     public var relativeTo: UUID?
@@ -261,6 +260,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     // Optional on disk so scenes from 0.6 retain their original meshes.
     public var meshResolution: Resolution?
     public var resolution: Resolution { meshResolution ?? .standard }
+    var sampleInterval: Double { min(SceneRun.sampleInterval, duration / 80) }
     // Workshop organization does not affect body indices or contact order.
     public var bodyOrder: [UUID]?
     public var groups: [AssemblyGroup]?
@@ -303,7 +303,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
               Set(order).count == order.count, order.allSatisfy(ids.contains),
               Set(groups.map(\.id)).count == groups.count, groups.allSatisfy({ $0.members.count >= 2 }),
               Set(members).count == members.count, members.allSatisfy(ids.contains),
-              (0.02...0.25).contains(duration), monitor.map(ids.contains) ?? true,
+              Self.durationRange.contains(duration), monitor.map(ids.contains) ?? true,
               relativeTo.map({ ids.contains($0) && $0 != (monitor ?? parts.first?.id) }) ?? true,
               (gauges?.count ?? 0) <= AssemblyGauge.limit,
               Set(gauges?.map(\.id) ?? []).count == (gauges?.count ?? 0),

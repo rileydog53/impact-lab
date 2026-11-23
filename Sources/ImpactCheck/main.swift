@@ -217,6 +217,11 @@ if CommandLine.arguments.dropFirst().contains("--layered-impact") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--metal-profiles") {
+    try metalProfilesCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--plasticity") {
     try plasticityCheck()
     try materialImpactCheck()

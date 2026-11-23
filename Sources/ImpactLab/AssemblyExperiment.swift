@@ -71,9 +71,35 @@ struct AssemblyComparison {
         let monitored = scene.parts.first { $0.id == scene.monitor } ?? scene.parts.first
         let pattern = monitored.flatMap { $0.shape == .block ? $0.fracture?.pattern.rawValue : nil }
         let mesh = monitored?.refinement ?? scene.resolution
-        let details = [monitoredName, mesh.label, pattern, "\(elementCount) triangles"].compactMap { $0 }
+        let details = [monitoredName, monitored?.material.provenance?.name, mesh.label, pattern, "\(elementCount) triangles"].compactMap { $0 }
         return AssemblyComparison(details: details.joined(separator: " · "), samples: samples,
                                   tracksFracture: scene.parts.contains { $0.fracture != nil })
+    }
+
+    var initialMotionNote: String? {
+        guard canEdit, !scene.parts.isEmpty else { return nil }
+        if scene.parts.allSatisfy({ $0.velocity == .zero }) {
+            return "Static setup. All bodies start at rest and assembly links start unloaded."
+        }
+        guard scene.connections.isEmpty else { return nil }
+        guard scene.parts.count > 1 else { return "Free translation. Add a second body to create contact." }
+        let bounds = scene.parts.indices.map { index in
+            let positions = simulation.body(index).position
+            return (lower: Point(positions.map(\.x).min()!, positions.map(\.y).min()!),
+                    upper: Point(positions.map(\.x).max()!, positions.map(\.y).max()!))
+        }
+        for i in bounds.indices {
+            for j in bounds.indices where j > i {
+                let travel = (scene.parts[j].velocity - scene.parts[i].velocity) * scene.duration
+                let start = bounds[j]
+                let lower = start.lower + Point(min(0, travel.x), min(0, travel.y))
+                let upper = start.upper + Point(max(0, travel.x), max(0, travel.y))
+                if (0..<2).allSatisfy({ lower[$0] <= bounds[i].upper[$0] && upper[$0] >= bounds[i].lower[$0] }) {
+                    return nil
+                }
+            }
+        }
+        return "No contact in this window. With the current velocities, the bodies' swept bounds stay apart."
     }
 
     var canRefine: Bool {
@@ -242,6 +268,11 @@ struct AssemblyComparison {
             change(&scene.parts[index])
             fitWall(of: &scene.parts[index])
         }
+    }
+
+    func assignMaterial(_ profile: MaterialProfile, to id: UUID, target: MaterialTarget, elasticOnly: Bool) {
+        guard canEdit, profile.isValid else { return }
+        updatePart(id, action: "Apply Material") { target.apply(profile, to: &$0, elasticOnly: elasticOnly) }
     }
 
     func fitWall(of part: inout AssemblyPart) {

@@ -7,11 +7,21 @@ public struct Material: Codable, Equatable, Sendable {
     public var young: Double
     public var density: Double
     public var poisson: Double
+    public var provenance: MaterialProvenance?
 
     public init(young: Double = 1e6, density: Double = 1000, poisson: Double = 0) {
         self.young = young
         self.density = density
         self.poisson = poisson
+    }
+
+    public static let assemblyYoungRange = 0.5e6...400e9
+    public static let assemblyDensityRange = 100...25_000.0
+    public static let assemblyPoissonRange = -0.9...0.48
+
+    public var isValidForAssembly: Bool {
+        Self.assemblyYoungRange.contains(young) && Self.assemblyDensityRange.contains(density)
+            && Self.assemblyPoissonRange.contains(poisson) && (provenance?.isValid ?? true)
     }
 
     var shear: Double { young / (2 * (1 + poisson)) }
@@ -121,7 +131,7 @@ public struct Body: Sendable {
     public internal(set) var position: [Point]
     public internal(set) var velocity: [Point]
     let mass: [Double]
-    let totalMass: Double
+    public let totalMass: Double
     let referenceCenter: Point
     let boundaryNodes: [Int]
     let wallStiffness: [Double]
@@ -584,7 +594,8 @@ public struct Simulation: Sendable {
 
     @discardableResult public mutating func step() -> Bool {
         guard failure == nil else { return false }
-        guard primary.drift(dt), secondary?.drift(dt) ?? true, tertiary?.drift(dt) ?? true, receiver?.drift(dt) ?? true else {
+        let step = dt
+        guard primary.drift(step), secondary?.drift(step) ?? true, tertiary?.drift(step) ?? true, receiver?.drift(step) ?? true else {
             failure = "Position became non-finite."
             return false
         }
@@ -665,7 +676,7 @@ public struct Simulation: Sendable {
             failure = "Contact energy or impulse became non-finite."
             return false
         }
-        guard primary.kick(dt), secondary?.kick(dt) ?? true, tertiary?.kick(dt) ?? true, receiver?.kick(dt) ?? true else {
+        guard primary.kick(step), secondary?.kick(step) ?? true, tertiary?.kick(step) ?? true, receiver?.kick(step) ?? true else {
             failure = "Velocity became non-finite."
             return false
         }

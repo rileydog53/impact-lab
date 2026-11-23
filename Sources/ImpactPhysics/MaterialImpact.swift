@@ -4,17 +4,19 @@ public struct ImpactPlasticity: Codable, Equatable, Sendable {
     public var response = CouponResponse.elastoplastic
     public var yieldFraction = 0.016
     public var hardeningFraction = 0.32
+    public var table: HardeningTable?
 
     public static let yieldRange = 0.010...0.035
     public static let hardeningRange = TensionSettings.hardeningRange
 
     func model(for material: Material) -> J2Model {
-        J2Model(material: material, yieldStress: response == .elastoplastic ? material.young * yieldFraction : nil,
+        if let table, response == .elastoplastic { return J2Model(material: material, table: table) }
+        return J2Model(material: material, yieldStress: response == .elastoplastic ? material.young * yieldFraction : nil,
                 hardening: material.young * hardeningFraction)
     }
 
     var isValid: Bool {
-        Self.yieldRange.contains(yieldFraction) && Self.hardeningRange.contains(hardeningFraction)
+        Self.yieldRange.contains(yieldFraction) && Self.hardeningRange.contains(hardeningFraction) && (table?.isValid ?? true)
     }
 }
 

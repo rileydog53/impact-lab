@@ -20,6 +20,7 @@ public enum AssemblyMaterialProfile: String, CaseIterable, Sendable {
 
     public func apply(to part: inout AssemblyPart) {
         part.material = material
+        part.plasticity.table = nil
         part.plasticity.response = response
         if self == .yielding {
             part.plasticity.yieldFraction = 0.013
@@ -154,5 +155,21 @@ public enum AssemblyExperimentPreset: String, CaseIterable, Identifiable, Sendab
 
     private func gauge(_ body: AssemblyPart, _ name: String, _ x: Double, _ y: Double) -> AssemblyGauge {
         AssemblyGauge(body: body.id, name: name, location: Point(x, y), usesBodyFractions: true)
+    }
+}
+
+extension AssemblyScene {
+    /// Free two-body contact at nominal material stiffness and density.
+    public static func metalImpactExample() -> Self {
+        var scene = Self()
+        var target = AssemblyPart("Metal specimen", center: Point(0.02265, 0), size: Point(0.045, 0.036))
+        MaterialProfile.copperC110.apply(to: &target)
+        var striker = AssemblyPart("Steel striker", center: Point(-0.02265, 0), size: Point(0.045, 0.036))
+        MaterialProfile.structuralSteel.apply(to: &striker, elasticOnly: true)
+        striker.velocity.x = 24
+        scene.parts = [target, striker]
+        scene.duration = 0.00015
+        scene.monitor = target.id
+        return scene
     }
 }

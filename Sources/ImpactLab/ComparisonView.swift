@@ -34,7 +34,8 @@ struct ComparisonView: View {
         currentResidual = nil
         samples = SceneTrace.matching(reference.samples, current.samples)
         _cursor = State(initialValue: Double(max(0, samples.count - 1)))
-        _selectedSignal = State(initialValue: tracksFracture ? 3 : 0)
+        _selectedSignal = State(initialValue: tracksFracture ? 3
+            : (samples.last.map { $0.referenceSample.plasticDissipation > 0 || $0.currentSample.plasticDissipation > 0 } == true ? 3 : 0))
     }
 
     private typealias Signal = (name: String, unit: String, value: KeyPath<TraceSample, Double>, color: Color)
@@ -42,7 +43,10 @@ struct ComparisonView: View {
         guard let preset else {
             let motion: [Signal] = [("Relative X", "mm", \.values.x, .mint), ("Body kinetic energy", "J/m", \.values.y, .orange),
                     ("Stored connection energy", "J/m", \.connectionEnergy, .yellow)]
-            guard tracksFracture else { return motion }
+            guard tracksFracture else {
+                return motion + [("Plastic dissipation", "J/m", \.plasticDissipation, .pink),
+                                 ("Sampled peak stress", "kPa", \.peakStress, .cyan)]
+            }
             return motion + [("Material fracture dissipation", "J/m", \.materialFracture, .pink),
                              ("Crack length", "mm", \.crackLength, .red),
                              ("Face separation", "mm", \.crackSeparation, .purple),

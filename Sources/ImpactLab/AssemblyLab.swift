@@ -145,6 +145,11 @@ struct AssemblyLab: View {
                                               field: .damage, signal: 3)
                     applyPendingReplacement()
                 }
+                Button("Metal Impact Example") {
+                    replacement = Replacement(scene: .metalImpactExample(), title: "Metal impact example",
+                                              field: .plastic, signal: 7)
+                    applyPendingReplacement()
+                }
                 Button("Bonded Wave Example") {
                     replacement = Replacement(scene: .bondedWaveExample(), title: "Bonded wave example", field: .pressure)
                     applyPendingReplacement()
@@ -247,6 +252,8 @@ struct AssemblyLab: View {
             }
             if let reason = experiment.simulation.initialIssue ?? experiment.simulation.failure {
                 Label(reason, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(assemblyAmber)
+            } else if let note = experiment.initialMotionNote {
+                Label(note, systemImage: "info.circle").font(.caption).foregroundStyle(assemblyAmber)
             } else if !experiment.canEdit {
                 playbackIndicator
             }
@@ -266,7 +273,8 @@ struct AssemblyLab: View {
         if let index = experiment.selectedIndex, field == .stress || field == .plastic {
             let peak = field.values(index, in: experiment.simulation).max() ?? 0
             Text(field == .stress
-                 ? String(format: "Selected body · %.2f kPa peak", peak / 1000)
+                 ? String(format: peak >= 1e6 ? "Selected body · %.3g MPa peak" : "Selected body · %.3g kPa peak",
+                                 peak / (peak >= 1e6 ? 1e6 : 1000))
                  : String(format: "Selected body · %.2f%% peak", peak * 100))
                 .font(.caption).monospacedDigit()
         }
@@ -426,7 +434,7 @@ struct AssemblyLab: View {
             ("Relative X", "mm", \.values.x), ("Body kinetic", "J/m", \.values.y),
             ("Link energy", "J/m", \.connectionEnergy), ("Material fracture", "J/m", \.materialFracture),
             ("Crack length", "mm", \.crackLength), ("Face separation", "mm", \.crackSeparation),
-            ("Sampled peak stress", "kPa", \.peakStress)
+            ("Sampled peak stress", "kPa", \.peakStress), ("Plastic dissipation", "J/m", \.plasticDissipation)
         ]
         let (_, unit, field) = traceSignals[signal]
         let color = signal == 0 ? assemblyMint : assemblyAmber
@@ -436,7 +444,7 @@ struct AssemblyLab: View {
                     ForEach(traceSignals.indices, id: \.self) { Text(traceSignals[$0].0).tag($0) }
                 }.labelsHidden().frame(width: 166)
                 Spacer()
-                Text(signal == 2 ? "All connections" : (signal == 0 ? "\(experiment.monitoredName) · \(experiment.relativeName)" : experiment.monitoredName))
+                Text(signal == 2 ? "All connections" : (signal == 7 ? "All bodies" : (signal == 0 ? "\(experiment.monitoredName) · \(experiment.relativeName)" : experiment.monitoredName)))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Canvas { context, size in
@@ -463,7 +471,7 @@ struct AssemblyLab: View {
                     }
                 }
                 context.stroke(path, with: .color(color), lineWidth: 1.6)
-                context.draw(Text(String(format: "%.0f ms", 1000 * duration)).font(.caption2.monospaced()),
+                context.draw(Text(String(format: "%g ms", 1000 * duration)).font(.caption2.monospaced()),
                              at: CGPoint(x: right, y: size.height - 5), anchor: .bottomTrailing)
             }.frame(height: 78)
                 .accessibilityLabel("Sampled assembly measurements over time")

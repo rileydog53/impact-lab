@@ -4,7 +4,7 @@ The recovery plan started at checkpoint `15e8a6d`. The [original recovery cards]
 
 - [x] Card 1 — Make the Application Usable
 - [x] Card 2 — Build a Genuine Assembly Workshop
-- [ ] Card 3 — Make Materials and Physical Conditions Meaningful
+- [x] Card 3 core (3A and 3B) — Material profiles and verified metal mechanics
 - [ ] Card 4 — Make the Calculated Physics Visible
 - [ ] Card 5 — Scale the Computational Engine
 - [ ] Card 7 — Build the Experimental Scenario Library
@@ -24,6 +24,8 @@ Impact Lab is a native macOS laboratory for research, education, and exploration
 - **3D · Selected advanced material extensions.** Treat brittle and cohesive extensions and the other model families below as independently justified work. Each needs evidence, a compatible numerical formulation, and standalone verification before use in scenarios. This research can continue after initial product acceptance.
 
 Keep the original physical-condition controls and acceptance criteria, including the preview of initial velocity magnitude and direction, constraints, and supported loads. Show relevant mass, momentum, and kinetic energy. Explain static setups, bodies that cannot interact in the run window, and incompatible settings. Fixed or clamped constraints still require solver support. Advance to Card 4 once 3A and 3B satisfy the core material workflow and verification gates. Work in 3C and 3D does not gate later cards.
+
+Run `ImpactCheck --metal-profiles` for the tabulated return-map, work balance, conservation, and refinement gates. In the native Assembly tab, open **New / Examples → Metal Impact Example** to compare materials at the same impact speed. The existing J2 implementation returns Kirchhoff stress and displays Cauchy stress after division by \(J\). For tabulated hardening, the integral of the increase in flow stress above initial yield is stored and initial yield times accumulated plastic strain is dissipated.
 
 ### Card 4 — Calculated physics and visualization
 

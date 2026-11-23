@@ -1,10 +1,12 @@
 import AppKit
 import ImpactPhysics
+import simd
 import SwiftUI
 
 struct AssemblyEditor: View {
     let experiment: AssemblyExperiment
     @State private var bodySettings = true
+    @State private var materialTarget: MaterialTarget?
     @State private var materialSettings = false
     @State private var connectionList = false
     @State private var meshSettings = false
@@ -97,6 +99,14 @@ struct AssemblyEditor: View {
             .padding(.vertical, 15)
         }
         .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 12))
+        .sheet(item: $materialTarget) { target in
+            if let index = experiment.selectedIndex {
+                let part = experiment.scene.parts[index]
+                MaterialLibrary(target: target, part: part, canAssign: experiment.canEdit) { profile, elasticOnly in
+                    experiment.assignMaterial(profile, to: part.id, target: target, elasticOnly: elasticOnly)
+                }
+            }
+        }
     }
 
     private var components: some View {
@@ -258,8 +268,19 @@ struct AssemblyEditor: View {
             }
             Text("Initial motion").font(.subheadline.weight(.semibold)).padding(.top, 4)
             HStack(spacing: 6) {
-                bodyNumber("X velocity (m/s)", part, \.velocity.x, -1.5...1.5)
-                bodyNumber("Y velocity (m/s)", part, \.velocity.y, -1.5...1.5)
+                bodyNumber("X velocity (m/s)", part, \.velocity.x, AssemblyPart.velocityRange)
+                bodyNumber("Y velocity (m/s)", part, \.velocity.y, AssemblyPart.velocityRange)
+            }
+            if experiment.canEdit, let index = experiment.selectedIndex {
+                let speed = simd_length(part.velocity)
+                let mass = experiment.simulation.body(index).totalMass
+                let direction = atan2(part.velocity.y, part.velocity.x) * 180 / .pi
+                Text(speed > 0 ? "Speed \(speed, specifier: "%.3g") m/s · \(direction, specifier: "%.1f")° from +X" : "Initially at rest")
+                    .font(.caption.monospacedDigit())
+                Text("Mass \(mass, specifier: "%.3g") kg/m · Kinetic energy \(0.5 * mass * speed * speed, specifier: "%.3g") J/m")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text("Momentum (\(mass * part.velocity.x, specifier: "%.3g"), \(mass * part.velocity.y, specifier: "%.3g")) N·s/m")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             let links = experiment.scene.connections.filter { $0.first == part.id || $0.second == part.id }
             Text(links.isEmpty ? "Constraints · Free body" : "Constraints · \(links.count) body-to-body \(links.count == 1 ? "link" : "links")")
@@ -286,34 +307,50 @@ struct AssemblyEditor: View {
             }
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
+                    Button("Material Library…", systemImage: "square.stack.3d.up") { materialTarget = .body }
                     profiles("Apply illustrative profile", elasticOnly: part.bondedLayer != nil) { profile in
                         experiment.updatePart(part.id, action: "Apply Material") { profile.apply(to: &$0) }
                     }.disabled(!experiment.canEdit)
-                    Text("Profiles use illustrative numerical values.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Picker("Response", selection: Binding(get: { part.plasticity.response },
-                                                          set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
-                        ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .disabled(!experiment.canEdit || part.bondedLayer != nil)
-                    Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
-                        GridRow {
-                            bodyNumber("Young’s modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
-                                .help("Elastic stiffness in uniaxial loading")
-                            bodyNumber("Density (kg/m³)", part, \.material.density, SceneConfiguration.densityRange)
+                    if let provenance = part.material.provenance {
+                        Text(provenance.name).font(.subheadline.weight(.semibold))
+                        assignedMaterial(part.material)
+                        if part.plasticity.response == .elastoplastic, let table = part.plasticity.table {
+                            Text("J2 · Initial flow stress \(table.points[0].stress / 1e6, specifier: "%.4g") MPa")
+                                .font(.caption)
+                            HardeningPreview(table: table)
+                        } else {
+                            Text("Elastic response").font(.caption)
                         }
-                        GridRow {
-                            bodyNumber("Poisson ratio", part, \.material.poisson, SceneConfiguration.poissonRange)
-                                .help("Transverse contraction relative to axial extension in uniaxial loading")
+                    } else {
+                        Text("Profiles use illustrative numerical values.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Picker("Response", selection: Binding(get: { part.plasticity.response },
+                                                              set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
+                            ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
-                        if part.plasticity.response == .elastoplastic {
+                        .disabled(!experiment.canEdit || part.bondedLayer != nil)
+                        Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                             GridRow {
-                                bodyNumber("Yield / E (%)", part, \.plasticity.yieldFraction, ImpactPlasticity.yieldRange, scale: 100)
-                                bodyNumber("Hardening / E (%)", part, \.plasticity.hardeningFraction, ImpactPlasticity.hardeningRange, scale: 100)
+                                bodyNumber("Young’s modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
+                                    .help("Elastic stiffness in uniaxial loading")
+                                bodyNumber("Density (kg/m³)", part, \.material.density, SceneConfiguration.densityRange)
+                            }
+                            GridRow {
+                                bodyNumber("Poisson ratio", part, \.material.poisson, SceneConfiguration.poissonRange)
+                                    .help("Transverse contraction relative to axial extension in uniaxial loading")
+                            }
+                            if part.plasticity.response == .elastoplastic {
+                                GridRow {
+                                    bodyNumber("Yield / E (%)", part, \.plasticity.yieldFraction, ImpactPlasticity.yieldRange, scale: 100)
+                                    bodyNumber("Hardening / E (%)", part, \.plasticity.hardeningFraction, ImpactPlasticity.hardeningRange, scale: 100)
+                                }
                             }
                         }
                     }
-                    if part.shape == .round {
+                    if part.material.provenance != nil {
+                        Text("The selected metal profile supports elastic and J2 response. Bulk fracture is unavailable.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if part.shape == .round {
                         Text("Material fracture is unavailable for round bodies.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if part.bondedLayer == nil {
@@ -352,7 +389,7 @@ struct AssemblyEditor: View {
                         Text("Bonded layers require elastic material and use permanent bonds.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if part.shape == .block { bondedLayerEditor(part).disabled(!experiment.canEdit) }
+                    if part.shape == .block { bondedLayerEditor(part) }
                 }.padding(.top, 7)
             }
             gaugeEditor(part)
@@ -363,6 +400,7 @@ struct AssemblyEditor: View {
         if let layer = part.bondedLayer {
             return layer.third == nil ? "Two bonded elastic layers" : "Three bonded elastic layers"
         }
+        if let provenance = part.material.provenance { return provenance.name }
         if let profile = AssemblyMaterialProfile.allCases.first(where: {
             $0.response == part.plasticity.response && $0.material == part.material
         }) {
@@ -399,7 +437,7 @@ struct AssemblyEditor: View {
                 experiment.updatePart(part.id) { $0.bondedLayer = enabled ? AssemblyPart.BondedLayer() : nil }
             }))
             .toggleStyle(.checkbox)
-            .disabled(part.notch != nil || part.fracture != nil || part.plasticity.response != .elastic)
+            .disabled(!experiment.canEdit || part.notch != nil || part.fracture != nil || part.plasticity.response != .elastic)
             .help("Available on unnotched elastic blocks with material fracture off")
             if let layer = part.bondedLayer {
                 Text("Elastic layers share nodes at permanent bonds. Layer positions are measured along the local width.")
@@ -409,7 +447,7 @@ struct AssemblyEditor: View {
                         range: minimum...max(minimum, firstUpperBound), scale: 100) { value in
                     experiment.updatePart(part.id) { $0.bondedLayer?.interfaceFraction = value }
                 }
-                layerMaterial("Second layer", layer.material) { material in
+                layerMaterial(.second, layer.material) { material in
                     experiment.updatePart(part.id) { $0.bondedLayer?.material = material }
                 }
                 Toggle("Bonded third material", isOn: Binding(get: { layer.third != nil }, set: { enabled in
@@ -418,13 +456,13 @@ struct AssemblyEditor: View {
                         $0.bondedLayer?.third = enabled ? .init(interfaceFraction: fraction) : nil
                     }
                 })).toggleStyle(.checkbox)
-                    .disabled(layer.third == nil && layer.interfaceFraction > 1 - 2 * minimum)
+                    .disabled(!experiment.canEdit || (layer.third == nil && layer.interfaceFraction > 1 - 2 * minimum))
                 if let third = layer.third {
                     numeric("Second bond from left (% width)", value: third.interfaceFraction,
                             range: min(1 - minimum, layer.interfaceFraction + minimum)...(1 - minimum), scale: 100) { value in
                         experiment.updatePart(part.id) { $0.bondedLayer?.third?.interfaceFraction = value }
                     }
-                    layerMaterial("Third layer", third.material) { material in
+                    layerMaterial(.third, third.material) { material in
                         experiment.updatePart(part.id) { $0.bondedLayer?.third?.material = material }
                     }
                 }
@@ -440,25 +478,45 @@ struct AssemblyEditor: View {
         }
     }
 
-    private func layerMaterial(_ title: String, _ material: ImpactPhysics.Material,
+    private func assignedMaterial(_ material: ImpactPhysics.Material) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("E \(material.young / 1e9, specifier: "%.4g") GPa · ρ \(material.density, specifier: "%.5g") kg/m³ · ν \(material.poisson, specifier: "%.3g")")
+                .font(.caption.monospacedDigit())
+            if let provenance = material.provenance {
+                Text(provenance.condition)
+                if provenance.isCustom { Text("Saved inputs from a user-edited profile.") }
+                Text(provenance.evidence)
+                Link(provenance.sourceName, destination: provenance.source)
+            }
+        }.font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func layerMaterial(_ target: MaterialTarget, _ material: ImpactPhysics.Material,
                                set: @escaping (ImpactPhysics.Material) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            profiles("\(title) illustrative profiles", elasticOnly: true) { set($0.material) }
-            HStack {
-                numeric("E (MPa)", value: material.young, range: SceneConfiguration.youngRange, scale: 1e-6) { value in
-                    var next = material
-                    next.young = value
-                    set(next)
-                }
-                numeric("Density (kg/m³)", value: material.density, range: SceneConfiguration.densityRange, scale: 1) { value in
-                    var next = material
-                    next.density = value
-                    set(next)
-                }
-                numeric("Poisson ratio", value: material.poisson, range: SceneConfiguration.poissonRange, scale: 1) { value in
-                    var next = material
-                    next.poisson = value
-                    set(next)
+            Button("\(target.rawValue) Material Library…") { materialTarget = target }
+            profiles("\(target.rawValue) illustrative profiles", elasticOnly: true) { set($0.material) }
+                .disabled(!experiment.canEdit)
+            if let provenance = material.provenance {
+                Text(provenance.name).font(.caption.weight(.semibold))
+                assignedMaterial(material)
+            } else {
+                HStack {
+                    numeric("E (MPa)", value: material.young, range: SceneConfiguration.youngRange, scale: 1e-6) { value in
+                        var next = material
+                        next.young = value
+                        set(next)
+                    }
+                    numeric("Density (kg/m³)", value: material.density, range: SceneConfiguration.densityRange, scale: 1) { value in
+                        var next = material
+                        next.density = value
+                        set(next)
+                    }
+                    numeric("Poisson ratio", value: material.poisson, range: SceneConfiguration.poissonRange, scale: 1) { value in
+                        var next = material
+                        next.poisson = value
+                        set(next)
+                    }
                 }
             }
         }
@@ -557,7 +615,7 @@ struct AssemblyEditor: View {
                 }.disabled(!experiment.canEdit)
                 Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.2f") µs step")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                numeric("Duration (ms)", value: experiment.scene.duration, range: 0.02...0.25, scale: 1000) { value in
+                numeric("Duration (ms)", value: experiment.scene.duration, range: AssemblyScene.durationRange, scale: 1000) { value in
                     experiment.edit { $0.duration = value }
                 }
                 if !experiment.scene.parts.isEmpty {
