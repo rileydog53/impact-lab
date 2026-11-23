@@ -108,6 +108,41 @@ private func springControl() throws {
             "Spring control disagrees with the low-compliance analytical limit")
 }
 
+private func roundBodyWorkshopCheck() throws {
+    var scene = AssemblyScene()
+    var driver = AssemblyPart("Round driver", shape: .round, size: Point(0.050, 0.040))
+    driver.velocity.x = 0.60
+    var laminate = AssemblyPart("Laminate", center: Point(0.055, 0), size: Point(0.040, 0.110))
+    var layers = AssemblyPart.BondedLayer()
+    layers.interfaceFraction = 0.30
+    layers.third = .init(interfaceFraction: 0.70, material: .init(young: 0.65e6, density: 760))
+    laminate.bondedLayer = layers
+    var support = AssemblyPart("Support", center: Point(0.108, 0), size: Point(0.045, 0.060))
+    AssemblyMaterialProfile.stiff.apply(to: &support)
+    scene.parts = [driver, laminate, support]
+    scene.connections = [AssemblyConnection(first: laminate.id, second: support.id)]
+    scene.bodyOrder = [support.id, laminate.id, driver.id]
+    scene.groups = [AssemblyGroup(members: [laminate.id, support.id])]
+    scene.duration = 0.055
+
+    let run = try simulate("Round driver, bonded plate, deformable support", scene)
+    let final = run.final
+    let roundMesh = final.body(0).mesh
+    require(roundMesh.boundary.allSatisfy {
+        let node = 2 * roundMesh.reference[$0.a] / driver.size
+        return abs(simd_length_squared(node) - 1) < 1e-12
+    }, "Round-body contact boundary departed from its specified ellipse")
+    require(final.body(1).mesh.interfaceLines.count == 2 && final.firstContactTimes[SIMD2(0, 1)] != nil
+            && final.firstContactTimes[SIMD2(1, 2)] == nil && run.force > 1 && final.kineticEnergy(2) > 1e-5,
+            "The round striker did not transfer load through the laminate and spring to the support")
+    var plain = scene
+    plain.bodyOrder = nil
+    plain.groups = nil
+    let unorganized = try AssemblySimulation(plain)
+    require(final.dt == unorganized.dt && final.scene.parts.map(\.id) == scene.parts.map(\.id),
+            "Authoring order changed the solver’s body order or stable timestep")
+}
+
 func assemblyCheck() throws {
     let scene = AssemblyScene.enclosureExample()
     let base = try simulate("Enclosure impact", scene)
@@ -157,4 +192,5 @@ func assemblyCheck() throws {
     var invalid = try AssemblySimulation(overlap)
     require(invalid.initialIssue != nil && !invalid.step(), "An initially overlapping enclosure was allowed to run")
     try springControl()
+    try roundBodyWorkshopCheck()
 }

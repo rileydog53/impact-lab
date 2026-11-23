@@ -127,8 +127,9 @@ struct AssemblyCanvas: View {
 
     private enum Drag {
         case pan(AssemblyCamera)
-        case body(AssemblyPart, Handle?)
-        case gauge
+        case body(AssemblyPart, Handle)
+        case move([AssemblyPart], anchor: AssemblyPart)
+        case placement
     }
 
     let experiment: AssemblyExperiment
@@ -148,8 +149,11 @@ struct AssemblyCanvas: View {
                     cancelDrag()
                     fitAssembly(in: size)
                 }
+                .onChange(of: experiment.scene.parts.count) { old, new in
+                    if new > old { fitAssembly(in: size) }
+                }
                 .onChange(of: experiment.canEdit) {
-                    if !experiment.canEdit { experiment.previewPart = nil }
+                    if !experiment.canEdit { cancelDrag() }
                 }
         }
         .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 12))
@@ -158,16 +162,20 @@ struct AssemblyCanvas: View {
 
     private func canvas(in viewport: CGSize) -> some View {
         let projection = camera.projection(in: viewport)
-        let preview = experiment.previewPart
+        let preview = experiment.previewParts
         let selected = selectedPart
+        let drawOrder = experiment.displayIndices.reversed()
         return Canvas { context, size in
             drawGrid(context, size: size, projection: projection)
-            for i in 0..<experiment.simulation.bodyCount {
-                drawBody(i, context: context, projection: projection, preview: preview)
+            for i in drawOrder {
+                let part = experiment.scene.parts[i]
+                drawBody(i, context: context, projection: projection, preview: preview[part.id])
             }
             drawConnections(context, projection: projection, preview: preview)
             drawGauges(context, projection: projection, preview: preview)
-            if experiment.canEdit, !experiment.placingGauge, let part = selected,
+            if let anchor = experiment.linkPlacement?.first { drawAnchor(anchor, in: context, projection: projection) }
+            if experiment.canEdit, !experiment.placingGauge, experiment.linkPlacement == nil,
+               experiment.selectedParts.count == 1, let part = selected,
                handlesAreVisible(for: part, projection: projection) {
                 drawHandles(for: part, in: context, projection: projection)
             }
@@ -189,7 +197,7 @@ struct AssemblyCanvas: View {
             }
         }
         .accessibilityLabel("Assembly workspace")
-        .accessibilityHint("Scroll vertically or pinch to zoom. Drag the background or Option-scroll to pan.")
+        .accessibilityHint("Scroll or pinch to zoom. Drag the background to pan. Drag a body to move it. The circle rotates and the square resizes. Shift-click adds to the selection.")
         .overlay {
             AssemblyCanvasInput { event, location in
                 handle(event, at: location, viewport: viewport)
@@ -202,11 +210,10 @@ struct AssemblyCanvas: View {
             Button("Fit Assembly", systemImage: "arrow.up.left.and.arrow.down.right") { fitAssembly(in: size) }
                 .help("Fit all bodies in view")
             Button("Zoom to Selection", systemImage: "scope") {
-                if let index = experiment.selectedIndex {
-                    camera = AssemblyCamera(fitting: [index], in: size, experiment: experiment)
-                }
+                let indices = experiment.displayIndices.filter { experiment.selectedParts.contains(experiment.scene.parts[$0].id) }
+                camera = AssemblyCamera(fitting: indices, in: size, experiment: experiment)
             }
-            .disabled(experiment.selectedIndex == nil)
+            .disabled(experiment.selectedParts.isEmpty)
             .help("Fit the selected body in view")
             Button("Reset View", systemImage: "arrow.counterclockwise") { camera = AssemblyCamera() }
                 .help("Center the view on the assembly origin at the default scale")
@@ -226,7 +233,7 @@ struct AssemblyCanvas: View {
         let projection = camera.projection(in: viewport)
         switch event.type {
         case .leftMouseDown:
-            beginDrag(at: location, projection: projection)
+            beginDrag(at: location, projection: projection, additive: event.modifierFlags.contains(.shift))
         case .leftMouseDragged:
             updateDrag(at: location, projection: projection)
         case .leftMouseUp:
@@ -248,24 +255,24 @@ struct AssemblyCanvas: View {
         }
     }
 
-    private func beginDrag(at location: CGPoint, projection: AssemblyProjection) {
+    private func beginDrag(at location: CGPoint, projection: AssemblyProjection, additive: Bool) {
         cancelDrag()
         dragStart = location
-        if experiment.placingGauge {
-            drag = .gauge
-        } else if experiment.canEdit, let part = selectedPart, handlesAreVisible(for: part, projection: projection),
+        let world = projection.world(location)
+        if experiment.placingGauge || experiment.linkPlacement != nil {
+            drag = .placement
+        } else if additive, let id = part(at: world) {
+            experiment.select(id, adding: true)
+        } else if experiment.canEdit, experiment.selectedParts.count == 1,
+                  let part = selectedPart, handlesAreVisible(for: part, projection: projection),
                   let handle = Handle.allCases.first(where: {
                       let position = handlePosition($0, part: part, projection: projection)
                       return hypot(position.x - location.x, position.y - location.y) <= 11
                   }) {
             drag = .body(part, handle)
-        } else if let id = part(at: projection.world(location)) {
-            experiment.select(id)
-            if experiment.canEdit, let part = selectedPart {
-                drag = .body(part, nil)
-            } else {
-                drag = .pan(camera)
-            }
+        } else if let id = part(at: world), let anchor = experiment.scene.parts.first(where: { $0.id == id }) {
+            if !experiment.selectedParts.contains(id) || !experiment.canEdit { experiment.select(id) }
+            drag = experiment.canEdit ? .move(experiment.selectedBodyList, anchor: anchor) : .pan(camera)
         } else {
             drag = .pan(camera)
         }
@@ -276,12 +283,11 @@ struct AssemblyCanvas: View {
         switch drag {
         case .pan(let start):
             camera.center = start.center - projection.worldDelta(translation)
+        case .move(let originals, let anchor) where experiment.canEdit:
+            experiment.previewMove(originals, anchor: anchor, delta: projection.worldDelta(translation))
         case .body(let original, let handle) where experiment.canEdit:
             var part = original
             switch handle {
-            case nil:
-                let center = part.center + projection.worldDelta(translation)
-                part.center = Point(min(1, max(-1, center.x)), min(1, max(-1, center.y)))
             case .rotate:
                 let initial = projection.world(dragStart) - part.center
                 let current = projection.world(location) - part.center
@@ -294,7 +300,7 @@ struct AssemblyCanvas: View {
                 part.size = Point(min(0.30, max(0.025, size.x)), min(0.30, max(0.025, size.y)))
                 experiment.fitWall(of: &part)
             }
-            experiment.previewPart = part
+            experiment.previewParts = [part.id: part]
         default:
             break
         }
@@ -303,21 +309,39 @@ struct AssemblyCanvas: View {
     private func endDrag(at location: CGPoint, projection: AssemblyProjection) {
         defer { cancelDrag() }
         let distance = hypot(location.x - dragStart.x, location.y - dragStart.y)
-        if case .gauge = drag, distance < 4, experiment.placingGauge {
+        switch drag {
+        case .placement where distance < 4:
             let point = projection.world(location)
-            if let id = part(at: point) { experiment.addGauge(body: id, at: point) }
-        } else if case .body(_, let handle) = drag, distance >= 2, experiment.canEdit {
-            updateDrag(at: location, projection: projection)
-            if let part = experiment.previewPart {
-                let action = handle == .rotate ? "Rotate Body" : handle == .resize ? "Resize Body" : "Move Body"
-                experiment.updatePart(part.id, action: action) { $0 = part }
+            if let id = part(at: point) {
+                if experiment.placingGauge { experiment.addGauge(body: id, at: point) }
+                else { experiment.pickLinkAnchor(on: id, at: point) }
             }
+        case .move(let parts, let anchor) where experiment.canEdit:
+            if distance >= 2 {
+                updateDrag(at: location, projection: projection)
+                experiment.commitPreview(parts.count == 1 ? "Move Body" : "Move Bodies")
+            } else {
+                experiment.select(anchor.id)
+            }
+        case .body(_, let handle) where distance >= 2 && experiment.canEdit:
+            updateDrag(at: location, projection: projection)
+            experiment.commitPreview(handle == .rotate ? "Rotate Body" : "Resize Body")
+        default:
+            break
         }
     }
 
     private func cancelDrag() {
         drag = nil
-        experiment.previewPart = nil
+        experiment.previewParts.removeAll()
+    }
+
+    private func drawAnchor(_ anchor: WorkshopLinkPlacement.Anchor, in context: GraphicsContext, projection: AssemblyProjection) {
+        guard let part = experiment.scene.parts.first(where: { $0.id == anchor.body }) else { return }
+        let point = projection.screen(part.center + rotated(anchor.fractions * part.size / 2, by: part.angle))
+        let ring = Path(ellipseIn: CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12))
+        context.fill(ring, with: .color(assemblyPanel))
+        context.stroke(ring, with: .color(assemblyMint), lineWidth: 2)
     }
 
     private func rotated(_ point: Point, by degrees: Double) -> Point {
@@ -333,7 +357,7 @@ struct AssemblyCanvas: View {
     }
 
     private func handlesAreVisible(for part: AssemblyPart, projection: AssemblyProjection) -> Bool {
-        if case .body(_, .some) = drag { return true }
+        if case .body = drag { return true }
         return min(part.size.x, part.size.y) * projection.scale >= 22
     }
 
@@ -365,7 +389,9 @@ struct AssemblyCanvas: View {
     private func drawGrid(_ context: GraphicsContext, size: CGSize, projection: AssemblyProjection) {
         let low = projection.world(CGPoint(x: 12, y: size.height - 39))
         let high = projection.world(CGPoint(x: size.width - 12, y: 18))
-        let step = scaleBarMillimetres(at: projection.scale) / 1_000
+        let spacing = scaleBarMillimetres(at: projection.scale) / 1_000
+        let snap = experiment.canEdit ? experiment.gridStep : 0
+        let step = snap > 0 ? max(1, (spacing / snap).rounded()) * snap : spacing
         func lines(_ minValue: Double, _ maxValue: Double) -> Range<Int> {
             let start = Int(ceil(minValue / step)), end = Int(floor(maxValue / step)) + 1
             return start..<max(start, end)
@@ -436,6 +462,18 @@ struct AssemblyCanvas: View {
             }
             if showMesh { context.stroke(path, with: .color(assemblyInk.opacity(0.17)), lineWidth: 0.45) }
         }
+        if showMesh, experiment.canEdit, preview == nil {
+            let thin = experiment.meshQuality[i].thinTriangles
+            let warning = Path { path in
+                for triangle in thin {
+                    path.move(to: nodes[triangle.a])
+                    path.addLine(to: nodes[triangle.b])
+                    path.addLine(to: nodes[triangle.c])
+                    path.closeSubpath()
+                }
+            }
+            context.stroke(warning, with: .color(assemblyAmber.opacity(0.85)), lineWidth: 1)
+        }
         let outline = Path { p in
             for edge in body.mesh.boundary {
                 p.move(to: nodes[edge.a])
@@ -443,7 +481,7 @@ struct AssemblyCanvas: View {
             }
         }
         let active = experiment.simulation.activeContacts.contains { $0.x == i || $0.y == i }
-        let selected = experiment.selectedPart == part.id
+        let selected = experiment.selectedParts.contains(part.id)
         context.stroke(outline, with: .color(active ? .white : color), lineWidth: selected ? 2.3 : 1.3)
         for line in body.mesh.interfaceLines {
             guard let first = line.first else { continue }
@@ -482,15 +520,15 @@ struct AssemblyCanvas: View {
         context.draw(label, at: labelPosition)
     }
 
-    private func drawConnections(_ context: GraphicsContext, projection: AssemblyProjection, preview: AssemblyPart?) {
+    private func drawConnections(_ context: GraphicsContext, projection: AssemblyProjection, preview: [UUID: AssemblyPart]) {
         let scene = experiment.scene
         for link in experiment.simulation.linkReadings {
             let connection = scene.connections[link.connection]
             let selected = experiment.selectedConnection == connection.id
             let first = scene.parts.first { $0.id == connection.first }
             let second = scene.parts.first { $0.id == connection.second }
-            let a = projection.screen(first.map { previewPosition(link.start, relativeTo: $0, preview: preview) } ?? link.start)
-            let b = projection.screen(second.map { previewPosition(link.end, relativeTo: $0, preview: preview) } ?? link.end)
+            let a = projection.screen(first.map { previewPosition(link.start, relativeTo: $0, preview: preview[$0.id]) } ?? link.start)
+            let b = projection.screen(second.map { previewPosition(link.end, relativeTo: $0, preview: preview[$0.id]) } ?? link.end)
             if link.damage == 1 {
                 for point in [a, b] {
                     context.fill(Path(ellipseIn: CGRect(x: point.x - 2, y: point.y - 2, width: 4, height: 4)),
@@ -509,7 +547,7 @@ struct AssemblyCanvas: View {
     }
 
     private func part(at point: Point) -> UUID? {
-        for i in experiment.scene.parts.indices.reversed() {
+        for i in experiment.displayIndices {
             let body = experiment.simulation.body(i)
             for triangle in body.mesh.elements {
                 let a = body.position[triangle.a], b = body.position[triangle.b], c = body.position[triangle.c]
@@ -523,11 +561,11 @@ struct AssemblyCanvas: View {
         return nil
     }
 
-    private func drawGauges(_ context: GraphicsContext, projection: AssemblyProjection, preview: AssemblyPart?) {
+    private func drawGauges(_ context: GraphicsContext, projection: AssemblyProjection, preview: [UUID: AssemblyPart]) {
         for (index, gauge) in experiment.gauges.enumerated() {
             let position = experiment.simulation.gaugePosition(index)
             let part = experiment.scene.parts.first { $0.id == gauge.body }
-            let at = projection.screen(part.map { previewPosition(position, relativeTo: $0, preview: preview) } ?? position)
+            let at = projection.screen(part.map { previewPosition(position, relativeTo: $0, preview: preview[$0.id]) } ?? position)
             let dot = Path(ellipseIn: CGRect(x: at.x - 4, y: at.y - 4, width: 8, height: 8))
             context.fill(dot, with: .color(.black))
             context.stroke(dot, with: .color(.white), lineWidth: 1.5)
@@ -542,7 +580,7 @@ private struct AssemblyCanvasInput: NSViewRepresentable {
 
     func makeNSView(context: Context) -> InputView {
         let view = InputView()
-        view.toolTip = "Scroll vertically or pinch to zoom. Drag the background or Option-scroll to pan."
+        view.toolTip = "Scroll or pinch to zoom. Drag the background to pan. Drag a body to move it. The circle rotates and the square resizes. Shift-click adds to the selection."
         return view
     }
 

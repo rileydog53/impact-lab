@@ -7,6 +7,7 @@ struct AssemblyLab: View {
     @State private var experiment = AssemblyExperiment()
     @State private var field = AssemblyField.strain
     @State private var showMesh = false
+    @State private var showMeshReport = false
     @State private var showPieces = false
     @State private var compare = false
     @State private var study = false
@@ -50,6 +51,7 @@ struct AssemblyLab: View {
                 ComparisonView(reference: reference, current: experiment.current)
             }
         }
+        .sheet(isPresented: $showMeshReport) { meshReport }
         .sheet(isPresented: $study) {
             studyView
         }
@@ -125,12 +127,14 @@ struct AssemblyLab: View {
             Button("Study", systemImage: "chart.line.uptrend.xyaxis") {
                 experiment.pause()
                 experiment.placingGauge = false
+                experiment.linkPlacement = nil
                 study = true
             }
             .disabled(experiment.scene.parts.isEmpty || experiment.simulation.initialIssue != nil)
             Button("Experiments", systemImage: "books.vertical") {
                 experiment.pause()
                 experiment.placingGauge = false
+                experiment.linkPlacement = nil
                 library = true
             }
             Menu("New / Examples", systemImage: "doc.badge.plus") {
@@ -193,48 +197,114 @@ struct AssemblyLab: View {
 
     private var indicators: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let reason = experiment.simulation.initialIssue ?? experiment.simulation.failure {
-                Label(reason, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(assemblyAmber)
-            } else {
-                HStack {
-                    if !experiment.canEdit {
-                        Picker("Result field", selection: $field) {
-                            ForEach(AssemblyField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                        }.labelsHidden().frame(width: 166)
+            HStack(spacing: 8) {
+                if experiment.canEdit {
+                    Picker("Snap", selection: Binding(get: { experiment.gridStep }, set: { experiment.gridStep = $0 })) {
+                        Text("Off").tag(0.0)
+                        Text("1 mm").tag(0.001)
+                        Text("5 mm").tag(0.005)
+                        Text("10 mm").tag(0.010)
                     }
-                    Toggle("Show mesh", isOn: $showMesh).toggleStyle(.checkbox)
-                        .help("Draw the edges of the simulation triangles")
+                    .fixedSize()
+                    .help("Snap dragged body centers to a world-coordinate grid")
+                } else {
+                    Picker("Result field", selection: $field) {
+                        ForEach(AssemblyField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.labelsHidden().frame(width: 160)
+                }
+                Toggle("Show mesh", isOn: $showMesh).toggleStyle(.checkbox)
+                    .help("Draw the actual simulation mesh. Amber outlines indicate thin reference triangles.")
+                Button("Mesh Report", systemImage: "square.grid.3x3") {
+                    showMesh = true
+                    showMeshReport = true
+                }
+                .disabled(experiment.scene.parts.isEmpty)
+                .help("Check triangle counts and shape quality for the starting assembly")
+                if experiment.linkPlacement != nil {
+                    Button("Cancel Link", role: .cancel) { experiment.linkPlacement = nil }
+                        .keyboardShortcut(.cancelAction)
+                } else {
                     Button(experiment.placingGauge ? "Cancel gauge" : "Place gauge", systemImage: "scope") {
                         experiment.placingGauge.toggle()
                     }
-                    .disabled(experiment.running || experiment.simulation.time > 0 || experiment.scene.parts.isEmpty
-                              || experiment.gauges.count >= AssemblyGauge.limit)
-                    Spacer()
-                    if experiment.placingGauge {
-                        Text("Click inside a body to place a material gauge.")
-                            .font(.caption).foregroundStyle(assemblyMint)
-                    } else if experiment.canEdit {
-                        Text("Drag to move · Circle rotates · Square resizes")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .help("Use Zoom to Selection to reveal the handles on a small body.")
-                    } else if let index = experiment.selectedIndex, field == .stress || field == .plastic {
-                        let peak = field.values(index, in: experiment.simulation).max() ?? 0
-                        Text(field == .stress
-                             ? String(format: "Selected body · %.2f kPa peak", peak / 1000)
-                             : String(format: "Selected body · %.2f%% peak", peak * 100))
-                            .font(.caption).monospacedDigit()
-                    } else if let pair = experiment.simulation.firstContactTimes.min(by: { $0.value < $1.value }) {
-                        let names = experiment.scene.parts
-                        Text("First contact · \(names[pair.key.x].name) / \(names[pair.key.y].name) · \(pair.value * 1000, specifier: "%.2f") ms")
-                            .font(.caption).monospacedDigit().lineLimit(1)
-                    }
+                    .disabled(!experiment.canEdit || experiment.scene.parts.isEmpty || experiment.gauges.count >= AssemblyGauge.limit)
                 }
+                Spacer(minLength: 0)
+            }
+            .controlSize(.small)
+            if let placement = experiment.linkPlacement {
+                let source = placement.first.flatMap { anchor in experiment.scene.parts.first { $0.id == anchor.body }?.name }
+                let instruction = if let source {
+                    placement.needsOtherBody
+                        ? "Choose a different body for the second anchor. First anchor is on \(source)."
+                        : "Click material on a second body. First anchor is on \(source)."
+                } else {
+                    "Click material on the first body to place an anchor."
+                }
+                Label(instruction, systemImage: "scope").font(.caption).foregroundStyle(assemblyMint)
+            } else if experiment.placingGauge {
+                Text("Click inside a body to place a material gauge.").font(.caption).foregroundStyle(assemblyMint)
+            }
+            if let reason = experiment.simulation.initialIssue ?? experiment.simulation.failure {
+                Label(reason, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(assemblyAmber)
+            } else if !experiment.canEdit {
+                playbackIndicator
             }
             if !experiment.scene.parts.isEmpty { readout }
             if let index = experiment.selectedIndex, let reading = experiment.simulation.fractureReading(index) {
                 fractureReadout(index, reading)
             }
         }
+    }
+
+    @ViewBuilder private var playbackIndicator: some View {
+        if let pair = experiment.simulation.firstContactTimes.min(by: { $0.value < $1.value }) {
+            let names = experiment.scene.parts
+            Text("First contact · \(names[pair.key.x].name) / \(names[pair.key.y].name) · \(pair.value * 1000, specifier: "%.2f") ms")
+                .font(.caption).monospacedDigit().lineLimit(1)
+        }
+        if let index = experiment.selectedIndex, field == .stress || field == .plastic {
+            let peak = field.values(index, in: experiment.simulation).max() ?? 0
+            Text(field == .stress
+                 ? String(format: "Selected body · %.2f kPa peak", peak / 1000)
+                 : String(format: "Selected body · %.2f%% peak", peak * 100))
+                .font(.caption).monospacedDigit()
+        }
+    }
+
+    private var meshReport: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Assembly mesh").font(.title2.weight(.semibold))
+            Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.2f") µs timestep")
+                .font(.callout).monospacedDigit()
+            if let issue = experiment.simulation.initialIssue {
+                Label(issue, systemImage: "exclamationmark.triangle").foregroundStyle(assemblyAmber)
+            }
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                GridRow {
+                    Text("Body")
+                    Text("Triangles")
+                    Text("Lowest quality")
+                    Text("Thin triangles")
+                }.fontWeight(.semibold)
+                ForEach(experiment.displayIndices, id: \.self) { index in
+                    let quality = experiment.meshQuality[index]
+                    GridRow {
+                        Text(experiment.scene.parts[index].name)
+                        Text(quality.triangleCount.formatted())
+                        Text(quality.minimum, format: .number.precision(.fractionLength(2)))
+                        Text(quality.thinTriangles.count.formatted())
+                            .foregroundStyle(quality.thinTriangles.isEmpty ? assemblyInk : assemblyAmber)
+                    }
+                }
+            }.font(.callout).monospacedDigit()
+            Text("An equilateral triangle scores 1. Thin triangles below 0.20 are marked amber. Geometry changes regenerate the mesh. Use the body’s Mesh settings to change its refinement.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Done") { showMeshReport = false }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(18).frame(minWidth: 530)
     }
 
     private func fractureReadout(_ index: Int, _ reading: MaterialFractureReading) -> some View {

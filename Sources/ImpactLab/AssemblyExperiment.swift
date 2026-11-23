@@ -12,6 +12,7 @@ struct AssemblyComparison {
     private struct Edit {
         let scene: AssemblyScene
         let part: UUID?
+        let parts: Set<UUID>
         let connection: UUID?
         let action: String
     }
@@ -22,22 +23,29 @@ struct AssemblyComparison {
     private var redoEdits: [Edit] = []
     private(set) var title = "Enclosure example"
     private(set) var fileURL: URL?
-    var previewPart: AssemblyPart?
+    var previewParts: [UUID: AssemblyPart] = [:]
+    var previewPart: AssemblyPart? { selectedPart.flatMap { previewParts[$0] } }
+    private(set) var meshQuality: [WorkshopMeshQuality]
     private(set) var running = false
     private var lastTick: Double?
     private var budget = 0.0
     var slow = false
     var error: String?
-    var selectedPart: UUID?
+    private(set) var selectedPart: UUID?
+    private(set) var selectedParts: Set<UUID> = []
     var selectedConnection: UUID?
     var placingGauge = false
+    var linkPlacement: WorkshopLinkPlacement?
+    var gridStep = 0.0
     private(set) var reference: AssemblyComparison?
     private(set) var cameraRevision = 0
 
     init() {
         let initial = AssemblyScene.enclosureExample()
-        run = try! AssemblyRun(initial)
+        let initialRun = try! AssemblyRun(initial)
+        run = initialRun
         savedScene = initial
+        meshQuality = WorkshopMeshQuality.measure(initialRun.simulation)
     }
 
     var scene: AssemblyScene { run.simulation.scene }
@@ -51,6 +59,10 @@ struct AssemblyComparison {
     var redoAction: String? { redoEdits.last?.action }
     var finished: Bool { run.finished }
     var selectedIndex: Int? { scene.parts.firstIndex { $0.id == selectedPart } }
+    var displayIndices: [Int] {
+        let indices = Dictionary(uniqueKeysWithValues: scene.parts.indices.map { (scene.parts[$0].id, $0) })
+        return scene.orderedBodyIDs.compactMap { indices[$0] }
+    }
     var gauges: [AssemblyGauge] { scene.gauges ?? [] }
     var monitoredName: String { scene.parts.first { $0.id == scene.monitor }?.name ?? scene.parts.first?.name ?? "Body" }
     var elementCount: Int { (0..<simulation.bodyCount).reduce(0) { $0 + simulation.body($1).mesh.elements.count } }
@@ -77,11 +89,17 @@ struct AssemblyComparison {
 
     func configure(_ scene: AssemblyScene) throws {
         let next = try AssemblyRun(scene)
+        let meshChanged = self.scene.parts != scene.parts || self.scene.meshResolution != scene.meshResolution
         pause()
         placingGauge = false
-        previewPart = nil
+        linkPlacement = nil
+        previewParts.removeAll()
+        if meshChanged { meshQuality = WorkshopMeshQuality.measure(next.simulation) }
         run = next
-        if !scene.parts.contains(where: { $0.id == selectedPart }) { selectedPart = nil }
+        selectedParts.formIntersection(scene.parts.map(\.id))
+        if let selectedPart, !selectedParts.contains(selectedPart) {
+            self.selectedPart = scene.orderedBodyIDs.first(where: selectedParts.contains)
+        }
         if !scene.connections.contains(where: { $0.id == selectedConnection }) { selectedConnection = nil }
     }
 
@@ -93,6 +111,7 @@ struct AssemblyComparison {
         undoEdits.removeAll()
         redoEdits.removeAll()
         selectedPart = scene.monitor ?? scene.parts.first?.id
+        selectedParts = selectedPart.map { [$0] } ?? []
         selectedConnection = nil
         cameraRevision += 1
     }
@@ -127,7 +146,7 @@ struct AssemblyComparison {
     func redo() { restoreEdit(fromUndo: false) }
 
     private func checkpoint(_ action: String) -> Edit {
-        Edit(scene: scene, part: selectedPart, connection: selectedConnection, action: action)
+        Edit(scene: scene, part: selectedPart, parts: selectedParts, connection: selectedConnection, action: action)
     }
 
     private func restoreEdit(fromUndo: Bool) {
@@ -136,6 +155,7 @@ struct AssemblyComparison {
         do {
             try configure(previous.scene)
             selectedPart = previous.part
+            selectedParts = previous.parts
             selectedConnection = previous.connection
             if fromUndo {
                 undoEdits.removeLast()
@@ -147,14 +167,31 @@ struct AssemblyComparison {
         } catch { self.error = error.localizedDescription }
     }
 
-    func select(_ part: UUID) {
-        selectedPart = part
+    func select(_ part: UUID, adding: Bool = false) {
+        if adding {
+            if selectedParts.remove(part) == nil {
+                selectedParts.insert(part)
+                selectedPart = part
+            } else if selectedPart == part {
+                selectedPart = scene.orderedBodyIDs.first(where: selectedParts.contains)
+            }
+        } else {
+            selectedPart = part
+            selectedParts = [part]
+        }
+        selectedConnection = nil
+    }
+
+    func selectParts(_ ids: Set<UUID>, primary: UUID? = nil) {
+        selectedParts = ids
+        selectedPart = primary ?? scene.orderedBodyIDs.first(where: ids.contains)
         selectedConnection = nil
     }
 
     func selectConnection(_ connection: UUID) {
         selectedConnection = connection
         selectedPart = nil
+        selectedParts.removeAll()
     }
 
     @discardableResult func addGauge(body id: UUID, at world: Point) -> UUID? {
@@ -181,11 +218,18 @@ struct AssemblyComparison {
     }
 
     @discardableResult func add(_ shape: AssemblyPart.Shape) -> UUID? {
+        let geometry: WorkshopGeometry = switch shape {
+        case .block: .block
+        case .enclosure: .enclosure
+        case .round: .round
+        }
+        return insert(geometry)
+    }
+
+    @discardableResult func insert(_ geometry: WorkshopGeometry) -> UUID? {
         guard scene.parts.count < AssemblyScene.maximumParts else { return nil }
-        let size = shape == .block ? Point(0.060, 0.050) : Point(0.130, 0.100)
-        let right = scene.parts.map { $0.center.x + 0.5 * max($0.size.x, $0.size.y) }.max()
-        let x = right.map { min(0.93, $0 + size.x / 2 + 0.035) } ?? 0
-        let part = AssemblyPart("\(shape.rawValue) \(scene.parts.count + 1)", shape: shape, center: Point(x, 0), size: size)
+        var part = geometry.makePart(number: scene.parts.count + 1)
+        part.center = insertionPoint(for: part.size)
         edit("Add Body") { $0.parts.append(part) }
         guard scene.parts.contains(where: { $0.id == part.id }) else { return nil }
         select(part.id)
@@ -207,8 +251,11 @@ struct AssemblyComparison {
     }
 
     @discardableResult func addConnection(first: UUID, second: UUID) -> UUID? {
-        guard first != second, scene.connections.count < AssemblyScene.maximumConnections else { return nil }
-        let new = AssemblyConnection(first: first, second: second)
+        addConnection(AssemblyConnection(first: first, second: second))
+    }
+
+    @discardableResult func addConnection(_ new: AssemblyConnection) -> UUID? {
+        guard new.first != new.second, scene.connections.count < AssemblyScene.maximumConnections else { return nil }
         edit("Add Connection") { $0.connections.append(new) }
         guard scene.connections.contains(where: { $0.id == new.id }) else { return nil }
         selectConnection(new.id)
@@ -243,7 +290,12 @@ struct AssemblyComparison {
 
     func toggle() {
         if running { pause() }
-        else if canRun { placingGauge = false; previewPart = nil; running = true }
+        else if canRun {
+            placingGauge = false
+            linkPlacement = nil
+            previewParts.removeAll()
+            running = true
+        }
     }
 
     func tick(now: Double = ProcessInfo.processInfo.systemUptime) {
@@ -271,6 +323,7 @@ struct AssemblyComparison {
     func advance(to time: Double) {
         pause()
         placingGauge = false
+        linkPlacement = nil
         while simulation.time < time && advance() {}
     }
 }

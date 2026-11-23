@@ -1,3 +1,4 @@
+import AppKit
 import ImpactPhysics
 import SwiftUI
 
@@ -8,6 +9,9 @@ struct AssemblyEditor: View {
     @State private var connectionList = false
     @State private var meshSettings = false
     @State private var simulationSettings = false
+    @State private var multiSelect = false
+    @State private var layoutGap = 0.010
+    @State private var showWorkshopLimits = false
 
     var body: some View {
         ScrollView {
@@ -31,27 +35,9 @@ struct AssemblyEditor: View {
                     Text("Reset Run to edit the starting assembly.")
                         .font(.caption).foregroundStyle(assemblyAmber)
                 }
-                HStack {
-                    Text("Components").font(.headline)
-                    Spacer()
-                    Menu("Add body", systemImage: "plus") {
-                        ForEach(AssemblyPart.Shape.allCases, id: \.self) { shape in
-                            Button(shape.rawValue) { experiment.add(shape) }
-                        }
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .disabled(!experiment.canEdit || experiment.scene.parts.count >= AssemblyScene.maximumParts)
-                    .help("Add a deformable block or hollow enclosure (up to \(AssemblyScene.maximumParts) bodies)")
-                }
-                ForEach(Array(experiment.scene.parts.enumerated()), id: \.element.id) { index, part in
-                    row(part.name, icon: part.shape == .enclosure ? "square.dashed" : "square.fill",
-                        color: assemblyColor(index), selected: experiment.selectedPart == part.id) {
-                        experiment.select(part.id)
-                    }
-                }
+                components
                 if experiment.scene.parts.isEmpty {
-                    Text("Add a body to the empty scene. Drag bodies in the workspace or enter exact positions below.")
+                    Text("Add geometry to begin. Drag bodies or enter exact positions in the inspector.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
 
@@ -72,6 +58,9 @@ struct AssemblyEditor: View {
                         }
                     }
                     Menu("Add link", systemImage: "link.badge.plus") {
+                        Button("Place Spring on Canvas") { experiment.startLinkPlacement(.spring) }
+                        Button("Place Breakable Link on Canvas") { experiment.startLinkPlacement(.cohesive) }
+                        Divider()
                         if let first = experiment.scene.parts.first(where: { $0.id == experiment.selectedPart })
                             ?? experiment.scene.parts.first {
                             Section("From \(first.name)") {
@@ -91,7 +80,9 @@ struct AssemblyEditor: View {
                     .help("Connect two bodies with a spring or a breakable link")
                 }
                 Divider()
-                if let index = experiment.selectedIndex {
+                if experiment.selectedParts.count > 1 {
+                    selectionInspector
+                } else if let index = experiment.selectedIndex {
                     let part = experiment.previewPart ?? experiment.scene.parts[index]
                     bodyInspector(part).id(part.id)
                 } else if let link = experiment.scene.connections.first(where: { $0.id == experiment.selectedConnection }) {
@@ -106,6 +97,105 @@ struct AssemblyEditor: View {
             .padding(.vertical, 15)
         }
         .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var components: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("Components").font(.headline)
+                Spacer()
+                Menu("Add Body", systemImage: "plus") {
+                    ForEach(WorkshopGeometry.allCases, id: \.self) { geometry in
+                        Button(geometry.rawValue, systemImage: geometry.icon) { experiment.insert(geometry) }
+                    }
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .disabled(!experiment.canEdit || experiment.scene.parts.count >= AssemblyScene.maximumParts)
+                .help("Insert deformable geometry. The assembly supports up to \(AssemblyScene.maximumParts) bodies.")
+            }
+            ForEach(experiment.displayIndices, id: \.self) { index in
+                let part = experiment.scene.parts[index]
+                let icon = switch part.shape {
+                case .enclosure: "square.dashed"
+                case .round: "circle.fill"
+                case .block: part.bondedLayer == nil ? "square.fill" : "square.3.layers.3d"
+                }
+                row(part.name, icon: icon, color: assemblyColor(index),
+                    selected: experiment.selectedParts.contains(part.id)) {
+                    experiment.select(part.id, adding: multiSelect || (NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false))
+                }
+            }
+            ForEach(Array((experiment.scene.groups ?? []).enumerated()), id: \.element.id) { number, group in
+                row("Group \(number + 1) · \(group.members.count) bodies", icon: "square.on.square",
+                    color: assemblyInk, selected: Set(group.members) == experiment.selectedParts) {
+                    experiment.selectGroup(group)
+                }
+                .help(group.members.map(name).joined(separator: ", "))
+            }
+            HStack {
+                if !experiment.scene.parts.isEmpty {
+                    Toggle("Multi-select", isOn: $multiSelect).toggleStyle(.checkbox)
+                        .help("Add or remove bodies from the selection. You can also Shift-click bodies on the canvas.")
+                    Spacer()
+                    Menu("Arrange", systemImage: "square.3.layers.3d") {
+                        Button("Duplicate Selection") { experiment.duplicateSelection() }
+                            .keyboardShortcut("d", modifiers: .command)
+                            .disabled(experiment.selectedParts.count + experiment.scene.parts.count > AssemblyScene.maximumParts)
+                        Button("Delete Selection", role: .destructive) { experiment.removeSelection() }
+                        Divider()
+                        Button("Group Selection") { experiment.groupSelection() }
+                            .disabled(experiment.selectedParts.count < 2)
+                        Button("Ungroup Selection") { experiment.ungroupSelection() }
+                            .disabled(!(experiment.scene.groups ?? []).contains { group in
+                                group.members.contains(where: experiment.selectedParts.contains)
+                            })
+                        Divider()
+                        Button("Bring to Front") { experiment.reorderSelection(toFront: true) }
+                        Button("Send to Back") { experiment.reorderSelection(toFront: false) }
+                    }
+                    .fixedSize()
+                    .disabled(!experiment.canEdit || experiment.selectedParts.isEmpty)
+                    .help("Duplicate, group, delete, or reorder selected bodies. Copies carry internal links.")
+                }
+                Button("Workshop Limits", systemImage: "info.circle") { showWorkshopLimits.toggle() }
+                    .labelStyle(.iconOnly)
+                    .help("Supported geometry, connections, and constraints")
+                    .popover(isPresented: $showWorkshopLimits) { workshopLimits }
+            }.controlSize(.small)
+        }
+    }
+
+    private var workshopLimits: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Workshop limits").font(.headline)
+            Text("Bodies may translate and rotate. A deformable support is a stationary starting block that can move and deform under load. Fixed or clamped boundaries and rigid joints are unavailable in Assembly.")
+            Text("Permanent bonds join elastic layers within a block. Use springs or breakable tension links between separate bodies. Round bodies and bonded blocks do not support material fracture.")
+            Text("Round bodies use an elliptical mesh. Each local dimension can be 25–300 mm. Imported outlines, arbitrary cracks, and nested groups are unavailable.")
+            Text("Duplicates retain geometry, materials, initial motion, and links within the copied selection. External links and gauges stay with their original bodies.")
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 310, alignment: .leading)
+        .padding(15)
+    }
+
+    private var selectionInspector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(experiment.selectedParts.count) bodies selected").font(.headline)
+            Text("Drag any selected body to move the selection. Select one body to rotate or resize it.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let body = experiment.selectedBodyList.first(where: { $0.id == experiment.selectedPart }) {
+                Text("Alignment reference · \(body.name)").font(.caption)
+            }
+            numeric("Spacing gap (mm)", value: layoutGap, range: 0.0005...0.25, scale: 1000) { layoutGap = $0 }
+                .help("Clearance between body extents when spacing horizontally or vertically")
+            Menu("Align or Space Bodies") {
+                ForEach(WorkshopAlignment.allCases, id: \.self) { alignment in
+                    Button(alignment.rawValue) { experiment.alignSelection(alignment, gap: layoutGap) }
+                }
+            }
+            .disabled(!experiment.canEdit)
+        }
     }
 
     private func name(_ id: UUID) -> String {
@@ -151,8 +241,8 @@ struct AssemblyEditor: View {
                         bodyNumber("Center Y (mm)", part, \.center.y, -1...1, scale: 1000)
                     }
                     GridRow {
-                        bodyNumber("Local width (mm)", part, \.size.x, 0.025...0.30, scale: 1000)
-                        bodyNumber("Local height (mm)", part, \.size.y, 0.025...0.30, scale: 1000)
+                        bodyNumber(part.shape == .round ? "Local X diameter (mm)" : "Local width (mm)", part, \.size.x, 0.025...0.30, scale: 1000)
+                        bodyNumber(part.shape == .round ? "Local Y diameter (mm)" : "Local height (mm)", part, \.size.y, 0.025...0.30, scale: 1000)
                     }
                     GridRow {
                         bodyNumber("Rotation (°)", part, \.angle, -360...360)
@@ -174,7 +264,7 @@ struct AssemblyEditor: View {
             let links = experiment.scene.connections.filter { $0.first == part.id || $0.second == part.id }
             Text(links.isEmpty ? "Constraints · Free body" : "Constraints · \(links.count) body-to-body \(links.count == 1 ? "link" : "links")")
                 .font(.caption).foregroundStyle(.secondary)
-                .help("Assembly bodies can translate and rotate. Links transfer load between the connected bodies.")
+                .help("Assembly bodies can translate and rotate. Links transfer load between bodies. Fixed or clamped supports are unavailable.")
             DisclosureGroup("Mesh", isExpanded: $meshSettings) {
                 Picker("Body mesh", selection: Binding(get: { part.refinement }, set: { level in
                     experiment.updatePart(part.id) { $0.refinement = level }
@@ -184,6 +274,15 @@ struct AssemblyEditor: View {
                 }
                     .disabled(!experiment.canEdit)
                     .help("Override the triangle size for this body")
+                if let index = experiment.selectedIndex {
+                    let quality = experiment.meshQuality[index]
+                    Text("\(quality.triangleCount) triangles · Minimum shape quality \(quality.minimum, specifier: "%.2f")")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !quality.thinTriangles.isEmpty {
+                        Text("\(quality.thinTriangles.count) thin triangles marked amber in mesh preview.")
+                            .font(.caption).foregroundStyle(assemblyAmber)
+                    }
+                }
             }
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
@@ -214,7 +313,10 @@ struct AssemblyEditor: View {
                             }
                         }
                     }
-                    if part.bondedLayer == nil {
+                    if part.shape == .round {
+                        Text("Material fracture is unavailable for round bodies.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if part.bondedLayer == nil {
                         VStack(alignment: .leading, spacing: 7) {
                             Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
                                 experiment.updatePart(part.id) { $0.fracture = enabled ? MaterialFractureSettings() : nil }
@@ -406,6 +508,9 @@ struct AssemblyEditor: View {
             })) {
                 ForEach(AssemblyConnection.Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }.disabled(!experiment.canEdit)
+            Text(link.kind == .spring ? "Elastic spring transfers tension and compression."
+                 : "Breakable tension link opens and loses load as it reaches the failure extension.")
+                .font(.caption).foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                 GridRow {
                     linkNumber("Stiffness (kN/m²)", link, \.stiffness, 500...250_000, scale: 0.001)

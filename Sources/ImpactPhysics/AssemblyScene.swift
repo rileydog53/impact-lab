@@ -72,6 +72,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public enum Shape: String, CaseIterable, Codable, Sendable {
         case block = "Block"
         case enclosure = "Enclosure"
+        case round = "Round body"
     }
 
     public var id = UUID()
@@ -102,11 +103,12 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && (-1...1).contains(center.x) && (-1...1).contains(center.y)
             && (-360...360).contains(angle)
             && (-1.5...1.5).contains(velocity.x) && (-1.5...1.5).contains(velocity.y)
-            && (shape == .block || (0.005...0.4 * min(size.x, size.y)).contains(wall))
+            && (shape != .enclosure || (0.005...0.4 * min(size.x, size.y)).contains(wall))
             && SceneConfiguration.youngRange.contains(material.young)
             && SceneConfiguration.densityRange.contains(material.density)
             && SceneConfiguration.poissonRange.contains(material.poisson)
-            && plasticity.isValid && (fracture?.isValid ?? true) && !name.isEmpty && name.count <= 48
+            && plasticity.isValid && (fracture.map { shape != .round && $0.isValid } ?? true)
+            && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)
             && (bondedLayer.map { shape == .block && $0.isValid && fracture == nil && notch == nil
                 && plasticity.response == .elastic } ?? true)
@@ -137,6 +139,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             }
         case .enclosure:
             mesh = .enclosure(size: size, wall: wall, refinement: refinement)
+        case .round:
+            mesh = .ellipse(size: size, refinement: refinement)
         }
         let radians = angle * .pi / 180
         let c = cos(radians), s = sin(radians)
@@ -223,6 +227,16 @@ public struct AssemblyConnection: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct AssemblyGroup: Codable, Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public var members: [UUID]
+
+    public init(members: [UUID]) {
+        id = UUID()
+        self.members = members
+    }
+}
+
 public struct AssemblyScene: Codable, Equatable, Sendable {
     public enum Resolution: Int, CaseIterable, Codable, Sendable {
         case standard = 1, fine, extraFine
@@ -247,6 +261,9 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     // Optional on disk so scenes from 0.6 retain their original meshes.
     public var meshResolution: Resolution?
     public var resolution: Resolution { meshResolution ?? .standard }
+    // Workshop organization does not affect body indices or contact order.
+    public var bodyOrder: [UUID]?
+    public var groups: [AssemblyGroup]?
 
     public static let maximumParts = 8
     public static let maximumConnections = 12
@@ -255,16 +272,37 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
 
     public mutating func removePart(_ id: UUID) {
         parts.removeAll { $0.id == id }
+        bodyOrder?.removeAll { $0 == id }
+        removeFromGroups([id])
         connections.removeAll { $0.first == id || $0.second == id }
         gauges?.removeAll { $0.body == id }
         if monitor == id { monitor = nil }
         if relativeTo == id || relativeTo == (monitor ?? parts.first?.id) { relativeTo = nil }
     }
 
+    public mutating func removeFromGroups(_ ids: Set<UUID>) {
+        guard var updated = groups else { return }
+        for i in updated.indices { updated[i].members.removeAll { ids.contains($0) } }
+        updated.removeAll { $0.members.count < 2 }
+        groups = updated.isEmpty ? nil : updated
+    }
+
+    public var orderedBodyIDs: [UUID] {
+        let order = bodyOrder ?? []
+        let listed = Set(order)
+        return order + parts.map(\.id).filter { !listed.contains($0) }
+    }
+
     func validate() throws {
         let ids = Set(parts.map(\.id))
+        let groups = groups ?? []
+        let members = groups.flatMap(\.members)
+        let order = bodyOrder ?? []
         guard assemblyVersion == 1, parts.count <= Self.maximumParts, connections.count <= Self.maximumConnections,
               ids.count == parts.count, Set(connections.map(\.id)).count == connections.count,
+              Set(order).count == order.count, order.allSatisfy(ids.contains),
+              Set(groups.map(\.id)).count == groups.count, groups.allSatisfy({ $0.members.count >= 2 }),
+              Set(members).count == members.count, members.allSatisfy(ids.contains),
               (0.02...0.25).contains(duration), monitor.map(ids.contains) ?? true,
               relativeTo.map({ ids.contains($0) && $0 != (monitor ?? parts.first?.id) }) ?? true,
               (gauges?.count ?? 0) <= AssemblyGauge.limit,
@@ -307,6 +345,41 @@ enum AssemblyError: LocalizedError {
 }
 
 extension Mesh {
+    static func ellipse(size: Point, refinement: Int) -> Mesh {
+        let rings = max(3, Int((max(size.x, size.y) / 0.018).rounded())) * refinement
+        let sectors = 8
+        var points: [Point] = [.zero]
+        var triangles: [(Int, Int, Int)] = []
+        var boundary: [Edge] = []
+
+        for ring in 1...rings {
+            let start = points.count
+            let previous = start - sectors * (ring - 1)
+            let count = sectors * ring
+            let radius = size * (0.5 * Double(ring) / Double(rings))
+            for i in 0..<count {
+                let theta = 2 * Double.pi * Double(i) / Double(count)
+                points.append(radius * Point(cos(theta), sin(theta)))
+            }
+            for sector in 0..<sectors {
+                for i in 0..<ring {
+                    let outer = sector * ring + i
+                    let a = start + outer
+                    let b = start + (outer + 1) % count
+                    let inner = ring == 1 ? 0
+                        : previous + (sector * (ring - 1) + i) % (sectors * (ring - 1))
+                    triangles.append((inner, a, b))
+                    if i < ring - 1 {
+                        let next = previous + (sector * (ring - 1) + i + 1) % (sectors * (ring - 1))
+                        triangles.append((inner, b, next))
+                    }
+                    if ring == rings { boundary.append(Edge(a, b)) }
+                }
+            }
+        }
+        return Mesh(reference: points, triangles: triangles, boundary: boundary)
+    }
+
     static func enclosure(size: Point, wall: Double, refinement: Int) -> Mesh {
         let layers = 2 * refinement
         func coordinates(_ width: Double) -> [Double] {

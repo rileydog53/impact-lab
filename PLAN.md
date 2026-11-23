@@ -1,0 +1,64 @@
+# Impact Lab product recovery
+
+The six cards below are the active plan from checkpoint `15e8a6d`. The [full cards](docs/PRODUCT_RECOVERY.md) contain implementation scope and acceptance criteria. The original foundation plan follows for historical reference.
+
+- [x] Card 1 — Make the Application Usable
+- [x] Card 2 — Build a Genuine Assembly Workshop
+- [ ] Card 3 — Make Materials and Physical Conditions Meaningful
+- [ ] Card 4 — Make the Calculated Physics Visible
+- [ ] Card 5 — Scale the Computational Engine
+- [ ] Card 6 — Prove the Complete Product Works
+
+## Card 1 checkpoint
+
+Commit `dded9a2` on `main` ships the native assembly editor. In the running app, scroll zoom held the point under the cursor. Fit Assembly showed a body moved to X = 900 mm, and Zoom to Selection brought the thin block into view. Moving, rotating, and resizing a body updated the inspector. During playback, selection and camera navigation remained available, and dragging left the starting geometry intact.
+
+Native undo and redo restored the edited values. Save and Open restored the same position, dimensions, and rotation, and Open prompted before replacing unsaved edits. The existing launcher opened the release app. `ImpactCheck --assembly`, `ImpactCheck --experiment-library`, and `git diff --check` passed. Physical trackpad pinch remains untested.
+
+## Card 2 verification
+
+In an isolated native release build, a blank assembly became a round driver, a plate with three permanently bonded materials, and a rotated deformable support. The plate and support were aligned and spaced 10 mm apart. A spring was placed by clicking its two material anchors. The native mesh report showed 526 triangles after refining the plate. Saving and reopening preserved the geometry, materials, refinement, group, and spring.
+
+The reopened assembly ran to 120.00 ms. The app recorded first contact at 20.00 ms and showed 43.55 N/m of spring load at 97.50 ms. Group movement with 5 mm snapping, duplication, reordering, delete and undo, breakable-link placement, and overlap validation were also exercised in the app. `ImpactCheck --assembly`, `ImpactCheck --assembly-study`, and `ImpactCheck --experiment-library` passed.
+
+The Workshop Limits panel documents the available geometry and mechanical relationships. Supports can move and deform under load. Fixed and clamped boundaries, rigid joints, imported outlines, and arbitrary cracks are unavailable. Round bodies and bonded blocks have no material-fracture control.
+
+# Phase 0 decision — Build the bar impact first, then grow the working sandbox
+
+**Version 0.1A begins with one launchable experiment.** Open the app, run a deformable bar into a wall, pause on the compression wave, change the stiffness, and run it again. The measured wave should arrive sooner in the stiffer bar. That single interaction exercises the solver, contact, renderer, controls, and a scientific prediction. Add the ring and tilted block to that working application one at a time.
+
+## Agreed architecture
+
+- **Physics.** Use explicit 2D Lagrangian FEM in plane strain, three-node constant-strain triangles, lumped nodal masses, central-difference integration, and compressible neo-Hookean elasticity. Use SI units, double precision, and report forces and energies per metre of out-of-plane depth. Begin with moderately compressible materials and modest impact speeds.
+- **Application.** Use a small headless CPU solver and a separate renderer that reads computed positions, strain, and diagnostics. The provisional Mac-native choice is Swift with SwiftUI Canvas, built with the local Apple toolchain. Use the same simulation step for interactive playback and headless verification. Display simulated time and advance physics independently of the display refresh rate.
+- **Anticipate two bodies in 0.1A.** Give each deformable body its own reference mesh, current nodal state, material assignment, and identifiable exterior edges. Keep contact forces separate from element forces. In 0.1A, the only contact calculation is a boundary node against an analytic fixed plane, with compressive penalty force weighted by tributary edge length. This leaves a place for two-body forces in 0.1B without building a general contact engine in advance.
+
+## Version 0.1A — First complete application
+
+| Task and user-visible result | Smallest implementation | Scientific verification and completion gate | Critical dependency or blocker |
+|---|---|---|---|
+| **A1. Launch and rerun a bar impact.** [x] The user can run, pause, reset, and change stiffness or initial speed. | One generated rectangular mesh, one fixed wall, one material, and one window. Draw the computed outline and axial strain. Show simulated time and a strain trace at a marked station. | Run a low-amplitude case with \(\nu=0\). From first wall contact, arrival at a probe a distance \(L_p\) away should approach \(L_p/\sqrt{E/\rho_0}\). Quadrupling \(E\) should approximately halve that time. Stop when this works from the normal app launcher and reset reproduces the trace. | Requires a local compiler and a stable step accounting for both element and wall-contact stiffness. These belong in the first task. |
+| **A2. Inspect the bar result.** [x] The user can single-step and judge whether a run is numerically credible. | Add timestep, maximum wall penetration, wall impulse, and energy imbalance to the same window. Include kinetic, elastic, and contact-penalty energy at consistent time levels. Expose density and bounded Poisson ratio alongside stiffness and speed. | Verify zero internal force under rigid translation and rotation, uniform stress in an affine patch, and agreement between wall impulse and change in body momentum. For the reference bar, require under **5% arrival-time error** and under **1% peak energy imbalance** relative to initial kinetic energy. Refine space and time separately and vary the penalty to expose sensitivity. | Use the A1 solver directly. A short verification command is sufficient. |
+| **A3. Select a ring and watch it ovalize.** [x] | Add a thick-walled annular mesh to the preset selector. Plot horizontal and vertical diameters through impact and rebound. | Resolve the wall with several triangles through its thickness. Compare the first ovalization period and peak diameter change on successively finer meshes. Stop when both change by under **5%** on the final refinement and the shipped preset meets that comparison. | Constant-strain triangles can make bending too stiff. Increase through-wall resolution if this gate fails. |
+| **A4. Select a tilted block and watch it turn.** [x] | Add a rounded-corner block with an initial tilt. Show its orientation and the accumulated wall impulse. Use the existing wall contact and material law. | Mirroring the tilt should reverse the rotation and preserve the normal impulse magnitude within discretization error. Check angular-momentum change against integrated wall torque. Stop when all three presets pass through the same select, edit, run, pause, inspect, and reset workflow. | The corner needs adequate boundary resolution. Rigid rotation must already pass A2. |
+
+The 5% and 1% values are **proposed release tolerances**, with no measured results yet. Stop a run before accepting an inverted element or non-finite state and show the reason. Under load, let playback slow while preserving the physical timestep.
+
+## Subsequent releases — One working experiment at a time
+
+| Release and runnable demonstration | Minimum addition | Verification and stopping condition | Dependency or limit |
+|---|---|---|---|
+| **0.1B — Two deformable bodies collide and separate.** [x] Start with two aligned elastic bars. Then add a rounded puck striking a free rectangular strip so the player can inspect deformation in both. | For these bounded presets, detect contact between exterior nodes and opposing boundary segments in the current configuration. Apply normal-only compressive forces and distribute the equal-and-opposite reaction to both segment endpoints using the contact location. Handle separation, duplicate corner contacts, and missed crossings within the allowed speed range. | In an isolated equal-bar collision, check the expected small-amplitude exchange of velocities, total linear and angular momentum, and energy including the contact penalty. For the puck and strip, check separation, bound overlap relative to local edge size, and repeat with finer boundaries and smaller steps. Ship when both demos pass and 0.1A still runs. | **Highest implementation risk.** A fixed wall can absorb an unbalanced reaction silently. Two free bodies expose it. Keep the supported shapes and speeds bounded. Friction, self-contact, and arbitrary geometry can wait. |
+| **0.2 — Configure and compare experiments.** [x] Edit a preset, save it, reopen it, and compare two runs at matching simulated times. | Add dimensions for the existing shape families, per-body elastic materials, initial positions and velocities, and local configuration files. Include a bonded two-material bar with a shared-node interface. | A saved scene must reproduce its traces. In the small-amplitude bonded-bar case, verify the reflected wave against the 1D impedance prediction, including vanishing reflection for matched impedances. Stop when the full edit–save–reopen–compare workflow works on a two-body scene. | Depends on the bounded contact envelope established in 0.1B. Keep the editor within it. |
+| **0.3 — Compare elastic recovery with permanent set.** [x] Run the same specimen and loading with elastic and elastoplastic materials. | Add one rate-independent \(J_2\) model with isotropic hardening, per-element plastic history, and the out-of-plane stress required by plane strain. Display accumulated plastic strain and a residual dimension after unloading. | Check yield onset, unloading slope, residual strain, and nonnegative plastic dissipation against a material-point load–unload solution. Ship when permanent set is measurable after unloading and persists under refinement. | Requires a constitutive update consistent with the solver’s rotation and stress conventions. |
+| **0.4 — Open a bonded seam in a layered specimen.** [x] Let the player compare an intact bond with one that separates. | Add one predefined cohesive interface with a traction–separation law, fracture energy, and compressive contact on reclosure. Display opening and dissipated fracture energy. | In pure opening, verify that work per fully separated area approaches \(G_c\). Refine along the seam and check the force–opening curve and total dissipation. Stop with this one verified separation mechanism. | Requires independently moving interface faces. Arbitrary crack paths, fragmentation, 3D, and multiphysics remain later decisions. |
+
+## Execution gates
+
+- **End-of-Turn Handoff Protocol.** Follow the permanent protocol in [the project instructions](AGENTS.md#project-audit-and-end-of-task-handoff) at the end of each development task.
+- **Preserve the runnable product.** Start each task from the last demonstrated Git checkpoint. End it by launching the app through its normal entry point, exercising the new interaction, running the focused physics check, and checkpointing the working result. Keep all earlier presets available. If Git needs initialization, scope the initial commit to the application files.
+- **Control cost on the actual Mac.** Start with roughly 2,000 triangles or fewer per preset where accuracy allows. Measure time per physics step and simulated time advanced per wall-clock second during sustained playback on the M4 Air. Treat mesh size as a starting estimate. Bending accuracy and contact stability decide the usable resolution. Reconsider MPM only if a required scenario repeatedly loses mesh quality before reaching the deformation of interest.
+- **Interrupt stalled work.** After two consecutive implementation turns without a demonstrable user-visible improvement, pause before a third. Use the existing local Codex auditor to summarize recorded usage, identify the specific blocker, and name the smallest action that can restore visible progress. Reuse the last working checkpoint and keep the review brief.
+- **End planning here.** The foundation, first interaction, analytical reference, and stopping conditions are decided. Approval and a switch to normal execution mode are the only prerequisites to starting A1. Later contact details can be settled against the running examples. Verification supports claims about the numerical model. Real-material or ballistic predictions would require independent experimental validation.
+
+**Recommended first implementation task for Codex in normal execution mode:** Complete **A1 only**. Deliver the launchable bar-impact window, demonstrate the stiffness change against the predicted wave-arrival change, and checkpoint that working application.
