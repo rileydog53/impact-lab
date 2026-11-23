@@ -6,13 +6,13 @@ The recovery plan started at checkpoint `15e8a6d`. The [original recovery cards]
 - [x] Card 2 — Build a Genuine Assembly Workshop
 - [x] Card 3 core (3A and 3B) — Material profiles and verified metal mechanics
 - [x] Card 4 — Make the Calculated Physics Visible
-- [ ] Card 5 — Scale the Computational Engine
+- [x] Card 5 — Scale the Computational Engine
 - [ ] Card 7 — Build the Experimental Scenario Library
 - [ ] Card 6 — Prove the Complete Product Works
 
 ## Amended execution order
 
-**Card 2 → Card 3 core (3A and 3B) → Card 4 → Card 5 → Card 7 → Card 6.** Cards 1 and 2 are complete. Card 7 takes its own acceptance gate before final release verification. Card 6 retains its number and all four original end-to-end exercises.
+**Card 2 → Card 3 core (3A and 3B) → Card 4 → Card 5 → Card 7 → Card 6.** Cards 1, 2, 3 core, 4 and 5 are complete. Card 7 takes its own acceptance gate before final release verification. Card 6 retains its number and all four original end-to-end exercises.
 
 Impact Lab is a native macOS laboratory for research, education, and exploration in materials and structural dynamics. Users should be able to construct experiments, assign materials, configure supported loads and initial conditions, calculate physical behavior, and inspect deformation, stress, plasticity, damage, fracture, and contact. Use general mechanics terminology and keep the architecture applicable to physical systems. The product scope excludes weapon-specific optimization, human-injury modeling, and depictions of harm to people. Shock waves, energetic-material phenomena, extreme deformation, and fragmentation remain topics for scientific exploration where supported by defensible models.
 
@@ -42,18 +42,23 @@ In **Assembly**, **Calculate** reports accepted physical time and steps, compute
 **Scaling check.** Use `ImpactCheck --assembly-scaling copper|elastic|linear|enclosure|fracture`. Add `--parallel-fem` for the app’s automatic body partition, `--kernel-profile` for a serial run sampling kinematics, constitutive/history update and force scatter every 128 steps, or `--resume-check` to insert a pause checkpoint. `--write-scene PATH` exports the fixture for native replay. Compare wall time, CPU time, resident memory and replay fingerprints with the same fixture and release compiler. The numerical gate for unchanged physics is equality of accept counts and replay fingerprints over node states, topology, fields, sampled energy, gauges, contact load and impulse, and event times. The existing contact handoff and conservation gates apply separately.
 
 
-**WIP handoff, 2026-11-22. Card 5 remains open.** The implementation adds buffered live telemetry, in-memory cancellation and resume, per-case Study progress, and a two-lane CPU dispatcher for sufficiently large independent bodies. FEM energy reduction stays in body order. Boundary contact skips nearest-edge work for exterior points. Triangle self-contact skips a candidate only when a separating axis remains valid over the cached displacement bound. A mutable-buffer FEM prototype regressed serial copper timing. The checkpoint uses the original array layout with separate compiled kernels for normal execution and detailed profiling.
+**Card 5 acceptance, 2026-11-22 (M1 MacBook Air, 8 cores (4P + 4E), 8 GB, Swift 6.3 release).** Implementation checkpoint `2593315`; verification only, no solver change was needed. The WIP history (M4 measurements that overlapped other jobs) is in that commit.
 
-**Verified before the stop.** Release compilation succeeded through the final window-lifetime cancellation edit. The preceding release build passed `--assembly-replay`, `--metal-profiles` and `--assembly`. Native UI verification covered a 48,216-triangle cancellation, fine copper cancellation at step 1,090 and resume to step 12,061, the copper contact event at 12.52 µs, and three simultaneous timestep Study cases with live CPU/RAM and safe cancellation. An eight-body run on the optimized solver completed 38,741 steps in the native app in 120.64 s. Its contact event at 22.557 ms opened the recorded energy ledger at that exact time.
+**Dispatcher decision.** The restart step ran copper serial, parallel with `--resume-check`, parallel with `--resume-check`, then serial, back-to-back with no other benchmark jobs. All four reproduced 12,061 steps and replay fingerprint `62e6f0187b862a50`, which equals the recorded `97f7e32` baseline. Parallel FEM averaged 22.13 s against 35.57 s serial (1.61×) for about 3% more CPU time and 0.4 MiB more peak RSS. The earlier M4 copper slowdown came from overlapping test activity. Automatic parallel FEM therefore stays enabled for this mixed J2/elastic workload, and the 5,000-weight per-lane threshold is unchanged. The fracture fixture falls below the threshold and correctly stays serial.
 
-| Release benchmark on M4 MacBook Air | Baseline `97f7e32` | WIP | Replay fingerprint in both |
-|---|---:|---:|---|
-| Eight bodies, ×4, 15,744 triangles, 42 ms | 152.78 s wall, 146.18 CPU-s, 57.77 MiB peak RSS | 133.01 s wall, 176.15 CPU-s, 64.27 MiB peak RSS | `5c169d5c3d9eecc1` |
-| Tabulated J2 copper and elastic steel, ×7, 14,700 triangles, 250 µs | 34.10 s wall, 33.93 CPU-s, 71.72 MiB peak RSS | 53.14 s wall, 57.23 CPU-s, 62.88 MiB peak RSS | `62e6f0187b862a50` |
+| Release benchmark, M1 Air | Serial | Parallel FEM + resume check | Speedup | Fingerprint (both) |
+|---|---:|---:|---:|---|
+| Tabulated J2 copper + elastic steel, ×7, 14,700 triangles, 250 µs | 35.57 s wall, 35.44 CPU-s, 68.94 MiB (mean of 2) | 22.13 s wall, 36.57 CPU-s, 69.33 MiB (mean of 2) | 1.61× | `62e6f0187b862a50` |
+| Elastic, same fixture | 28.79 s, 28.69 CPU-s, 64.09 MiB | 15.74 s, 29.77 CPU-s, 64.44 MiB | 1.83× | `8811c7a6c884f168` |
+| Linear-hardening J2, same fixture | 34.77 s, 34.76 CPU-s, 68.94 MiB | 21.63 s, 35.97 CPU-s, 69.33 MiB | 1.61× | `262eb7ca2a9703fa` |
+| Eight bodies, ×4, 15,744 triangles, 42 ms | 118.81 s, 118.73 CPU-s, 75.83 MiB | 65.55 s, 122.98 CPU-s, 76.14 MiB | 1.81× | `5c169d5c3d9eecc1` (= baseline) |
+| Fracture, extra fine, 132,302 steps | 79.13 s, 79.09 CPU-s, 36.83 MiB | 80.45 s (serial by threshold) | — | `de5691055e81dd03` |
 
-These runs overlapped other test activity. The enclosure result shows an observed wall-time improvement with added CPU cost. Copper was slower in the final sample and faster on an earlier prototype. The measurements do not establish a reliable copper speedup or justify the final dispatch threshold. The enclosure used 1.80 MiB of solver state buffers (120.2 B/triangle) and 55.84 MiB of recorded field buffers. Copper used 1.72 MiB (122.5 B/triangle) and 54.38 MiB of recorded fields. The preceding prototype reproduced the elastic, linear J2 and fracture fingerprints and passed `--contact-handoff` on aligned and staggered meshes. The final `--assembly-study`, final `--contact-handoff`, and final per-material profile sweep were interrupted at handoff. The final window-close cancellation edit was built but not exercised in the native app.
+Step counts, energy drift, momentum and penetration were identical within each pair. **Kernel profile** (serial, sampled every 128 steps, 1.40 M element updates each, includes timer overhead): geometry about 151 ns/element for every material; constitutive/history update 29.7 ns elastic, 57.8 ns linear J2, 61.8 ns tabulated J2 copper; force scatter 16 ns. FEM is 97% of serial wall time in the metal fixtures; contact, integration and output together take under 1 s. **State memory:** 82.5 B/triangle elastic, 122.5 B/triangle with J2 history, 102.5 B/triangle with cohesive traction. Recorded replay fields (50–56 MiB for these fixtures) dominate memory, well within 8 GB.
 
-**Exact restart step.** Build release from this WIP checkpoint. With other benchmark jobs stopped, run `ImpactCheck --assembly-scaling copper` and the same command with `--parallel-fem --resume-check` back-to-back, then repeat in reverse order. Compare wall and CPU time, replay fingerprint and step count to each other and the recorded baseline. Use those results to decide whether automatic parallel FEM should apply to this mixed-material workload before changing the dispatcher. After that decision, finish the pending focused checks and reverify any resulting native change. Card 7 follows Card 5 acceptance.
+**Focused regressions on the same build all passed:** `--assembly-study` (bonded mesh study 1.82× in parallel), `--contact-handoff` (aligned and staggered PASS), `--assembly-replay`, `--metal-profiles`, `--assembly` and `--experiment-library`. **Native:** launched through `launch.command`, the enclosure example calculated at about 187% CPU. Closing its window mid-calculation dropped process CPU from about 107% to 2% within 1.5 s, and cumulative CPU time stopped advancing, which verifies the window-lifetime cancellation edit. A new window then completed the example in 6.70 s (65,961 steps, 155 ms, 156 MiB RSS). Earlier native checks of cancel and resume, Study progress and the eight-body run remain from the WIP checkpoint.
+
+**Limitations.** Parallelism is two lanes across independent bodies. A single large body does not parallelize, and maximum speedup is about 2×. The serial kernel is dominated by element geometry rather than constitutive work. Further gains would need intra-body partitioning or SIMD geometry, which belongs to later work. Card 7 follows.
 
 ### Card 7 — Experimental scenario library
 
