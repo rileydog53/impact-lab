@@ -113,18 +113,37 @@ func slidingDetachmentPatch() {
                  100 * closed.relativePenetration, patch.reading.dissipation))
 }
 
-private func cohesivePatchCheck() {
+func cohesivePatchCheck(tensileInitiation: Bool = false) {
     let length = 0.02
     let points = [Point(0, 0), Point(length, 0), Point(length / 2, length), Point(length / 2, -length)]
     let mesh = Mesh(reference: points, triangles: [(0, 1, 2), (1, 0, 3)],
                     boundary: [Edge(1, 2), Edge(2, 0), Edge(0, 3), Edge(3, 1)])
     let material = Material()
     let body = Body(mesh: mesh, material: material, position: points, velocity: .zero)
-    let settings = MaterialFractureSettings()
-    let strength = settings.strengthFraction * material.young
+    var settings = MaterialFractureSettings()
+    if tensileInitiation { settings.tensileStrength = 20_000 }
+    let strength = settings.tensileStrength ?? settings.strengthFraction * material.young
+    if tensileInitiation {
+        for column in [Point(1.5 * strength, 0), Point(0, -1.5 * strength),
+                       Point(0, 0.999 * strength), Point(1.5 * strength, 0.5 * strength)] {
+            var intact = MaterialFracture(body: body, settings: settings)
+            let stress = ElementPiola(.zero, column)
+            require(intact.insert(position: points, piola: [stress, stress], mesh: mesh) == nil,
+                    "A tensile face opened under shear, compression, or subcritical tension")
+        }
+        // The solved traction and the current face rotate together.
+        let rotated = points.map { Point(-$0.y, $0.x) }
+        let stress = ElementPiola(.zero, Point(-strength, 0))
+        var rotatedPatch = MaterialFracture(body: body, settings: settings)
+        require(rotatedPatch.insert(position: rotated, piola: [stress, stress], mesh: mesh) != nil,
+                "Rigid rotation changed tensile initiation at the threshold")
+        print("Tensile initiation: 20 kPa threshold; subcritical tension, compression, shear and mixed subcritical tension stayed intact.")
+    }
     let physicalSpan = 2 * settings.energy / strength
     let expected = length * settings.energy
-    for (label, loading) in [("opening", Point(0, -1)), ("sliding", Point(1, 0)), ("mixed", Point(0.6, -0.8))] {
+    let opening = [("opening", Point(0, -1))]
+    let cases = tensileInitiation ? opening : opening + [("sliding", Point(1, 0)), ("mixed", Point(0.6, -0.8))]
+    for (label, loading) in cases {
         var specimen = MaterialFracture(body: body, settings: settings)
         require(specimen.reading.insertedEdges == 0, "Patch starts with cohesive elements")
         let piola = ElementPiola(.zero, -strength * loading)
@@ -168,7 +187,7 @@ private func cohesivePatchCheck() {
                 "Fully spent patch did not account for Gc or become two independent faces")
         print(String(format: "Insertion patch %@: traction jump %.2e of strength, work %.8f vs %.8f J/m",
                      label, preloadError, work, expected))
-        if label == "mixed" {
+        if label == "mixed" || tensileInitiation {
             var unloading = initial
             var force = Array(repeating: Point.zero, count: reference.count)
             _ = unloading.accumulate(position: positions(0.5 * physicalSpan), reference: reference, force: &force)

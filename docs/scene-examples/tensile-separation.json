@@ -1,0 +1,20 @@
+{
+  "$schema": "../scene-format.schema.json",
+  "description": "A striker bends a custom elastic coupon supported by two deformable blocks. Cohesive cracks can initiate in tension and release fragments. The receiver is free to move. Material and fracture parameters are illustrative.",
+  "duration": 0.115,
+  "meshResolution": "extraFine",
+  "parts": [
+    { "name": "Bend coupon", "size": [0.163, 0.026],
+      "material": { "young": 1000000, "density": 950, "poisson": 0.12 },
+      "fracture": { "tensileStrength": 30000, "energy": 7 } },
+    { "name": "Striker", "size": [0.025, 0.043], "center": [-0.018, 0.040], "velocity": [0, -1.45],
+      "material": { "young": 3000000, "density": 2200, "poisson": 0.15 } },
+    { "name": "Left support", "size": [0.033, 0.110], "center": [-0.062, -0.070],
+      "material": { "young": 3500000, "density": 2500, "poisson": 0.10 } },
+    { "name": "Right support", "size": [0.033, 0.110], "center": [0.062, -0.070],
+      "material": { "young": 3500000, "density": 2500, "poisson": 0.10 } },
+    { "name": "Receiver", "size": [0.064, 0.031], "center": [0, -0.076],
+      "material": { "young": 2500000, "density": 2100, "poisson": 0.15 } }
+  ],
+  "monitor": "Bend coupon"
+}

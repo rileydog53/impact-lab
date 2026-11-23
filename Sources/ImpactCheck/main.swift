@@ -104,6 +104,13 @@ if ["--legacy-insertion", "--sibling-contact", "--detachment-contact"].contains(
     MaterialFracture.recoveredInsertionStress = false
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--tensile-separation") {
+    let args = CommandLine.arguments
+    let path = args.indices.contains(index + 1) ? args[index + 1] : "docs/scene-examples/tensile-separation.json"
+    try tensileSeparationCheck(sceneURL: URL(fileURLWithPath: path))
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--contact-handoff") {
     exit(try contactHandoffCheck() ? EXIT_SUCCESS : EXIT_FAILURE)
 }

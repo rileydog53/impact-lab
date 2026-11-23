@@ -151,6 +151,7 @@ package struct MaterialFracture: Sendable {
     private let faces: [Face]
     private let exterior: [Edge] // Element corner IDs.
     private let young, density, strength, toughness: Double
+    private let tensileInitiation: Bool
     private let cornerStiffness: [Double]
     private var slots: [Int]
     private var recovery: [[(element: Int, weight: Double)]]
@@ -172,7 +173,8 @@ package struct MaterialFracture: Sendable {
         let mesh = body.mesh
         young = body.material.young
         density = body.material.density
-        strength = young * settings.strengthFraction
+        tensileInitiation = settings.tensileStrength != nil
+        strength = settings.tensileStrength ?? young * settings.strengthFraction
         toughness = settings.energy
         cornerNodes = mesh.elements.flatMap { [$0.a, $0.b, $0.c] }
         var pending: [SIMD2<Int>: Edge] = [:]
@@ -266,6 +268,10 @@ package struct MaterialFracture: Sendable {
             // Opening and shear fracture are supported under noncompressive
             // normal traction. Matching-face closure is separately unilateral.
             guard traction.x >= 0 else { continue }
+            if tensileInitiation && traction.x < strength * (1 - 1e-12) { continue }
+            // Keep the entire traction as the seed, including any tangential
+            // component. The initiation criterion changes independently of
+            // the cohesive unloading and contact laws.
             pending.append((i, traction, simd_distance(left, right) / strength))
         }
         guard !pending.isEmpty else { return nil }

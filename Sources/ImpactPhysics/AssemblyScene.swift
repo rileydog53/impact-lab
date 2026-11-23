@@ -8,8 +8,11 @@ public struct MaterialFractureSettings: Codable, Equatable, Sendable {
     }
 
     public static let strengthRange = 0.005...0.08
+    public static let tensileStrengthRange = 100.0...1e9
     public static let energyRange = 0.5...50.0
     public var strengthFraction = 0.030
+    /// If present, initiate on the tensile component of nominal face traction (Pa).
+    public var tensileStrength: Double?
     public var energy = 7.0
     public var meshPattern: MeshPattern?
     public var pattern: MeshPattern { meshPattern ?? .aligned }
@@ -18,6 +21,7 @@ public struct MaterialFractureSettings: Codable, Equatable, Sendable {
 
     var isValid: Bool {
         Self.strengthRange.contains(strengthFraction) && Self.energyRange.contains(energy)
+            && (tensileStrength.map(Self.tensileStrengthRange.contains) ?? true)
     }
 }
 
@@ -105,7 +109,10 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
             && (shape != .enclosure || (0.005...0.4 * min(size.x, size.y)).contains(wall))
             && material.isValidForAssembly
-            && plasticity.isValid && (fracture.map { shape != .round && material.provenance == nil && $0.isValid } ?? true)
+            && plasticity.isValid && (fracture.map {
+                shape != .round && material.provenance == nil && $0.isValid
+                    && ($0.tensileStrength == nil || plasticity.response == .elastic)
+            } ?? true)
             && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)
             && (bondedLayer.map { shape == .block && $0.isValid && fracture == nil && notch == nil

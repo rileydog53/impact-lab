@@ -308,7 +308,7 @@ struct AssemblyEditor: View {
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
                     Button("Material Library…", systemImage: "square.stack.3d.up") { materialTarget = .body }
-                    profiles("Apply illustrative profile", elasticOnly: part.bondedLayer != nil) { profile in
+                    profiles("Apply illustrative profile", elasticOnly: part.bondedLayer != nil || part.fracture?.tensileStrength != nil) { profile in
                         experiment.updatePart(part.id, action: "Apply Material") { profile.apply(to: &$0) }
                     }.disabled(!experiment.canEdit)
                     if let provenance = part.material.provenance {
@@ -328,7 +328,7 @@ struct AssemblyEditor: View {
                                                               set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
                             ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
-                        .disabled(!experiment.canEdit || part.bondedLayer != nil)
+                        .disabled(!experiment.canEdit || part.bondedLayer != nil || part.fracture?.tensileStrength != nil)
                         Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                             GridRow {
                                 bodyNumber("Young’s modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
@@ -360,14 +360,25 @@ struct AssemblyEditor: View {
                             })).toggleStyle(.checkbox)
                             if let fracture = part.fracture {
                                 HStack {
-                                    numeric("Strength / E (%)", value: fracture.strengthFraction,
-                                            range: MaterialFractureSettings.strengthRange, scale: 100) { value in
-                                        experiment.updatePart(part.id) { $0.fracture?.strengthFraction = value }
+                                    if let strength = fracture.tensileStrength {
+                                        numeric("Tensile strength (kPa)", value: strength,
+                                                range: MaterialFractureSettings.tensileStrengthRange, scale: 1e-3) { value in
+                                            experiment.updatePart(part.id) { $0.fracture?.tensileStrength = value }
+                                        }
+                                    } else {
+                                        numeric("Strength / E (%)", value: fracture.strengthFraction,
+                                                range: MaterialFractureSettings.strengthRange, scale: 100) { value in
+                                            experiment.updatePart(part.id) { $0.fracture?.strengthFraction = value }
+                                        }
                                     }
                                     numeric("Fracture energy (J/m²)", value: fracture.energy,
                                             range: MaterialFractureSettings.energyRange, scale: 1) { value in
                                         experiment.updatePart(part.id) { $0.fracture?.energy = value }
                                     }
+                                }
+                                if fracture.tensileStrength != nil {
+                                    Text("Experimental tensile initiation. Damage softens cohesive faces. Values require calibration for a real material.")
+                                        .font(.caption).foregroundStyle(.secondary)
                                 }
                                 if part.shape == .block {
                                     Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in

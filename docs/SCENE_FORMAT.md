@@ -58,7 +58,7 @@ The timestep is not a setting. The solver chooses the largest stable step from t
 | `refinement` | This body's own mesh level, same values as `meshResolution` | assembly mesh |
 | `material` | See below | soft elastic |
 | `plasticity` | Custom-material plasticity, see below | elastic |
-| `fracture` | Illustrative cracking: `{ "strengthFraction": 0.03, "energy": 7 }` (energy in J/m²; optional `meshPattern` `aligned` or `staggered`) | off |
+| `fracture` | Illustrative cohesive cracking. Set `strengthFraction` for the legacy trigger or `tensileStrength` (Pa, custom elastic bulk) for tensile initiation. Set `energy` in J/m². Optional `meshPattern` is `aligned` or `staggered`. | off |
 | `notch` | V-notch on a block's local bottom edge: `{ "depthFraction": 0.2, "widthFraction": 0.2, "centerFraction": 0 }` | none |
 | `bondedLayer` | Permanently bonded second (and `third`) material along the block: `{ "interfaceFraction": 0.5, "material": …, "third": { "interfaceFraction": 0.75, "material": … } }` | none |
 
@@ -133,6 +133,7 @@ Values out of range are reported with their location, value and allowed range. F
 | `layered-panel.json` | Three bonded materials in one block, gauges in each layer | The pulse partly reflects and partly transmits at each bond. |
 | `linked-chain.json` | Rotated bodies, a spring and a breakable link, `relativeTo`, a group | The spring holds and the breakable link snaps (the app shows Failed links 5, because a link with `span` is spread over five strands). Raise `criticalExtension` to keep it intact. |
 | `notched-beam-fracture.json` | Notch and illustrative fracture, supports | The beam cracks from the notch. Raise `fracture.energy` to toughen it. |
+| `tensile-separation.json` | Tensile initiation, cohesive softening and a deformable receiver | Follow separation and subsequent contact in the replay. |
 | `generated-stack.json` | Output of `generate_stack.py` | A steel ball drives into five plates of four different metals. |
 | `invalid-example.json` | Deliberately broken | Shows how errors are explained. |
 

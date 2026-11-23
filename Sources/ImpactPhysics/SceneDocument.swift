@@ -326,9 +326,12 @@ enum SceneDocument {
                 out["plasticity"] = plasticity ?? ["response": "Elastic", "yieldFraction": 0.016, "hardeningFraction": 0.32]
             }
             if let fracture = object(part["fracture"], path + ".fracture") {
-                keys(fracture, path + ".fracture", allowed: ["strengthFraction", "energy", "meshPattern"])
+                keys(fracture, path + ".fracture", allowed: ["strengthFraction", "tensileStrength", "energy", "meshPattern"])
                 var result: Object = ["strengthFraction": number(fracture["strengthFraction"], path + ".fracture.strengthFraction") ?? 0.030,
                                       "energy": number(fracture["energy"], path + ".fracture.energy") ?? 7.0]
+                if let strength = fracture["tensileStrength"] {
+                    result["tensileStrength"] = number(strength, path + ".fracture.tensileStrength")
+                }
                 if let pattern = fracture["meshPattern"] {
                     result["meshPattern"] = choice(pattern, path + ".fracture.meshPattern", ["aligned": "Aligned", "staggered": "Staggered"])
                 }
@@ -502,6 +505,12 @@ extension AssemblyScene {
                 }
                 range(fracture.strengthFraction, MaterialFractureSettings.strengthRange, path + ".fracture.strengthFraction")
                 range(fracture.energy, MaterialFractureSettings.energyRange, path + ".fracture.energy", " J/m²")
+                if let strength = fracture.tensileStrength {
+                    range(strength, MaterialFractureSettings.tensileStrengthRange, path + ".fracture.tensileStrength", " Pa")
+                    if part.plasticity.response != .elastic {
+                        result.append("\(path).fracture.tensileStrength requires a custom elastic material.")
+                    }
+                }
             }
             if let notch = part.notch {
                 if part.shape != .block { result.append("\(path).notch is available for blocks only.") }
