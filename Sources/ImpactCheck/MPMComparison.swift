@@ -26,12 +26,13 @@ private func material(elastic: Bool) -> (Material, HardeningTable) {
     return (profile.material, table)
 }
 
-private func runFEM(speed: Double, resolution: AssemblyScene.Resolution, duration: Double, elastic: Bool) -> Outcome {
-    var outcome = Outcome(label: "FEM \(resolution.label)")
+func copperWallFEMScene(speed: Double, resolution: AssemblyScene.Resolution, duration: Double,
+                        elastic: Bool, size: Point) -> AssemblyScene {
     let (copper, table) = material(elastic: elastic)
     var scene = AssemblyScene()
     for side in [-1.0, 1.0] {
-        var part = AssemblyPart(side < 0 ? "Left" : "Right", center: Point(side * (blockSize.x / 2 + gapToWall), 0), size: blockSize)
+        var part = AssemblyPart(side < 0 ? "Left" : "Right",
+                                center: Point(side * (size.x / 2 + gapToWall), 0), size: size)
         part.material = copper
         part.plasticity.response = .elastoplastic
         part.plasticity.table = table
@@ -40,6 +41,13 @@ private func runFEM(speed: Double, resolution: AssemblyScene.Resolution, duratio
     }
     scene.duration = duration
     scene.meshResolution = resolution
+    return scene
+}
+
+private func runFEM(speed: Double, resolution: AssemblyScene.Resolution, duration: Double, elastic: Bool) -> Outcome {
+    var outcome = Outcome(label: "FEM \(resolution.label)")
+    let scene = copperWallFEMScene(speed: speed, resolution: resolution, duration: duration,
+                                  elastic: elastic, size: blockSize)
     let started = ProcessInfo.processInfo.systemUptime
     do {
         var run = try AssemblyRun(scene)
@@ -144,7 +152,12 @@ private func report(_ title: String, _ rows: [Outcome]) {
 }
 
 /// Usage: --mpm-compare elastic|plastic SPEED DURATION_US [fem levels e.g. 2,4,7] [mpm spacings mm e.g. 2,1,0.5]
-func mpmComparison(_ args: [String]) {
+func mpmComparison(_ args: [String]) throws {
+    if args.first == "fem-limits" {
+        require(args.count == 1, "Usage: ImpactCheck --mpm-compare fem-limits")
+        try femLimitStudy()
+        return
+    }
     let elastic = args.first == "elastic"
     let speed = Double(args.count > 1 ? args[1] : "50")!
     let duration = Double(args.count > 2 ? args[2] : "300")! / 1e6

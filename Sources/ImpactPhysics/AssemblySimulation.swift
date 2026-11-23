@@ -332,12 +332,25 @@ public struct AssemblySimulation: Sendable {
 
     package init(_ scene: AssemblyScene, refinement: Int, stepLimit: Double,
                  notchDepth: Double = 0, stepScale: Double = 1, interbodyStiffnessScale: Double? = nil,
-                 insertionEnabled: Bool = true, strikerPad: StrikerPad? = nil) throws {
+                 insertionEnabled: Bool = true, strikerPad: StrikerPad? = nil,
+                 comparisonVelocities: [Point]? = nil) throws {
         try scene.validate()
+        if let comparisonVelocities {
+            // ImpactCheck can seed its validated, stationary fixture independently of
+            // the workshop scene velocities. The initial energy uses the seeded bodies.
+            precondition(comparisonVelocities.count == scene.parts.count
+                         && scene.parts.allSatisfy { $0.velocity == .zero }
+                         && comparisonVelocities.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+        }
         precondition(refinement > 0 && stepLimit > 0 && stepScale > 0 && notchDepth >= 0)
         self.scene = scene
         let bodies = scene.parts.enumerated().map { i, part in
-            part.makeBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
+            var body = part.makeBody(refinement: part.refinement?.rawValue ?? refinement,
+                                     notchDepth: i == 0 ? notchDepth : 0)
+            if let comparisonVelocities {
+                body.velocity = Array(repeating: comparisonVelocities[i], count: body.velocity.count)
+            }
+            return body
         }
         let fractures = zip(bodies, scene.parts).map { body, part in
             part.fracture.map { MaterialFracture(body: body, settings: $0) }
@@ -449,6 +462,13 @@ public struct AssemblySimulation: Sendable {
         dt = min(stepLimit, stepScale * 0.8 / frequency.squareRoot())
         initialEnergy = bodies.reduce(0) { $0 + Self.kinetic($1) }
         energy = AssemblyEnergy(kinetic: initialEnergy, elastic: 0, contact: 0, connection: 0, hardening: 0, plastic: 0, fracture: 0)
+    }
+
+    // Recreate a rejected drift from the last accepted state. The serial
+    // solver can return before visiting all bodies' trial buffers.
+    package func comparisonTrialPositions(_ index: Int) -> [Point]? {
+        var trial = steps[index]
+        return trial.drift(dt) ? trial.nextPosition : nil
     }
 
     private static func kinetic(_ body: Body) -> Double {

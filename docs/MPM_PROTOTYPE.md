@@ -1,5 +1,7 @@
 # Alternative backend prototype: 2-D MPM (2026-11-23)
 
+A later [M4 FEM refinement study](FEM_DEFORMATION_LIMITS.md) tests the same fixture above the workshop velocity cap.
+
 This is a bounded experiment. The app and the FEM solver are unchanged. The prototype lives in [`Sources/ImpactPhysics/MPMPrototype.swift`](../Sources/ImpactPhysics/MPMPrototype.swift) (about 250 lines) and is driven by `ImpactCheck --mpm-compare` ([`Sources/ImpactCheck/MPMComparison.swift`](../Sources/ImpactCheck/MPMComparison.swift)).
 
 ## What was built

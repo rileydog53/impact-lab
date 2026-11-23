@@ -212,7 +212,7 @@ if let index = CommandLine.arguments.firstIndex(of: "--showcase") {
 }
 
 if let index = CommandLine.arguments.firstIndex(of: "--mpm-compare") {
-    mpmComparison(Array(CommandLine.arguments.dropFirst(index + 1)))
+    try mpmComparison(Array(CommandLine.arguments.dropFirst(index + 1)))
     exit(EXIT_SUCCESS)
 }
 
