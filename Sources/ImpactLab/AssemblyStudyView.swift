@@ -30,6 +30,11 @@ struct AssemblyStudyView: View {
     @State private var cursor: Double?
     @Environment(\.dismiss) private var dismiss
 
+    private var sampleSpacing: String {
+        let interval = scene.sampleInterval
+        return interval >= 0.001 ? String(format: "%.3g ms", interval * 1e3) : String(format: "%.3g µs", interval * 1e6)
+    }
+
     init(scene: AssemblyScene, selectedBody: UUID?) {
         self.scene = scene
         _bodyID = State(initialValue: selectedBody)
@@ -204,7 +209,7 @@ struct AssemblyStudyView: View {
                 Button("Export CSV…", systemImage: "square.and.arrow.down") { export(study) }
             }
             chart(study).onAppear { smokeResult?(.success(study)) }
-            Text("Samples are accepted solver states, about 0.25 ms apart. Lines connect samples. Contact peaks and scalar normal impulses use every accepted step.")
+            Text("Samples are accepted solver states, about \(sampleSpacing) apart. Lines connect samples. Contact peaks and scalar normal impulses use every accepted step.")
                 .font(.caption).foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {

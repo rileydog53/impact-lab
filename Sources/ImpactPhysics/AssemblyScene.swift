@@ -260,7 +260,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     // Optional on disk so scenes from 0.6 retain their original meshes.
     public var meshResolution: Resolution?
     public var resolution: Resolution { meshResolution ?? .standard }
-    var sampleInterval: Double { min(SceneRun.sampleInterval, duration / 80) }
+    public var sampleInterval: Double { min(SceneRun.sampleInterval, duration / 80) }
     // Workshop organization does not affect body indices or contact order.
     public var bodyOrder: [UUID]?
     public var groups: [AssemblyGroup]?

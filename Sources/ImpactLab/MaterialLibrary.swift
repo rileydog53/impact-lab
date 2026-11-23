@@ -117,7 +117,7 @@ struct MaterialLibrary: View {
                 ScrollView {
                     if let draft {
                         editProfile(draft)
-                    } else if let profile = profiles.first(where: { $0.id == selectedID }) {
+                    } else if let profile = filtered.first(where: { $0.id == selectedID }) {
                         inspect(profile)
                     }
                 }
@@ -140,6 +140,11 @@ struct MaterialLibrary: View {
             }
         }
         .onChange(of: selectedID) { _, _ in draft = nil }
+        // Keep the inspected profile among the visible results, so Assign never
+        // applies a material the search has hidden.
+        .onChange(of: query) { _, _ in
+            if draft == nil, !filtered.contains(where: { $0.id == selectedID }) { selectedID = filtered.first?.id }
+        }
     }
 
     private func refresh() {
@@ -247,8 +252,7 @@ struct MaterialLibrary: View {
             Text("Start at zero plastic strain. Use increasing strains up to 100% and positive, nondecreasing stresses.")
                 .foregroundStyle(.secondary)
             if !profile.isValid {
-                Text("Enter a name and valid material values. E 0.0005–400 GPa, density 100–25,000 kg/m³, ν −0.9–0.48, flow stress > 0 to 20,000 MPa.")
-                    .foregroundStyle(assemblyAmber)
+                Text(invalidReason(profile)).foregroundStyle(assemblyAmber)
             }
             HStack {
                 Button("Cancel Edit") { draft = nil }
@@ -265,6 +269,21 @@ struct MaterialLibrary: View {
                 }.buttonStyle(.borderedProminent).disabled(!profile.isValid)
             }
         }.font(.callout).padding(.trailing, 8)
+    }
+
+    /// Names the first rule a draft breaks so the user knows which value to fix.
+    private func invalidReason(_ profile: MaterialProfile) -> String {
+        let points = profile.hardening.points
+        if profile.name.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter a profile name." }
+        for i in points.indices.dropFirst() {
+            if points[i].strain <= points[i - 1].strain {
+                return "Point \(i + 1): plastic strain must be larger than the point above it."
+            }
+            if points[i].stress < points[i - 1].stress {
+                return "Point \(i + 1): flow stress must not be lower than the point above it."
+            }
+        }
+        return "Enter valid material values. E 0.0005–400 GPa, density 100–25,000 kg/m³, ν −0.9–0.48, flow stress > 0 to 20,000 MPa, strain up to 100%."
     }
 
     private func number(_ label: String, _ value: Double, set: @escaping (Double) -> Void) -> some View {
