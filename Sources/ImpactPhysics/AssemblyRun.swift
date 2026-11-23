@@ -5,6 +5,22 @@ public struct AssemblyRun: Sendable {
     private let relativeIndex: Int?
     private let referenceOffset: Point
 
+    package var work: AssemblyWork? { simulation.work }
+
+    package mutating func measureWork(sampleKernels: Bool = false, parallelFEM: Bool = false) {
+        if simulation.work == nil { simulation.work = AssemblyWork() }
+        simulation.sampleKernels = sampleKernels
+        simulation.configureParallelFEM(parallelFEM && !sampleKernels)
+    }
+
+    package mutating func step(recording replay: inout AssemblyReplay) -> Bool {
+        guard step() else { return false }
+        let started = simulation.work == nil ? 0 : AssemblyWork.now
+        replay.record(self)
+        if started != 0 { simulation.work?.output += AssemblyWork.now - started }
+        return true
+    }
+
     public var finished: Bool { simulation.time >= simulation.scene.duration }
 
     public init(_ scene: AssemblyScene) throws {
@@ -40,9 +56,12 @@ public struct AssemblyRun: Sendable {
     @discardableResult public mutating func step() -> Bool {
         let next = Double(samples.count) * simulation.scene.sampleInterval
         let crosses = simulation.time + simulation.dt >= next && next <= simulation.scene.duration
+        let traceStarted = crosses && simulation.work != nil ? AssemblyWork.now : 0
         let before = crosses ? current : nil
+        if traceStarted != 0 { simulation.work?.output += AssemblyWork.now - traceStarted }
         guard simulation.step() else { return false }
         if let before {
+            let started = simulation.work == nil ? 0 : AssemblyWork.now
             let after = current
             var time = next
             while time <= min(after.time, simulation.scene.duration) {
@@ -56,6 +75,7 @@ public struct AssemblyRun: Sendable {
                                            peakStress: before.peakStress + fraction * (after.peakStress - before.peakStress)))
                 time = Double(samples.count) * simulation.scene.sampleInterval
             }
+            if started != 0 { simulation.work?.output += AssemblyWork.now - started }
         }
         return true
     }

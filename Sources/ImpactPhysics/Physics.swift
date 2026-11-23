@@ -269,9 +269,14 @@ struct BodyStep: Sendable {
         return true
     }
 
-    mutating func assemble() -> ElementEnergy? {
+    mutating func assemble(timing: inout ElementKernelTiming?) -> ElementEnergy? {
         Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain,
-                            history: &history, piola: &trialPiola)
+                            history: &history, piola: &trialPiola, timing: &timing)
+    }
+
+    mutating func assemble() -> ElementEnergy? {
+        var timing: ElementKernelTiming?
+        return assemble(timing: &timing)
     }
 
     // Drift already used the parent's acceleration. Redistribute the old
@@ -739,12 +744,37 @@ public struct Simulation: Sendable {
 
     static func assemble(body: Body, position: [Point], forces: inout [Point], strain: inout [Double],
                          history: inout ElementHistory?, piola: inout [ElementPiola]) -> ElementEnergy? {
+        var timing: ElementKernelTiming?
+        return assemble(body: body, position: position, forces: &forces, strain: &strain, history: &history,
+                        piola: &piola, timing: &timing)
+    }
+
+    static func assemble(body: Body, position: [Point], forces: inout [Point], strain: inout [Double],
+                         history: inout ElementHistory?, piola: inout [ElementPiola],
+                         timing: inout ElementKernelTiming?) -> ElementEnergy? {
+        if var measured = timing {
+            let energy = assembleElements(body: body, position: position, forces: &forces, strain: &strain,
+                                          history: &history, piola: &piola, timing: &measured)
+            timing = measured
+            return energy
+        }
+        var unmeasured = UnmeasuredElementKernel()
+        return assembleElements(body: body, position: position, forces: &forces, strain: &strain,
+                                history: &history, piola: &piola, timing: &unmeasured)
+    }
+
+    private static func assembleElements<Timing: ElementKernelClock>(
+        body: Body, position: [Point], forces: inout [Point], strain: inout [Double],
+        history: inout ElementHistory?, piola: inout [ElementPiola], timing: inout Timing
+    ) -> ElementEnergy? {
         for i in forces.indices { forces[i] = .zero }
         let uniformMu = body.material.shear
         let uniformLambda = body.material.lambda
         var energy = ElementEnergy()
         var plasticArea = 0.0
+        let recordsTraction = !piola.isEmpty
         for (i, e) in body.mesh.elements.enumerated() {
+            let started = timing.mark()
             let material = body.elementMaterials?[i]
             let mu = material?.shear ?? uniformMu
             let lambda = material?.lambda ?? uniformLambda
@@ -757,6 +787,7 @@ public struct Simulation: Sendable {
             let xx = simd_length_squared(fx)
             let yy = simd_length_squared(fy)
             strain[i] = 0.5 * ((body.measuresVerticalStrain ? yy : xx) - 1)
+            let kinematicsEnd = timing.mark()
             let stress: ElementPiola
             if let model = history?.model {
                 guard let response = model.update(x: fx, y: fy, from: history!.current[i]) else { return nil }
@@ -781,8 +812,10 @@ public struct Simulation: Sendable {
             guard stress.x.x.isFinite && stress.x.y.isFinite && stress.y.x.isFinite && stress.y.y.isFinite else {
                 return nil
             }
-            if !piola.isEmpty { piola[i] = stress }
+            let constitutiveEnd = timing.mark()
+            if recordsTraction { piola[i] = stress }
             stress.accumulate(e, into: &forces)
+            timing.record(started: started, kinematicsEnd: kinematicsEnd, constitutiveEnd: constitutiveEnd)
         }
         if plasticArea > 0 { energy.meanPlasticStrain /= plasticArea }
         return energy.total.isFinite ? energy : nil

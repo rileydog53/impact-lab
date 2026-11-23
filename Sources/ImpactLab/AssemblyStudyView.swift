@@ -21,6 +21,11 @@ struct AssemblyStudyView: View {
     @State private var result: AssemblyStudy?
     @State private var task: Task<Void, Never>?
     @State private var error: String?
+    @State private var caseProgress: [String: AssemblyStudyProgress] = [:]
+    @State private var started: AssemblyProcessSample?
+    @State private var process: AssemblyProcessSample?
+    @State private var processCPU: Double?
+    @State private var cancelling = false
     @State private var signal: StudySignal = .energy(.residual)
     @State private var cursor: Double?
     @Environment(\.dismiss) private var dismiss
@@ -41,7 +46,7 @@ struct AssemblyStudyView: View {
             if let result {
                 ScrollView { results(result) }
             } else if task != nil {
-                ProgressView("Solving in the background").frame(maxWidth: .infinity, minHeight: 165)
+                studyProgress
             } else {
                     Text("Run this setup from its initial state to measure gauges, contacts, and the energy ledger.")
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 165)
@@ -72,7 +77,12 @@ struct AssemblyStudyView: View {
                     }.frame(maxWidth: 290)
                 }
                 Spacer()
-                if let task { Button("Cancel") { task.cancel() } }
+                if let task {
+                    Button(cancelling ? "Cancelling…" : "Cancel Study") {
+                        cancelling = true
+                        task.cancel()
+                    }.disabled(cancelling)
+                }
                 Button("Run study") { start() }
                     .buttonStyle(.borderedProminent)
                     .disabled(task != nil || (mode == .mesh && !(coarse.rawValue < middle.rawValue && middle.rawValue < fine.rawValue)))
@@ -98,6 +108,31 @@ struct AssemblyStudyView: View {
         }
     }
 
+    private var studyProgress: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if caseProgress.isEmpty {
+                ProgressView("Preparing study meshes").controlSize(.small)
+            }
+            ForEach(caseProgress.values.sorted(by: { $0.id.localizedStandardCompare($1.id) == .orderedAscending })) { item in
+                HStack {
+                    Text(item.id).frame(width: 130, alignment: .leading)
+                    ProgressView(value: item.fraction).accessibilityLabel(item.id)
+                    Text(item.finished ? "Complete" : "\(replayTime(item.time)) / \(replayTime(item.duration))")
+                        .frame(width: 175, alignment: .trailing)
+                    Text("\(item.steps.formatted()) steps").frame(width: 100, alignment: .trailing)
+                }
+            }
+            if let started, let process {
+                let cpu = processCPU.map { String(format: "%.0f%%", $0) } ?? "—"
+                let ram = process.resident.map { String(format: "%.1f MiB", Double($0) / 1_048_576) } ?? "—"
+                Text("\(process.time - started.time, specifier: "%.2f") s elapsed · App CPU \(cpu) · App RAM \(ram)")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout.monospacedDigit())
+        .frame(maxWidth: .infinity, minHeight: 165, alignment: .leading)
+    }
+
     private func start() {
         let variation: AssemblyStudyVariation = switch mode {
         case .current: .current
@@ -108,9 +143,28 @@ struct AssemblyStudyView: View {
         error = nil
         cursor = nil
         signal = .energy(.residual)
+        caseProgress.removeAll()
+        let initial = AssemblyProcessSample()
+        started = initial
+        process = initial
+        processCPU = nil
+        cancelling = false
+        let (updates, continuation) = AsyncStream.makeStream(of: AssemblyStudyProgress.self)
         task = Task {
-            defer { task = nil }
-            do { result = try await AssemblyStudy.run(scene, variation: variation) }
+            defer { task = nil; cancelling = false }
+            async let resultTask: AssemblyStudy = {
+                defer { continuation.finish() }
+                return try await AssemblyStudy.run(scene, variation: variation, progress: { continuation.yield($0) })
+            }()
+            for await item in updates {
+                caseProgress[item.id] = item
+                if let process, ProcessInfo.processInfo.systemUptime - process.time >= 0.25 {
+                    let next = AssemblyProcessSample()
+                    processCPU = next.utilization(since: process)
+                    self.process = next
+                }
+            }
+            do { result = try await resultTask }
             catch is CancellationError {}
             catch {
                 self.error = error.localizedDescription

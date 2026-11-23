@@ -217,6 +217,17 @@ if CommandLine.arguments.dropFirst().contains("--layered-impact") {
     exit(EXIT_SUCCESS)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--assembly-scaling") {
+    let args = CommandLine.arguments
+    guard args.indices.contains(index + 1) else {
+        print("Usage: ImpactCheck --assembly-scaling copper|elastic|linear|enclosure|fracture [--parallel-fem] [--kernel-profile] [--resume-check] [--write-scene PATH]")
+        exit(EXIT_FAILURE)
+    }
+    let output = args.firstIndex(of: "--write-scene").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+    try assemblyScalingCheck(args[index + 1], sceneFile: output)
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--assembly-replay") {
     try assemblyReplayCheck()
     exit(EXIT_SUCCESS)

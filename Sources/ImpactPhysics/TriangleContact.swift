@@ -62,6 +62,26 @@ struct TriangleContact: Sendable {
             stencil = .zero
         }
 
+        func separatedThroughoutPadding(at positions: [Point], padding: Double) -> Bool {
+            guard vertex >= 0 else { return false }
+            let origin = positions[vertex]
+            let u = positions[stencil.x] - origin, v = positions[stencil.y] - origin
+            let w = positions[stencil.z] - origin, z = positions[stencil.w] - origin
+            // Each relative vector can change by at most twice the node
+            // padding per component. Bound the change in each cross product
+            // by expanding cross(a + da, b + db). The larger bound leaves
+            // slack for rounding. Uncertain pairs keep the original test.
+            let delta = 4 * padding
+            func leftOf(_ a: Point, _ b: Point) -> Bool {
+                let change = delta * (abs(a.x) + abs(a.y) + abs(b.x) + abs(b.y) + 2 * delta)
+                return cross2D(a, b) > change
+            }
+            return (leftOf(w, u) && leftOf(z, u))
+                || (leftOf(v, w) && leftOf(v, z))
+                || (leftOf(u, w) && leftOf(v, w))
+                || (leftOf(z, u) && leftOf(z, v))
+        }
+
         func separated(at positions: [Point]) -> Bool {
             guard vertex >= 0 else { return false }
             let origin = positions[vertex]
@@ -174,7 +194,9 @@ struct TriangleContact: Sendable {
             let l = tree[a], r = tree[b]
             if l.leaf && r.leaf {
                 if a != b, let candidate = Candidate(l.first, r.first, elements: state.elements) {
-                    candidates.append(candidate)
+                    if !candidate.separatedThroughoutPadding(at: positions, padding: padding) {
+                        candidates.append(candidate)
+                    }
                 }
             } else if a == b {
                 traverse(l.first, l.first)

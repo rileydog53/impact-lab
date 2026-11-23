@@ -23,7 +23,9 @@ struct AssemblyComparison {
     private(set) var replay: AssemblyReplay?
     private(set) var frameIndex = 0
     private(set) var solving = false
-    @ObservationIgnored private var solveTask: Task<(AssemblyRun, AssemblyReplay), Never>?
+    private(set) var cancelling = false
+    private(set) var computation: AssemblyComputation?
+    @ObservationIgnored private var solveTask: Task<(AssemblyRun, AssemblyReplay, AssemblyComputation), Never>?
     @ObservationIgnored private var solveID: UUID?
     private var playbackTime = 0.0
     var playbackSpeed = 1.0
@@ -56,6 +58,8 @@ struct AssemblyComparison {
         savedScene = initial
         meshQuality = WorkshopMeshQuality.measure(initialRun.simulation)
     }
+
+    deinit { solveTask?.cancel() }
 
     var scene: AssemblyScene { run.simulation.scene }
     var simulation: AssemblySimulation { run.simulation }
@@ -137,6 +141,8 @@ struct AssemblyComparison {
         solveTask = nil
         solveID = nil
         solving = false
+        cancelling = false
+        computation = nil
         replay = nil
         frameIndex = 0
         probeBody = nil
@@ -349,31 +355,81 @@ struct AssemblyComparison {
         linkPlacement = nil
         previewParts.removeAll()
         let existing = run
-        let recording = replay ?? AssemblyReplay(existing)
+        let recording = replay
+        let carriedElapsed = computation?.elapsed ?? 0
         let id = UUID()
         solveID = id
         solving = true
+        cancelling = false
+        let (updates, continuation) = AsyncStream.makeStream(of: AssemblyComputation.self, bufferingPolicy: .bufferingNewest(1))
         let worker = Task.detached(priority: .userInitiated) {
             var solver = existing
-            var next = recording
-            while !Task.isCancelled && solver.step() { next.record(solver) }
-            next.finish(solver)
-            return (solver, next)
+            solver.measureWork(parallelFEM: true)
+            let started = AssemblyProcessSample()
+            var previous = started
+            var next = recording ?? AssemblyReplay(solver)
+            next.resume()
+            func snapshot(_ state: AssemblyComputation.State, process: AssemblyProcessSample,
+                          cpu: Double?) -> AssemblyComputation {
+                let simulation = solver.simulation
+                let payload = simulation.statePayload
+                return AssemblyComputation(state: state, time: simulation.time, duration: simulation.scene.duration,
+                    dt: simulation.dt, elapsed: carriedElapsed + process.time - started.time, work: solver.work!,
+                    elements: payload.elasticElements + payload.plasticElements, frames: next.frames.count,
+                    solverBytes: payload.bytes, replayBytes: next.fieldPayloadBytes, process: process, cpuUtilization: cpu)
+            }
+            continuation.yield(snapshot(.calculating, process: started, cpu: nil))
+            var lastCPU: Double?
+            while !Task.isCancelled && solver.step(recording: &next) {
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - previous.time >= 0.25 {
+                    let process = AssemblyProcessSample()
+                    lastCPU = process.utilization(since: previous)
+                    continuation.yield(snapshot(.calculating, process: process, cpu: lastCPU))
+                    previous = process
+                }
+            }
+            let state: AssemblyComputation.State
+            if solver.finished {
+                state = .completed
+                next.finish(solver)
+            } else if solver.simulation.failure != nil {
+                state = .failed
+                next.finish(solver)
+            } else {
+                state = .paused
+                next.checkpoint(solver)
+            }
+            let process = AssemblyProcessSample()
+            let cpu = process.time - previous.time >= 0.10 || lastCPU == nil
+                ? process.utilization(since: previous) : lastCPU
+            continuation.finish()
+            return (solver, next, snapshot(state, process: process, cpu: cpu))
         }
         solveTask = worker
         Task { [weak self] in
-            let (solved, recorded) = await worker.value
+            for await update in updates {
+                guard let self, solveID == id else { return }
+                computation = update
+            }
+            let (solved, recorded, final) = await worker.value
             guard let self, solveID == id else { return }
             solveID = nil
             solveTask = nil
             run = solved
-            replay = recorded
-            frameIndex = recorded.frames.count - 1
+            replay = solved.simulation.time == 0 && solved.simulation.failure == nil ? nil : recorded
+            frameIndex = max(0, (replay?.frames.count ?? 0) - 1)
+            computation = final
             solving = false
+            cancelling = false
         }
     }
 
-    func cancelCalculation() { solveTask?.cancel() }
+    func cancelCalculation() {
+        guard solving, !cancelling else { return }
+        cancelling = true
+        solveTask?.cancel()
+    }
 
     func seek(to time: Double) {
         guard let replay else { return }
@@ -413,6 +469,7 @@ struct AssemblyComparison {
         placingGauge = false
         linkPlacement = nil
         var recorded = replay ?? AssemblyReplay(run)
+        recorded.resume()
         while simulation.time < time && run.step() { recorded.record(run) }
         recorded.finish(run)
         frameIndex = recorded.frames.count - 1

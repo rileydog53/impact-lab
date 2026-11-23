@@ -30,6 +30,14 @@ public struct AssemblyReplayFrame: Sendable {
     public let contacts: [AssemblyReplayContact]
     public let fragments: [FragmentContactReading]
 
+    var fieldPayloadBytes: Int {
+        bodies.reduce(0) { total, item in
+            total + (item.body.position.count + item.body.velocity.count) * MemoryLayout<Point>.stride
+                + (item.strain.count + item.plasticStrain.count + item.damage.count) * MemoryLayout<Double>.stride
+                + item.stress.count * MemoryLayout<AssemblyStress>.stride
+        }
+    }
+
     public var recoverableEnergy: Double {
         energies.elastic + energies.hardening + energies.contact + energies.connection + energies.cohesive
     }
@@ -47,6 +55,8 @@ public struct AssemblyReplayEvent: Identifiable, Sendable {
 public struct AssemblyReplay: Sendable {
     public private(set) var frames: [AssemblyReplayFrame] = []
     public private(set) var events: [AssemblyReplayEvent] = []
+    package private(set) var fieldPayloadBytes = 0
+    private var resumeCheckpoint = false
     private let interval: Double
     private var next: Double
     private var seen: Set<String> = []
@@ -114,6 +124,21 @@ public struct AssemblyReplay: Sendable {
         if frames.last?.time != run.simulation.time { append(run) }
     }
 
+    // A cancellation checkpoint is available for inspection immediately.
+    // Drop only this unscheduled frame on resume so output matches a full run.
+    package mutating func checkpoint(_ run: AssemblyRun) {
+        guard frames.last?.time != run.simulation.time else { return }
+        append(run)
+        resumeCheckpoint = true
+    }
+
+    package mutating func resume() {
+        if resumeCheckpoint {
+            fieldPayloadBytes -= frames.removeLast().fieldPayloadBytes
+            resumeCheckpoint = false
+        }
+    }
+
     /// Nearest recorded frame, used for time selection only.
     public func index(at time: Double) -> Int {
         var lower = 0, upper = frames.count - 1
@@ -142,6 +167,7 @@ public struct AssemblyReplay: Sendable {
             relativeMotion: run.relativeMotion, momentum: s.momentum, angularMomentum: s.angularMomentum,
             peakRelativePenetration: s.peakRelativePenetration, links: s.linkReadings,
             contacts: contacts, fragments: s.fragmentContacts)
+        fieldPayloadBytes += frame.fieldPayloadBytes
         frames.append(frame)
     }
 }

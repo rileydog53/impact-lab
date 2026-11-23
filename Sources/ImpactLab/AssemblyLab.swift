@@ -42,6 +42,7 @@ struct AssemblyLab: View {
                     indicators
                     trace
                     if experiment.frames.count > 1 { timeline }
+                    AssemblyComputationStatus(experiment: experiment)
                     status
                 }
                 AssemblyEditor(experiment: experiment).frame(width: 315)
@@ -221,9 +222,7 @@ struct AssemblyLab: View {
     private var status: some View {
         HStack(spacing: 8) {
             if experiment.solving {
-                ProgressView().controlSize(.small)
-                Text("Calculating…")
-                Button("Cancel", action: experiment.cancelCalculation)
+                if experiment.computation == nil { ProgressView("Starting calculation…").controlSize(.small) }
             } else if experiment.frames.count > 1 {
                 Button(experiment.running ? "Pause" : "Play", systemImage: experiment.running ? "pause.fill" : "play.fill") {
                     experiment.toggle()

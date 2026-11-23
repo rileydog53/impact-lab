@@ -1,3 +1,5 @@
+import Dispatch
+import Foundation
 import simd
 
 private struct MaterialAnchor: Sendable {
@@ -190,6 +192,40 @@ public struct AssemblySimulation: Sendable {
     public private(set) var activeContacts: [SIMD2<Int>] = []
     public private(set) var linkReadings: [AssemblyLinkReading] = []
     public private(set) var fragmentContacts: [FragmentContactReading] = []
+    package var work: AssemblyWork?
+    package var sampleKernels = false
+    private var preparationLanes: [[Int]] = []
+    private var preparationEnergies: [ElementEnergy?] = []
+
+    package mutating func configureParallelFEM(_ enabled: Bool) {
+        preparationLanes = []
+        preparationEnergies = []
+        guard enabled, ProcessInfo.processInfo.activeProcessorCount > 1, steps.count > 1 else { return }
+        let weights = steps.map { $0.strain.count * ($0.history == nil ? 1 : 2) }
+        var lanes: [[Int]] = [[], []]
+        var loads = [0, 0]
+        for i in steps.indices.sorted(by: { (weights[$0], -$0) > (weights[$1], -$1) }) {
+            let lane = loads[0] <= loads[1] ? 0 : 1
+            lanes[lane].append(i)
+            loads[lane] += weights[i]
+        }
+        // Dispatch has a cost at every timestep. Require work on both lanes
+        // in the range tested by the fine metal and multi-body benchmarks.
+        guard loads.min()! >= 5_000 else { return }
+        preparationLanes = lanes
+        preparationEnergies = Array(repeating: nil, count: steps.count)
+    }
+
+    package var statePayload: AssemblyStatePayload {
+        steps.reduce(into: AssemblyStatePayload()) { total, step in
+            let payload = step.statePayload
+            total.bytes += payload.bytes
+            total.elasticElements += payload.elasticElements
+            total.plasticElements += payload.plasticElements
+            total.tractionElements += payload.tractionElements
+        }
+    }
+
     private var steps: [BodyStep]
     private var fractures: [MaterialFracture?]
     private var contactWorkspaces: [TriangleContact.Workspace]
@@ -603,18 +639,66 @@ public struct AssemblySimulation: Sendable {
 
     }
 
+    // The pointers are valid for the synchronous dispatch and each iteration
+    // owns disjoint BodyStep and result slots. The caller reduces in body order.
+    private struct ParallelPreparation: @unchecked Sendable {
+        let steps: UnsafeMutableBufferPointer<BodyStep>
+        let energies: UnsafeMutableBufferPointer<ElementEnergy?>
+        let dt: Double
+        let lanes: [[Int]]
+
+        func prepare(_ lane: Int) {
+            for index in lanes[lane] {
+                energies[index] = steps[index].drift(dt) ? steps[index].assemble() : nil
+            }
+        }
+    }
+
     @discardableResult public mutating func step() -> Bool {
         guard initialIssue == nil, failure == nil, !steps.isEmpty, time < scene.duration else { return false }
         var locations: [SIMD2<Int>: ContactLocation] = [:]
         var trial = AssemblyEnergy(kinetic: 0, elastic: 0, contact: 0, connection: 0, hardening: 0, plastic: 0, fracture: 0)
-        for i in steps.indices {
-            guard steps[i].drift(dt), let element = steps[i].assemble() else {
-                failure = "An element inverted or became non-finite in \(scene.parts[i].name)."
-                return false
+        work?.start()
+        if !preparationLanes.isEmpty {
+            let stepSize = dt
+            let lanes = preparationLanes
+            steps.withUnsafeMutableBufferPointer { bodies in
+                preparationEnergies.withUnsafeMutableBufferPointer { results in
+                    let batch = ParallelPreparation(steps: bodies, energies: results, dt: stepSize, lanes: lanes)
+                    DispatchQueue.concurrentPerform(iterations: lanes.count, execute: batch.prepare)
+                }
             }
-            trial.elastic += element.elastic
-            trial.hardening += element.hardening
-            trial.plastic += element.dissipation
+            for (i, element) in preparationEnergies.enumerated() {
+                guard let element else {
+                    failure = "An element inverted or became non-finite in \(scene.parts[i].name)."
+                    return false
+                }
+                trial.elastic += element.elastic
+                trial.hardening += element.hardening
+                trial.plastic += element.dissipation
+            }
+            work?.parallelSteps += 1
+            work?.end(\.parallelPreparation)
+        } else {
+            var timing = sampleKernels && (work?.steps ?? 0).isMultiple(of: 128) ? ElementKernelTiming() : nil
+            for i in steps.indices {
+                let drifted = steps[i].drift(dt)
+                work?.end(\.drift)
+                guard drifted, let element = steps[i].assemble(timing: &timing) else {
+                    failure = "An element inverted or became non-finite in \(scene.parts[i].name)."
+                    return false
+                }
+                trial.elastic += element.elastic
+                trial.hardening += element.hardening
+                trial.plastic += element.dissipation
+                work?.end(\.fem)
+            }
+            if let timing {
+                work?.kernel.kinematics += timing.kinematics
+                work?.kernel.constitutive += timing.constitutive
+                work?.kernel.scatter += timing.scatter
+                work?.kernel.elements += timing.elements
+            }
         }
         var active: [SIMD2<Int>] = []
         var nextNormal: [SIMD2<Int>: Double] = [:]
@@ -679,6 +763,7 @@ public struct AssemblySimulation: Sendable {
                     }
                 }
             }
+            work?.end(\.fracture)
             selfContact(fractures: nextFractures, energy: &trial, penetration: &penetration,
                         active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest)
             if nextFractures.contains(where: { ($0?.reading.insertedEdges ?? 0) > 0 }) {
@@ -695,9 +780,11 @@ public struct AssemblySimulation: Sendable {
                 return false
             }
         } else {
+            work?.end(\.integration)
             intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal, locations: &locations)
         }
 
+        work?.end(\.contact)
         var nextPadCompression = padPeakCompression
         if let pad = strikerPad {
             let meshA = steps[0].body.mesh, meshB = steps[1].body.mesh
@@ -793,6 +880,8 @@ public struct AssemblySimulation: Sendable {
             peakContactDomains = deepest
         }
         accepted = true
+        work?.end(\.integration)
+        work?.steps += 1
         return true
     }
 }

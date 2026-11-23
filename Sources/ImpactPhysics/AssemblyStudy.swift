@@ -37,6 +37,15 @@ public struct AssemblyStudyCase: Sendable {
     public let failure: String?
 }
 
+package struct AssemblyStudyProgress: Sendable, Identifiable {
+    package let id: String
+    package let time, duration: Double
+    package let steps: Int
+    package let finished: Bool
+
+    package var fraction: Double { finished ? 1 : min(1, time / duration) }
+}
+
 public struct AssemblyStudy: Sendable {
     public let scene: AssemblyScene
     public let pairs: [AssemblyStudyPair]
@@ -46,6 +55,11 @@ public struct AssemblyStudy: Sendable {
 
     public static func run(_ scene: AssemblyScene, variation: AssemblyStudyVariation,
                            parallel: Bool = true) async throws -> Self {
+        try await run(scene, variation: variation, parallel: parallel, progress: nil)
+    }
+
+    package static func run(_ scene: AssemblyScene, variation: AssemblyStudyVariation, parallel: Bool = true,
+                            progress: (@Sendable (AssemblyStudyProgress) -> Void)?) async throws -> Self {
         let started = ProcessInfo.processInfo.systemUptime
         var cases: [(scene: AssemblyScene, label: String, stepScale: Double)] = []
         switch variation {
@@ -91,21 +105,21 @@ public struct AssemblyStudy: Sendable {
         if parallel && prepared.count > 1 {
             measured = try await withThrowingTaskGroup(of: (Int, AssemblyStudyCase).self) { group in
                 for (index, item) in prepared.enumerated() {
-                    group.addTask { (index, try measure(item.1, label: item.0, pairs: pairs)) }
+                    group.addTask { (index, try measure(item.1, label: item.0, pairs: pairs, progress: progress)) }
                 }
                 var results: [(Int, AssemblyStudyCase)] = []
                 for try await result in group { results.append(result) }
                 return results.sorted { $0.0 < $1.0 }.map(\.1)
             }
         } else {
-            measured = try prepared.map { try measure($0.1, label: $0.0, pairs: pairs) }
+            measured = try prepared.map { try measure($0.1, label: $0.0, pairs: pairs, progress: progress) }
         }
         return Self(scene: scene, pairs: pairs, cases: measured,
                     wallTime: ProcessInfo.processInfo.systemUptime - started)
     }
 
-    private static func measure(_ initial: AssemblySimulation, label: String, pairs: [AssemblyStudyPair]) throws
-        -> AssemblyStudyCase {
+    private static func measure(_ initial: AssemblySimulation, label: String, pairs: [AssemblyStudyPair],
+                                progress: (@Sendable (AssemblyStudyProgress) -> Void)?) throws -> AssemblyStudyCase {
         let started = ProcessInfo.processInfo.systemUptime
         var simulation = initial
         let triangles = (0..<simulation.bodyCount).reduce(0) { $0 + simulation.body($1).mesh.elements.count }
@@ -127,9 +141,19 @@ public struct AssemblyStudy: Sendable {
         var samples = [sample()]
         var steps = 0
         var next = 1
-        while simulation.step() {
+        var lastUpdate = started
+        let duration = initial.scene.duration
+        progress?(AssemblyStudyProgress(id: label, time: 0, duration: duration, steps: 0, finished: false))
+        while !Task.isCancelled && simulation.step() {
             steps += 1
-            if steps.isMultiple(of: 256) { try Task.checkCancellation() }
+            if progress != nil {
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastUpdate >= 0.25 {
+                    progress?(AssemblyStudyProgress(id: label, time: simulation.time, duration: duration,
+                                                    steps: steps, finished: false))
+                    lastUpdate = now
+                }
+            }
             for previous in previousActive {
                 contacts[previous.index].impulse += 0.5 * simulation.dt * previous.load
             }
@@ -153,6 +177,8 @@ public struct AssemblyStudy: Sendable {
             }
         }
         try Task.checkCancellation()
+        progress?(AssemblyStudyProgress(id: label, time: simulation.time, duration: duration,
+                                        steps: steps, finished: simulation.time >= duration && simulation.failure == nil))
         if samples.last!.time != simulation.time { samples.append(sample()) }
         let refinements = simulation.scene.parts.map { $0.refinement ?? simulation.scene.resolution }
         return AssemblyStudyCase(label: label, bodyRefinements: refinements, triangles: triangles, steps: steps, dt: simulation.dt,

@@ -224,18 +224,13 @@ struct BoundaryContact: Sendable {
     }
 
     private static func boundaryHit(_ node: Point, target: ContactSurface, position: [Point]) -> Hit? {
-        var inside = false
+        guard contains(node, within: target, position: position) else { return nil }
         var nearest: (edge: Edge, index: Int, fraction: Double, offset: Point, distanceSquared: Double, lengthSquared: Double)?
         for (index, edge) in target.edges.enumerated() {
             let a = position[edge.a]
             let b = position[edge.b]
             let tangent = b - a
             let delta = node - a
-            // A horizontal ray with half-open y intervals counts a vertex once.
-            if (a.y > node.y) != (b.y > node.y),
-               node.x < a.x + delta.y * tangent.x / tangent.y {
-                inside.toggle()
-            }
             let lengthSquared = simd_length_squared(tangent)
             let fraction = min(1, max(0, simd_dot(delta, tangent) / lengthSquared))
             let offset = delta - fraction * tangent
@@ -246,7 +241,7 @@ struct BoundaryContact: Sendable {
         }
         // One closest location per interior node. At an endpoint the force
         // acts along the node-to-vertex normal, and the full reaction goes there.
-        guard inside, let nearest, nearest.distanceSquared > 0 else { return nil }
+        guard let nearest, nearest.distanceSquared > 0 else { return nil }
         let distance = nearest.distanceSquared.squareRoot()
         return Hit(edge: nearest.edge, edgeIndex: nearest.index, fraction: nearest.fraction, normal: -nearest.offset / distance,
                    distance: distance, length: nearest.lengthSquared.squareRoot())
