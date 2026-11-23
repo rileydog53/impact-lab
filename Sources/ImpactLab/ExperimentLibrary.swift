@@ -99,8 +99,10 @@ private extension AssemblyExperimentPreset {
     }
 }
 
-private struct ExperimentSchematic: View {
+struct ExperimentSchematic: View {
     let scene: AssemblyScene
+    /// Alternates labels below and above bodies so touching bodies stay legible.
+    var labelsOutside = false
 
     var body: some View {
         Canvas { context, size in
@@ -110,7 +112,8 @@ private struct ExperimentSchematic: View {
             let maxX = points.map(\.x).max() ?? 0
             let minY = points.map(\.y).min() ?? 0
             let maxY = (points.map(\.y).max() ?? 0) + 0.026
-            let scale = min((size.width - 70) / max(0.02, maxX - minX), (size.height - 32) / max(0.02, maxY - minY))
+            let margin = labelsOutside ? 60.0 : 32.0
+            let scale = min((size.width - 70) / max(0.02, maxX - minX), (size.height - margin) / max(0.02, maxY - minY))
             func screen(_ point: Point) -> CGPoint {
                 CGPoint(x: size.width / 2 + (point.x - (minX + maxX) / 2) * scale,
                         y: size.height / 2 - (point.y - (minY + maxY) / 2) * scale)
@@ -138,15 +141,27 @@ private struct ExperimentSchematic: View {
                     }
                 }
                 let text = Text(part.name).font(.caption2.weight(.medium)).foregroundStyle(color)
-                context.draw(text, at: screen(part.center))
-                if part.velocity.y < 0 {
-                    let tip = screen(part.center + Point(0, part.size.y / 2 + 0.003))
+                if labelsOutside {
+                    let ys = outlines[index].map { screen($0).y }
+                    let below = index.isMultiple(of: 2)
+                    let anchor = screen(part.center)
+                    context.draw(text, at: CGPoint(x: anchor.x, y: below ? ys.max()! + 9 : ys.min()! - 9))
+                } else {
+                    context.draw(text, at: screen(part.center))
+                }
+                let speed = (part.velocity.x * part.velocity.x + part.velocity.y * part.velocity.y).squareRoot()
+                if speed > 0 {
+                    // Screen y points down, so the arrow flips the vertical component.
+                    let d = CGPoint(x: part.velocity.x / speed, y: -part.velocity.y / speed)
+                    let reach = abs(d.x) * part.size.x / 2 + abs(d.y) * part.size.y / 2 + 0.003
+                    let tip = screen(part.center + Point(d.x * reach, -d.y * reach))
+                    let n = CGPoint(x: -d.y, y: d.x)
                     let arrow = Path { path in
-                        path.move(to: CGPoint(x: tip.x, y: tip.y - 18))
+                        path.move(to: CGPoint(x: tip.x - 18 * d.x, y: tip.y - 18 * d.y))
                         path.addLine(to: tip)
-                        path.move(to: CGPoint(x: tip.x - 4, y: tip.y - 5))
+                        path.move(to: CGPoint(x: tip.x - 5 * d.x + 4 * n.x, y: tip.y - 5 * d.y + 4 * n.y))
                         path.addLine(to: tip)
-                        path.addLine(to: CGPoint(x: tip.x + 4, y: tip.y - 5))
+                        path.addLine(to: CGPoint(x: tip.x - 5 * d.x - 4 * n.x, y: tip.y - 5 * d.y - 4 * n.y))
                     }
                     context.stroke(arrow, with: .color(color), lineWidth: 1.5)
                 }

@@ -7,12 +7,12 @@ The recovery plan started at checkpoint `15e8a6d`. The [original recovery cards]
 - [x] Card 3 core (3A and 3B) — Material profiles and verified metal mechanics
 - [x] Card 4 — Make the Calculated Physics Visible
 - [x] Card 5 — Scale the Computational Engine
-- [ ] Card 7 — Build the Experimental Scenario Library
+- [x] Card 7 — Build the Experimental Scenario Library
 - [ ] Card 6 — Prove the Complete Product Works
 
 ## Amended execution order
 
-**Card 2 → Card 3 core (3A and 3B) → Card 4 → Card 5 → Card 7 → Card 6.** Cards 1, 2, 3 core, 4 and 5 are complete. Card 7 takes its own acceptance gate before final release verification. Card 6 retains its number and all four original end-to-end exercises.
+**Card 2 → Card 3 core (3A and 3B) → Card 4 → Card 5 → Card 7 → Card 6.** Cards 1, 2, 3 core, 4, 5 and 7 are complete. Card 7 takes its own acceptance gate before final release verification. Card 6 retains its number and all four original end-to-end exercises.
 
 Impact Lab is a native macOS laboratory for research, education, and exploration in materials and structural dynamics. Users should be able to construct experiments, assign materials, configure supported loads and initial conditions, calculate physical behavior, and inspect deformation, stress, plasticity, damage, fracture, and contact. Use general mechanics terminology and keep the architecture applicable to physical systems. The product scope excludes weapon-specific optimization, human-injury modeling, and depictions of harm to people. Shock waves, energetic-material phenomena, extreme deformation, and fragmentation remain topics for scientific exploration where supported by defensible models.
 
@@ -74,6 +74,20 @@ Build on the existing library and use the native editor, solver, and replay work
 | Brittle versus ductile and other nonlinear responses | Material-specific behavior after the corresponding constitutive model and failure criteria have passed standalone checks |
 
 **Acceptance.** Demonstrate the core scenarios in the native app. Each shipped scenario must expose meaningful controls, produce a calculated physical event, show visible results and relevant measurements, and explain the scientific limitations. Users must be able to edit and rerun the scenarios. Advanced demonstrations enter the library when their models are verified and need not delay the core library.
+
+**Card 7 acceptance, 2026-11-22 (M1 Air, release build).** In **Assembly**, **Scenarios** opens the library. Each scenario states its question, procedure, evidence level and limitations, and offers case A and B choices and a striker-speed control. **Run A and B** calculates case A, pins it, calculates case B and opens a results table with measurements, predictions where a defensible one exists, and a plain-language finding. **Compare Fields** opens the existing pinned comparison. **Reset Run** returns case B to the editable assembly, and a rerun is measured against the pinned case A. **Open Case A Only** loads a scenario for free editing. The scenario code is in `Sources/ImpactPhysics/ScenarioLibrary.swift`. It builds ordinary assembly scenes and measures recorded replays, and it computes predictions from the scenes actually run.
+
+| Scenario | Cases (default) | Calculated result, default settings |
+|---|---|---|
+| Elastic contrast | Steel vs copper bar, elastic, 10 m/s | Wave speed 5,265 vs 3,809 m/s against plane-strain bar speeds 5,291 and 3,839 m/s (−0.5%, −0.8%); impedance trend in striker rebound |
+| Elastic versus yielding | Copper elastic vs J2, 24 m/s | Plastic work 0 vs 1,180 J/m (32% of impact energy), 6.2% peak plastic strain, separation ratio 0.75 vs 0.14 |
+| Strain hardening | Copper vs 304 stainless J2, 24 m/s | 6.2% vs 1.9% peak plastic strain at 182 vs 315 MPa peak stress, similar plastic work (1,180 vs 1,229 J/m) |
+| Bonded layers | Matched control vs ½×, 2×, 4×, 8× impedance, 0.1 m/s | Reflection and transmission within 0.008 of the 1D impedance prediction for every ratio |
+| Interface failure | No cracking vs G꜀ 3.5 J/m², 1.45 m/s | Case B first fails at 8.69 ms, 64.5 mm crack, 2 pieces, 0.282 J/m crack energy (G꜀ × length 0.226 J/m plus partial damage). G꜀ 14 J/m² does not fail. |
+
+`ImpactCheck --scenario-library [name]` runs every scenario as the app does, about 74 s in total. It checks save and reopen, energy drift under 2%, wave speed within 8%, impedance reflection and transmission within 0.065, and the physical ordering of each comparison. `Impact Lab --scenario-smoke REPORT` drives the native library, all five scenario runs and results sheets, and an edited case B rerun against the pinned case A. A manual walkthrough covered strain hardening (results and field comparison) and interface failure. `--experiment-library`, `--assembly`, `--assembly-replay`, `--metal-profiles`, `--library-smoke` and `--assembly-smoke` still pass.
+
+**Not shipped.** Brittle versus ductile is listed as unavailable with its reason. The verified crack model applies only to illustrative elastic materials, and the metal profiles have no verified failure criterion. The elastic-contrast striker is about as long as it is thick, so its rebound shows the impedance trend but does not match the 1D formula, and the app reports it as a measurement only. Metal hardening beyond initial yield remains illustrative. Card 6 follows.
 
 ### Card 6 — Final product verification
 

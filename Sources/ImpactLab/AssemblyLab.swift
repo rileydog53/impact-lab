@@ -21,6 +21,12 @@ struct AssemblyLab: View {
     @State private var signal = 0
     @State private var replacement: Replacement?
     @State private var confirmReplacement = false
+    @State private var scenarioLibrary = false
+    @State private var scenario: ScenarioSession?
+    @State private var pendingScenario: (session: ScenarioSession, calculate: Bool)?
+    @State private var scenarioToken: UUID?
+    @State private var scenarioResults = false
+    @State private var confirmScenario = false
 
     private struct Replacement {
         let scene: AssemblyScene
@@ -42,6 +48,7 @@ struct AssemblyLab: View {
                     indicators
                     trace
                     if experiment.frames.count > 1 { timeline }
+                    if scenario != nil { scenarioBanner }
                     AssemblyComputationStatus(experiment: experiment)
                     status
                 }
@@ -72,6 +79,27 @@ struct AssemblyLab: View {
         .sheet(isPresented: $study) {
             studyView
         }
+        .sheet(isPresented: $scenarioLibrary, onDismiss: beginPendingScenario) {
+            ScenarioLibraryView { chosen, settings, calculate in
+                pendingScenario = (ScenarioSession(scenario: chosen, settings: settings), calculate)
+                scenarioLibrary = false
+            }
+        }
+        .sheet(isPresented: $scenarioResults) {
+            if let scenario {
+                ScenarioResultsView(session: scenario, first: experiment.reference, second: experiment.current) {
+                    scenarioResults = false
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        compare = true
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Replace the unsaved assembly?", isPresented: $confirmScenario) {
+            Button("Discard Changes and Continue", role: .destructive) { startScenario() }
+            Button("Cancel", role: .cancel) { pendingScenario = nil }
+        }
         .sheet(isPresented: $library, onDismiss: applyPendingReplacement) {
             ExperimentLibrary { scene, name in
                 replacement = Replacement(scene: scene, title: name)
@@ -99,6 +127,137 @@ struct AssemblyLab: View {
             view.smokeResult = { studySmokeResult = $0 }
         }
         return view
+    }
+
+    // MARK: Scenarios
+
+    private var scenarioBanner: some View {
+        let session = scenario!
+        let state: String = switch session.stage {
+        case .first: "Calculating case A (1 of 2)…"
+        case .second: "Case A pinned. Calculating case B (2 of 2)…"
+        case .finished: experiment.reference == nil ? "Case A is no longer pinned." : "Case A pinned. Showing case B. Edit and rerun B to compare variations."
+        case .stopped(let reason): reason
+        }
+        return HStack(spacing: 8) {
+            Label("Scenario · \(session.scenario.rawValue)", systemImage: session.scenario.icon)
+                .font(.callout.weight(.semibold)).foregroundStyle(assemblyMint)
+            Text(state).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            Button("Results", systemImage: "tablecells") { experiment.pause(); scenarioResults = true }
+                .disabled(experiment.solving || experiment.reference?.replay == nil || experiment.replay == nil)
+            Button("End Scenario", systemImage: "xmark") {
+                scenarioToken = nil
+                scenario = nil
+            }.labelStyle(.iconOnly).help("Stop tracking this scenario. The current assembly stays loaded.")
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(assemblyMint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func beginPendingScenario() {
+        guard pendingScenario != nil else { return }
+        experiment.pause()
+        if experiment.isDirty { confirmScenario = true } else { startScenario() }
+    }
+
+    private func startScenario() {
+        guard let pending = pendingScenario else { return }
+        pendingScenario = nil
+        let token = UUID()
+        scenarioToken = token
+        Task { await runScenario(pending.session, calculate: pending.calculate, token: token) }
+    }
+
+    @discardableResult
+    private func runScenario(_ chosen: ScenarioSession, calculate: Bool, token: UUID) async -> Bool {
+        var session = chosen
+        scenario = calculate ? session : nil
+        field = switch session.scenario {
+        case .elasticContrast, .bondedLayers: .pressure
+        case .elasticVersusYielding, .strainHardening: .plastic
+        case .interfaceFailure: .damage
+        }
+        func finish(_ index: Int) async -> Bool {
+            experiment.calculate()
+            while experiment.solving { try? await Task.sleep(for: .milliseconds(50)) }
+            guard scenarioToken == token else { return false }
+            guard experiment.finished else {
+                session.stage = .stopped("Case \(index == 0 ? "A" : "B") stopped before the end. Resume it or start the scenario again.")
+                scenario = session
+                return false
+            }
+            return true
+        }
+        do {
+            try experiment.load(session.scenario.scene(session.settings, case: 0), title: session.title(case: 0))
+            guard calculate else { return true }
+            guard await finish(0) else { return false }
+            experiment.pin()
+            session.stage = .second
+            scenario = session
+            try experiment.load(session.scenario.scene(session.settings, case: 1), title: session.title(case: 1))
+            guard await finish(1) else { return false }
+            session.stage = .finished
+            scenario = session
+            scenarioResults = true
+            return true
+        } catch {
+            experiment.error = error.localizedDescription
+            scenario = nil
+            return false
+        }
+    }
+
+    private func scenarioSmoke(report: URL) async {
+        var checks: [String] = []
+        try? await Task.sleep(for: .milliseconds(400))
+        scenarioLibrary = true
+        for _ in 0..<20 where !NSApplication.shared.windows.contains(where: { $0.attachedSheet?.isVisible == true }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        checks.append("native scenario library=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
+        scenarioLibrary = false
+        try? await Task.sleep(for: .milliseconds(400))
+        for chosen in LabScenario.allCases {
+            let token = UUID()
+            scenarioToken = token
+            let started = ProcessInfo.processInfo.systemUptime
+            let ran = await runScenario(ScenarioSession(scenario: chosen, settings: chosen.defaultSettings), calculate: true, token: token)
+            let report = experiment.reference.flatMap { a in
+                a.replay.flatMap { ra in experiment.replay.flatMap { rb in
+                    chosen.report(.init(scene: a.scene, replay: ra), .init(scene: experiment.scene, replay: rb))
+                } }
+            }
+            checks.append(String(format: "%@ ran both cases and measured=%@ (%.1f s)", chosen.rawValue,
+                                 String(ran && report != nil && scenario?.stage == .finished), ProcessInfo.processInfo.systemUptime - started))
+            if let report { checks.append("  " + report.finding) }
+            for _ in 0..<20 where !NSApplication.shared.windows.contains(where: { $0.attachedSheet?.isVisible == true }) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            checks.append("  results sheet=\(scenarioResults && NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
+            scenarioResults = false
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+        // Edit case B of the last scenario and rerun it against the pinned case A.
+        let pinned = experiment.reference?.samples
+        experiment.reset()
+        let striker = experiment.scene.parts[1].id
+        experiment.updatePart(striker) { $0.velocity.y = -1.9 }
+        experiment.calculate()
+        while experiment.solving { try? await Task.sleep(for: .milliseconds(50)) }
+        let edited = experiment.reference.flatMap { a in
+            a.replay.flatMap { ra in experiment.replay.flatMap { rb in
+                LabScenario.interfaceFailure.report(.init(scene: a.scene, replay: ra), .init(scene: experiment.scene, replay: rb))
+            } }
+        }
+        checks.append("edited case B rerun against pinned A=\(experiment.finished && experiment.reference?.samples == pinned && edited != nil && experiment.scene.parts[1].velocity.y == -1.9)")
+        if let edited { checks.append("  " + edited.finding) }
+        do {
+            try (checks.joined(separator: "\n") + "\n").write(to: report, atomically: true, encoding: .utf8)
+        } catch { exit(EXIT_FAILURE) }
+        exit(checks.contains { $0.contains("=false") } ? EXIT_FAILURE : EXIT_SUCCESS)
     }
 
     private func applyPendingReplacement() {
@@ -154,6 +313,13 @@ struct AssemblyLab: View {
                 experiment.linkPlacement = nil
                 library = true
             }
+            Button("Scenarios", systemImage: "flask") {
+                experiment.pause()
+                experiment.placingGauge = false
+                experiment.linkPlacement = nil
+                scenarioLibrary = true
+            }
+            .disabled(experiment.solving)
             Menu("New / Examples", systemImage: "doc.badge.plus") {
                 Button("Blank Assembly") { loadPreset(AssemblyScene(), title: "Untitled assembly") }
                 Button("Enclosure Example") { loadPreset(.enclosureExample(), title: "Enclosure example") }
@@ -647,6 +813,8 @@ struct AssemblyLab: View {
             await fractureSmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if let index = args.firstIndex(of: "--study-smoke"), args.indices.contains(index + 1) {
             await studySmoke(report: URL(fileURLWithPath: args[index + 1]))
+        } else if let index = args.firstIndex(of: "--scenario-smoke"), args.indices.contains(index + 1) {
+            await scenarioSmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if let index = args.firstIndex(of: "--library-smoke"), args.indices.contains(index + 1) {
             await librarySmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if experiment.selectedPart == nil, let id = experiment.scene.monitor {
