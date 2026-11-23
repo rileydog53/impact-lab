@@ -1,3 +1,4 @@
+import AppKit
 import ImpactPhysics
 import simd
 import SwiftUI
@@ -55,25 +56,55 @@ func assemblyColor(_ index: Int) -> Color {
     return palette[index % palette.count]
 }
 
-private struct AssemblyProjection {
-    let center: Point
-    let viewport: CGSize
-    let scale: Double
+private struct AssemblyCamera {
+    var center: Point
+    var scale: Double
 
-    @MainActor init(_ size: CGSize, experiment: AssemblyExperiment) {
-        viewport = size
-        var lower = Point(-0.19, -0.09)
-        var upper = Point(0.13, 0.09)
-        for index in 0..<experiment.simulation.bodyCount {
-            for point in experiment.simulation.body(index).position {
+    init(center: Point = .zero, scale: Double = 1_250) {
+        self.center = center
+        self.scale = scale
+    }
+
+    @MainActor init(fitting indices: [Int], in size: CGSize, experiment: AssemblyExperiment) {
+        var lower = Point(repeating: .infinity)
+        var upper = Point(repeating: -.infinity)
+        for index in indices {
+            for point in experiment.simulation.body(index).position where point.x.isFinite && point.y.isFinite {
                 lower = Point(min(lower.x, point.x), min(lower.y, point.y))
                 upper = Point(max(upper.x, point.x), max(upper.y, point.y))
             }
         }
+        guard lower.x.isFinite else {
+            self.init()
+            return
+        }
+        self.init()
         center = (upper + lower) / 2
         let span = upper - lower
-        scale = max(1, min((size.width - 66) / span.x, (size.height - 80) / span.y))
+        scale = Self.boundedScale(min(max(1, size.width - 80) / max(0.001, span.x),
+                                     max(1, size.height - 96) / max(0.001, span.y)))
+        center.y += 10 / scale
     }
+
+    mutating func zoom(by factor: Double, at location: CGPoint, in viewport: CGSize) {
+        let before = projection(in: viewport).world(location)
+        scale = Self.boundedScale(scale * factor)
+        center += before - projection(in: viewport).world(location)
+    }
+
+    func projection(in viewport: CGSize) -> AssemblyProjection {
+        AssemblyProjection(center: center, viewport: viewport, scale: scale)
+    }
+
+    private static func boundedScale(_ scale: Double) -> Double {
+        min(160_000, max(24, scale))
+    }
+}
+
+private struct AssemblyProjection {
+    let center: Point
+    let viewport: CGSize
+    let scale: Double
 
     func screen(_ p: Point) -> CGPoint {
         CGPoint(x: viewport.width / 2 + (p.x - center.x) * scale,
@@ -81,79 +112,260 @@ private struct AssemblyProjection {
     }
 
     func world(_ p: CGPoint) -> Point {
-        center + Point((p.x - viewport.width / 2) / scale, (viewport.height / 2 - p.y) / scale)
+        center + worldDelta(CGSize(width: p.x - viewport.width / 2, height: p.y - viewport.height / 2))
+    }
+
+    func worldDelta(_ translation: CGSize) -> Point {
+        Point(translation.width / scale, -translation.height / scale)
     }
 }
 
 struct AssemblyCanvas: View {
+    private enum Handle: CaseIterable {
+        case rotate, resize
+    }
+
+    private enum Drag {
+        case pan(AssemblyCamera)
+        case body(AssemblyPart, Handle?)
+        case gauge
+    }
+
     let experiment: AssemblyExperiment
     let field: AssemblyField
     var showMesh: Bool
-    @State private var dragOrigin: Point?
-    @State private var dragTarget: UUID?
-    @State private var dragDelta: Point = .zero
+    @State private var camera = AssemblyCamera()
+    @State private var drag: Drag?
+    @State private var dragStart = CGPoint.zero
 
     var body: some View {
         GeometryReader { geometry in
-            let projection = AssemblyProjection(geometry.size, experiment: experiment)
-            Canvas { context, size in
-                drawGrid(context, size: size, projection: projection)
-                for i in 0..<experiment.simulation.bodyCount {
-                    drawBody(i, context: context, projection: projection)
+            let size = geometry.size
+            canvas(in: size)
+                .overlay(alignment: .topTrailing) { cameraControls(in: size).padding(8) }
+                .onAppear { fitAssembly(in: size) }
+                .onChange(of: experiment.cameraRevision) {
+                    cancelDrag()
+                    fitAssembly(in: size)
                 }
-                drawConnections(context, projection: projection)
-                drawGauges(context, projection: projection)
-                let y = size.height - 22
-                let x = 22.0
-                let end = x + projection.scale * 0.025
-                context.stroke(Path { p in
-                    p.move(to: CGPoint(x: x, y: y - 4))
-                    p.addLine(to: CGPoint(x: x, y: y))
-                    p.addLine(to: CGPoint(x: end, y: y))
-                    p.addLine(to: CGPoint(x: end, y: y - 4))
-                }, with: .color(assemblyInk.opacity(0.6)))
-                context.draw(Text("25 mm").font(.caption2.monospaced()), at: CGPoint(x: x, y: y - 7), anchor: .bottomLeading)
+                .onChange(of: experiment.canEdit) {
+                    if !experiment.canEdit { experiment.previewPart = nil }
+                }
+        }
+        .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func canvas(in viewport: CGSize) -> some View {
+        let projection = camera.projection(in: viewport)
+        let preview = experiment.previewPart
+        let selected = selectedPart
+        return Canvas { context, size in
+            drawGrid(context, size: size, projection: projection)
+            for i in 0..<experiment.simulation.bodyCount {
+                drawBody(i, context: context, projection: projection, preview: preview)
+            }
+            drawConnections(context, projection: projection, preview: preview)
+            drawGauges(context, projection: projection, preview: preview)
+            if experiment.canEdit, !experiment.placingGauge, let part = selected,
+               handlesAreVisible(for: part, projection: projection) {
+                drawHandles(for: part, in: context, projection: projection)
+            }
+            let y = size.height - 22
+            let x = 22.0
+            let millimetres = scaleBarMillimetres(at: projection.scale)
+            let end = x + projection.scale * millimetres / 1_000
+            context.stroke(Path { p in
+                p.move(to: CGPoint(x: x, y: y - 4))
+                p.addLine(to: CGPoint(x: x, y: y))
+                p.addLine(to: CGPoint(x: end, y: y))
+                p.addLine(to: CGPoint(x: end, y: y - 4))
+            }, with: .color(assemblyInk.opacity(0.6)))
+            let caption = millimetres >= 1_000 ? "\((millimetres / 1_000).formatted()) m" : "\(millimetres.formatted()) mm"
+            context.draw(Text(caption).font(.caption2.monospaced()), at: CGPoint(x: x, y: y - 7), anchor: .bottomLeading)
+            if !experiment.canEdit {
                 context.draw(Text(field.legend).font(.caption2).foregroundStyle(assemblyInk.opacity(0.86)),
                              at: CGPoint(x: size.width - 19, y: y), anchor: .trailing)
             }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { event in
-                guard !experiment.placingGauge else { return }
-                if dragOrigin == nil {
-                    let point = projection.world(event.startLocation)
-                    dragOrigin = point
-                    dragTarget = part(at: point)
-                    if let dragTarget { experiment.select(dragTarget) }
-                }
-                if experiment.simulation.time == 0, let origin = dragOrigin, dragTarget != nil {
-                    dragDelta = projection.world(event.location) - origin
-                }
-            }.onEnded { event in
-                if experiment.placingGauge {
-                    let point = projection.world(event.location)
-                    if let part = part(at: point) { experiment.addGauge(body: part, at: point) }
-                    return
-                }
-                if let dragTarget, experiment.simulation.time == 0, dragDelta != .zero {
-                    let delta = dragDelta
-                    experiment.updatePart(dragTarget) { part in
-                        let proposed = part.center + delta
-                        part.center = Point(min(1, max(-1, proposed.x)), min(1, max(-1, proposed.y)))
-                    }
-                }
-                dragOrigin = nil
-                dragTarget = nil
-                dragDelta = .zero
-            })
         }
-        .accessibilityLabel("Assembly workspace. Select bodies in the sidebar to edit exact positions.")
-        .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityLabel("Assembly workspace")
+        .accessibilityHint("Scroll vertically or pinch to zoom. Drag the background or Option-scroll to pan.")
+        .overlay {
+            AssemblyCanvasInput { event, location in
+                handle(event, at: location, viewport: viewport)
+            }
+        }
+    }
+
+    private func cameraControls(in size: CGSize) -> some View {
+        HStack(spacing: 5) {
+            Button("Fit Assembly", systemImage: "arrow.up.left.and.arrow.down.right") { fitAssembly(in: size) }
+                .help("Fit all bodies in view")
+            Button("Zoom to Selection", systemImage: "scope") {
+                if let index = experiment.selectedIndex {
+                    camera = AssemblyCamera(fitting: [index], in: size, experiment: experiment)
+                }
+            }
+            .disabled(experiment.selectedIndex == nil)
+            .help("Fit the selected body in view")
+            Button("Reset View", systemImage: "arrow.counterclockwise") { camera = AssemblyCamera() }
+                .help("Center the view on the assembly origin at the default scale")
+        }
+        .controlSize(.small)
+    }
+
+    private func fitAssembly(in size: CGSize) {
+        camera = AssemblyCamera(fitting: Array(0..<experiment.simulation.bodyCount), in: size, experiment: experiment)
+    }
+
+    private var selectedPart: AssemblyPart? {
+        experiment.previewPart ?? experiment.selectedIndex.map { experiment.scene.parts[$0] }
+    }
+
+    private func handle(_ event: NSEvent, at location: CGPoint, viewport: CGSize) {
+        let projection = camera.projection(in: viewport)
+        switch event.type {
+        case .leftMouseDown:
+            beginDrag(at: location, projection: projection)
+        case .leftMouseDragged:
+            updateDrag(at: location, projection: projection)
+        case .leftMouseUp:
+            endDrag(at: location, projection: projection)
+        case .magnify where drag == nil:
+            camera.zoom(by: exp(Double(event.magnification)), at: location, in: viewport)
+        case .scrollWheel where drag == nil:
+            let x = event.scrollingDeltaX, y = event.scrollingDeltaY
+            if event.modifierFlags.contains(.option) || abs(x) > abs(y) {
+                let scale = event.hasPreciseScrollingDeltas ? 1.0 : 12.0
+                camera.center -= projection.worldDelta(CGSize(width: scale * x, height: -scale * y))
+            } else if event.momentumPhase.isEmpty {
+                let sensitivity = event.hasPreciseScrollingDeltas ? 0.012 : 0.095
+                let exponent = min(0.5, max(-0.5, Double(y) * sensitivity))
+                camera.zoom(by: exp(exponent), at: location, in: viewport)
+            }
+        default:
+            break
+        }
+    }
+
+    private func beginDrag(at location: CGPoint, projection: AssemblyProjection) {
+        cancelDrag()
+        dragStart = location
+        if experiment.placingGauge {
+            drag = .gauge
+        } else if experiment.canEdit, let part = selectedPart, handlesAreVisible(for: part, projection: projection),
+                  let handle = Handle.allCases.first(where: {
+                      let position = handlePosition($0, part: part, projection: projection)
+                      return hypot(position.x - location.x, position.y - location.y) <= 11
+                  }) {
+            drag = .body(part, handle)
+        } else if let id = part(at: projection.world(location)) {
+            experiment.select(id)
+            if experiment.canEdit, let part = selectedPart {
+                drag = .body(part, nil)
+            } else {
+                drag = .pan(camera)
+            }
+        } else {
+            drag = .pan(camera)
+        }
+    }
+
+    private func updateDrag(at location: CGPoint, projection: AssemblyProjection) {
+        let translation = CGSize(width: location.x - dragStart.x, height: location.y - dragStart.y)
+        switch drag {
+        case .pan(let start):
+            camera.center = start.center - projection.worldDelta(translation)
+        case .body(let original, let handle) where experiment.canEdit:
+            var part = original
+            switch handle {
+            case nil:
+                let center = part.center + projection.worldDelta(translation)
+                part.center = Point(min(1, max(-1, center.x)), min(1, max(-1, center.y)))
+            case .rotate:
+                let initial = projection.world(dragStart) - part.center
+                let current = projection.world(location) - part.center
+                guard hypot(current.x, current.y) * projection.scale >= 5 else { return }
+                let radians = atan2(current.y, current.x) - atan2(initial.y, initial.x)
+                part.angle = (original.angle + radians * 180 / .pi).remainder(dividingBy: 360)
+            case .resize:
+                let delta = rotated(projection.worldDelta(translation), by: -part.angle)
+                let size = part.size + 2 * delta
+                part.size = Point(min(0.30, max(0.025, size.x)), min(0.30, max(0.025, size.y)))
+                experiment.fitWall(of: &part)
+            }
+            experiment.previewPart = part
+        default:
+            break
+        }
+    }
+
+    private func endDrag(at location: CGPoint, projection: AssemblyProjection) {
+        defer { cancelDrag() }
+        let distance = hypot(location.x - dragStart.x, location.y - dragStart.y)
+        if case .gauge = drag, distance < 4, experiment.placingGauge {
+            let point = projection.world(location)
+            if let id = part(at: point) { experiment.addGauge(body: id, at: point) }
+        } else if case .body(_, let handle) = drag, distance >= 2, experiment.canEdit {
+            updateDrag(at: location, projection: projection)
+            if let part = experiment.previewPart {
+                let action = handle == .rotate ? "Rotate Body" : handle == .resize ? "Resize Body" : "Move Body"
+                experiment.updatePart(part.id, action: action) { $0 = part }
+            }
+        }
+    }
+
+    private func cancelDrag() {
+        drag = nil
+        experiment.previewPart = nil
+    }
+
+    private func rotated(_ point: Point, by degrees: Double) -> Point {
+        let radians = degrees * .pi / 180
+        let c = cos(radians), s = sin(radians)
+        return Point(c * point.x - s * point.y, s * point.x + c * point.y)
+    }
+
+    private func handlePosition(_ handle: Handle, part: AssemblyPart, projection: AssemblyProjection) -> CGPoint {
+        let half = part.size / 2
+        let local = handle == .resize ? half : Point(0, half.y + 24 / projection.scale)
+        return projection.screen(part.center + rotated(local, by: part.angle))
+    }
+
+    private func handlesAreVisible(for part: AssemblyPart, projection: AssemblyProjection) -> Bool {
+        if case .body(_, .some) = drag { return true }
+        return min(part.size.x, part.size.y) * projection.scale >= 22
+    }
+
+    private func drawHandles(for part: AssemblyPart, in context: GraphicsContext, projection: AssemblyProjection) {
+        let rotation = handlePosition(.rotate, part: part, projection: projection)
+        let resize = handlePosition(.resize, part: part, projection: projection)
+        let edge = projection.screen(part.center + rotated(Point(0, part.size.y / 2), by: part.angle))
+        context.stroke(Path { path in
+            path.move(to: edge)
+            path.addLine(to: rotation)
+        }, with: .color(.white), lineWidth: 1)
+        let rotationDisc = Path(ellipseIn: CGRect(x: rotation.x - 9, y: rotation.y - 9, width: 18, height: 18))
+        let resizeSquare = Path(roundedRect: CGRect(x: resize.x - 6, y: resize.y - 6, width: 12, height: 12), cornerRadius: 2)
+        for shape in [rotationDisc, resizeSquare] {
+            context.fill(shape, with: .color(assemblyPanel))
+            context.stroke(shape, with: .color(.white), lineWidth: 1.5)
+        }
+        context.draw(Text(Image(systemName: "arrow.clockwise")).font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white), at: rotation)
+    }
+
+    private func scaleBarMillimetres(at scale: Double) -> Double {
+        let desiredMillimetres = 70_000 / scale
+        let magnitude = pow(10, floor(log10(desiredMillimetres)))
+        let fraction = desiredMillimetres / magnitude
+        return (fraction >= 5 ? 5 : fraction >= 2 ? 2 : 1) * magnitude
     }
 
     private func drawGrid(_ context: GraphicsContext, size: CGSize, projection: AssemblyProjection) {
         let low = projection.world(CGPoint(x: 12, y: size.height - 39))
         let high = projection.world(CGPoint(x: size.width - 12, y: 18))
-        let step = 0.025
+        let step = scaleBarMillimetres(at: projection.scale) / 1_000
         func lines(_ minValue: Double, _ maxValue: Double) -> Range<Int> {
             let start = Int(ceil(minValue / step)), end = Int(floor(maxValue / step)) + 1
             return start..<max(start, end)
@@ -173,14 +385,36 @@ struct AssemblyCanvas: View {
         context.stroke(grid, with: .color(assemblyInk.opacity(0.08)))
     }
 
-    private func offset(_ id: UUID) -> Point { dragTarget == id ? dragDelta : .zero }
+    private func previewPosition(_ point: Point, relativeTo part: AssemblyPart, preview: AssemblyPart?) -> Point {
+        guard let preview, preview.id == part.id else { return point }
+        if preview.angle == part.angle && preview.size == part.size {
+            return point + (preview.center - part.center)
+        }
+        var local = rotated(point - part.center, by: -part.angle)
+        if part.shape == .enclosure {
+            // Keep both the outer dimensions and the actual wall thickness in the preview.
+            func resized(_ component: Double, from old: Double, to new: Double) -> Double {
+                let inner = old / 2 - part.wall
+                let nextInner = new / 2 - preview.wall
+                let magnitude = abs(component)
+                let mapped = magnitude <= inner ? magnitude * nextInner / inner
+                    : nextInner + (magnitude - inner) * preview.wall / part.wall
+                return component.sign == .minus ? -mapped : mapped
+            }
+            local = Point(resized(local.x, from: part.size.x, to: preview.size.x),
+                          resized(local.y, from: part.size.y, to: preview.size.y))
+        } else {
+            local *= preview.size / part.size
+        }
+        return preview.center + rotated(local, by: preview.angle)
+    }
 
-    private func drawBody(_ i: Int, context: GraphicsContext, projection: AssemblyProjection) {
+    private func drawBody(_ i: Int, context: GraphicsContext, projection: AssemblyProjection, preview: AssemblyPart?) {
         let part = experiment.scene.parts[i]
         let body = experiment.simulation.body(i)
-        let shift = offset(part.id)
-        let nodes = body.position.map { projection.screen($0 + shift) }
-        let values = field.values(i, in: experiment.simulation)
+        let positions = body.position.map { previewPosition($0, relativeTo: part, preview: preview) }
+        let nodes = positions.map(projection.screen)
+        let values = experiment.canEdit ? [] : field.values(i, in: experiment.simulation)
         let color = assemblyColor(i)
         var buckets = Array(repeating: Path(), count: 13)
         for (index, triangle) in body.mesh.elements.enumerated() {
@@ -233,26 +467,30 @@ struct AssemblyCanvas: View {
             }
             context.stroke(faces, with: .color(shade.opacity(opacity)), lineWidth: crack.damage == 1 ? 2.5 : 1.2)
         }
-        let center = body.centerOfMass + shift
-        let bottom = body.position.map(\.y).min()! + shift.y
-        let top = body.position.map(\.y).max()! + shift.y
+        let center = previewPosition(body.centerOfMass, relativeTo: part, preview: preview)
+        let bottom = positions.map(\.y).min()!
+        let top = positions.map(\.y).max()!
         let interior = experiment.scene.parts.enumerated().contains { j, other in
             other.shape == .enclosure && j != i
                 && abs(experiment.simulation.body(j).centerOfMass.x - center.x) < other.size.x * 0.38
                 && abs(experiment.simulation.body(j).centerOfMass.y - center.y) < other.size.y * 0.38
         }
-        let y = interior ? center.y : (i.isMultiple(of: 2) ? top + 0.010 : bottom - 0.010)
+        let topLabel = i.isMultiple(of: 2) && !(selected && experiment.canEdit)
+        var labelPosition = projection.screen(Point(center.x, interior ? center.y : topLabel ? top : bottom))
+        if !interior { labelPosition.y += topLabel ? -14 : 14 }
         let label = Text(part.name).font(.caption.weight(.semibold)).foregroundStyle(color)
-        context.draw(label, at: projection.screen(Point(center.x, y)))
+        context.draw(label, at: labelPosition)
     }
 
-    private func drawConnections(_ context: GraphicsContext, projection: AssemblyProjection) {
+    private func drawConnections(_ context: GraphicsContext, projection: AssemblyProjection, preview: AssemblyPart?) {
         let scene = experiment.scene
         for link in experiment.simulation.linkReadings {
             let connection = scene.connections[link.connection]
             let selected = experiment.selectedConnection == connection.id
-            let a = projection.screen(link.start + offset(connection.first))
-            let b = projection.screen(link.end + offset(connection.second))
+            let first = scene.parts.first { $0.id == connection.first }
+            let second = scene.parts.first { $0.id == connection.second }
+            let a = projection.screen(first.map { previewPosition(link.start, relativeTo: $0, preview: preview) } ?? link.start)
+            let b = projection.screen(second.map { previewPosition(link.end, relativeTo: $0, preview: preview) } ?? link.end)
             if link.damage == 1 {
                 for point in [a, b] {
                     context.fill(Path(ellipseIn: CGRect(x: point.x - 2, y: point.y - 2, width: 4, height: 4)),
@@ -285,14 +523,51 @@ struct AssemblyCanvas: View {
         return nil
     }
 
-    private func drawGauges(_ context: GraphicsContext, projection: AssemblyProjection) {
+    private func drawGauges(_ context: GraphicsContext, projection: AssemblyProjection, preview: AssemblyPart?) {
         for (index, gauge) in experiment.gauges.enumerated() {
-            let at = projection.screen(experiment.simulation.gaugePosition(index) + offset(gauge.body))
+            let position = experiment.simulation.gaugePosition(index)
+            let part = experiment.scene.parts.first { $0.id == gauge.body }
+            let at = projection.screen(part.map { previewPosition(position, relativeTo: $0, preview: preview) } ?? position)
             let dot = Path(ellipseIn: CGRect(x: at.x - 4, y: at.y - 4, width: 8, height: 8))
             context.fill(dot, with: .color(.black))
             context.stroke(dot, with: .color(.white), lineWidth: 1.5)
             context.draw(Text(gauge.name).font(.caption2.monospaced()).foregroundStyle(.white),
                          at: CGPoint(x: at.x + 7, y: at.y - 7), anchor: .bottomLeading)
+        }
+    }
+}
+
+private struct AssemblyCanvasInput: NSViewRepresentable {
+    let handle: (NSEvent, CGPoint) -> Void
+
+    func makeNSView(context: Context) -> InputView {
+        let view = InputView()
+        view.toolTip = "Scroll vertically or pinch to zoom. Drag the background or Option-scroll to pan."
+        return view
+    }
+
+    func updateNSView(_ view: InputView, context: Context) {
+        view.handle = handle
+    }
+
+    final class InputView: NSView {
+        var handle: ((NSEvent, CGPoint) -> Void)?
+
+        override var isFlipped: Bool { true }
+        override var acceptsFirstResponder: Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(self)
+            route(event)
+        }
+
+        override func mouseDragged(with event: NSEvent) { route(event) }
+        override func mouseUp(with event: NSEvent) { route(event) }
+        override func scrollWheel(with event: NSEvent) { route(event) }
+        override func magnify(with event: NSEvent) { route(event) }
+
+        private func route(_ event: NSEvent) {
+            handle?(event, convert(event.locationInWindow, from: nil))
         }
     }
 }

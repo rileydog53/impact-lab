@@ -5,10 +5,32 @@ struct AssemblyEditor: View {
     let experiment: AssemblyExperiment
     @State private var bodySettings = true
     @State private var materialSettings = false
+    @State private var connectionList = false
+    @State private var meshSettings = false
+    @State private var simulationSettings = false
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 13) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Inspector").font(.headline)
+                    Spacer()
+                    Button("Undo", systemImage: "arrow.uturn.backward") { experiment.undo() }
+                        .labelStyle(.iconOnly)
+                        .keyboardShortcut("z", modifiers: .command)
+                        .disabled(!experiment.canEdit || experiment.undoAction == nil)
+                        .help(experiment.undoAction.map { "Undo \($0)" } ?? "Undo the last assembly edit")
+                    Button("Redo", systemImage: "arrow.uturn.forward") { experiment.redo() }
+                        .labelStyle(.iconOnly)
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                        .disabled(!experiment.canEdit || experiment.redoAction == nil)
+                        .help(experiment.redoAction.map { "Redo \($0)" } ?? "Redo the last undone assembly edit")
+                }
+                .controlSize(.small)
+                if !experiment.canEdit {
+                    Text("Reset Run to edit the starting assembly.")
+                        .font(.caption).foregroundStyle(assemblyAmber)
+                }
                 HStack {
                     Text("Components").font(.headline)
                     Spacer()
@@ -19,7 +41,8 @@ struct AssemblyEditor: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .disabled(experiment.scene.parts.count >= AssemblyScene.maximumParts)
+                    .disabled(!experiment.canEdit || experiment.scene.parts.count >= AssemblyScene.maximumParts)
+                    .help("Add a deformable block or hollow enclosure (up to \(AssemblyScene.maximumParts) bodies)")
                 }
                 ForEach(Array(experiment.scene.parts.enumerated()), id: \.element.id) { index, part in
                     row(part.name, icon: part.shape == .enclosure ? "square.dashed" : "square.fill",
@@ -32,36 +55,45 @@ struct AssemblyEditor: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
 
-                Divider()
-                HStack {
-                    Text("Connections").font(.headline)
-                    Spacer()
-                    Menu("Add link", systemImage: "point.topleft.down.to.point.bottomright.curvepath") {
+                HStack(alignment: .top) {
+                    DisclosureGroup("Connections (\(experiment.scene.connections.count))", isExpanded: $connectionList) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(experiment.scene.connections) { link in
+                                row("\(name(link.first)) → \(name(link.second))",
+                                    icon: link.kind == .spring ? "waveform.path" : "link",
+                                    color: link.kind == .spring ? assemblyInk : assemblyMint,
+                                    selected: experiment.selectedConnection == link.id) {
+                                    experiment.selectConnection(link.id)
+                                }
+                            }
+                            if experiment.scene.connections.isEmpty {
+                                Text("No links between bodies.").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Menu("Add link", systemImage: "link.badge.plus") {
                         if let first = experiment.scene.parts.first(where: { $0.id == experiment.selectedPart })
                             ?? experiment.scene.parts.first {
                             Section("From \(first.name)") {
                                 ForEach(experiment.scene.parts.filter { $0.id != first.id }) { next in
-                                    Button("To \(next.name)") { experiment.addConnection(first: first.id, second: next.id) }
+                                    Button("To \(next.name)") {
+                                        experiment.addConnection(first: first.id, second: next.id)
+                                        connectionList = true
+                                    }
                                 }
                             }
                         }
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .disabled(experiment.scene.parts.count < 2
+                    .disabled(!experiment.canEdit || experiment.scene.parts.count < 2
                               || experiment.scene.connections.count >= AssemblyScene.maximumConnections)
-                }
-                ForEach(experiment.scene.connections) { link in
-                    row("\(name(link.first)) → \(name(link.second))",
-                        icon: link.kind == .spring ? "waveform.path" : "link",
-                        color: link.kind == .spring ? assemblyInk : assemblyMint,
-                        selected: experiment.selectedConnection == link.id) {
-                        experiment.selectConnection(link.id)
-                    }
+                    .help("Connect two bodies with a spring or a breakable link")
                 }
                 Divider()
                 if let index = experiment.selectedIndex {
-                    bodyInspector(experiment.scene.parts[index])
+                    let part = experiment.previewPart ?? experiment.scene.parts[index]
+                    bodyInspector(part).id(part.id)
                 } else if let link = experiment.scene.connections.first(where: { $0.id == experiment.selectedConnection }) {
                     connectionInspector(link)
                 } else if !experiment.scene.parts.isEmpty {
@@ -90,7 +122,7 @@ struct AssemblyEditor: View {
             }
             .font(.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 9).padding(.vertical, 5)
+            .padding(.horizontal, 9).padding(.vertical, 3)
             .contentShape(Rectangle())
             .background(selected ? color.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
         }
@@ -100,97 +132,80 @@ struct AssemblyEditor: View {
     private func bodyInspector(_ part: AssemblyPart) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(part.shape.rawValue).font(.headline)
+                Text(part.name).font(.headline).lineLimit(1)
                 Spacer()
                 Button("Remove body", systemImage: "trash") {
-                    experiment.edit { $0.removePart(part.id) }
+                    experiment.edit("Remove Body") { $0.removePart(part.id) }
                 }
                 .labelStyle(.iconOnly)
+                .disabled(!experiment.canEdit)
                 .help("Remove this body and its connections")
             }
-            TextField("Body name", text: Binding(get: { part.name }, set: { value in
-                let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty { experiment.updatePart(part.id) { $0.name = String(name.prefix(48)) } }
-            }))
-            .textFieldStyle(.roundedBorder)
-            Picker("Body mesh", selection: Binding(get: { part.refinement }, set: { level in
-                experiment.updatePart(part.id) { $0.refinement = level }
-            })) {
-                Text("Use assembly mesh").tag(nil as AssemblyScene.Resolution?)
-                ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag(Optional($0)) }
-            }
-            Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
-                experiment.updatePart(part.id) { $0.fracture = enabled ? MaterialFractureSettings() : nil }
-            })).toggleStyle(.checkbox)
-                .disabled(part.bondedLayer != nil)
-            if let fracture = part.fracture {
-                HStack {
-                    numeric("Strength / E (%)", value: fracture.strengthFraction,
-                            range: MaterialFractureSettings.strengthRange, scale: 100) { value in
-                        experiment.updatePart(part.id) { $0.fracture?.strengthFraction = value }
-                    }
-                    numeric("Fracture energy (J/m²)", value: fracture.energy,
-                            range: MaterialFractureSettings.energyRange, scale: 1) { value in
-                        experiment.updatePart(part.id) { $0.fracture?.energy = value }
-                    }
-                }
-                if part.shape == .block {
-                    Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
-                        experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
-                    })) {
-                        ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) {
-                            Text($0.rawValue).tag($0)
-                        }
-                    }
-                }
-                let resolution = part.refinement ?? experiment.scene.resolution
-                Text(resolution.rawValue <= 3
-                     ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
-                     : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            DisclosureGroup("Geometry and initial motion", isExpanded: $bodySettings) {
+            Text("\(part.shape.rawValue) · \(materialDescription(part))")
+                .font(.caption).foregroundStyle(.secondary)
+            AssemblyBodyName(part: part, experiment: experiment)
+            DisclosureGroup("Geometry", isExpanded: $bodySettings) {
                 Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                     GridRow {
-                        bodyNumber("X (mm)", part, \.center.x, -1...1, scale: 1000)
-                        bodyNumber("Y (mm)", part, \.center.y, -1...1, scale: 1000)
+                        bodyNumber("Center X (mm)", part, \.center.x, -1...1, scale: 1000)
+                        bodyNumber("Center Y (mm)", part, \.center.y, -1...1, scale: 1000)
                     }
                     GridRow {
                         bodyNumber("Local width (mm)", part, \.size.x, 0.025...0.30, scale: 1000)
                         bodyNumber("Local height (mm)", part, \.size.y, 0.025...0.30, scale: 1000)
                     }
                     GridRow {
-                        bodyNumber("Angle (°)", part, \.angle, -360...360)
+                        bodyNumber("Rotation (°)", part, \.angle, -360...360)
+                            .help("Counterclockwise angle from the assembly X axis")
                         if part.shape == .enclosure {
-                            bodyNumber("Wall (mm)", part, \.wall, 0.005...0.4 * min(part.size.x, part.size.y), scale: 1000)
+                            bodyNumber("Wall thickness (mm)", part, \.wall, 0.005...0.4 * min(part.size.x, part.size.y), scale: 1000)
                         }
                     }
-                    GridRow {
-                        bodyNumber("VX (m/s)", part, \.velocity.x, -1.5...1.5)
-                        bodyNumber("VY (m/s)", part, \.velocity.y, -1.5...1.5)
-                    }
-                }.padding(.top, 7)
-                if part.shape == .block && part.bondedLayer == nil { notchEditor(part) }
+                }.padding(.top, 5)
+                if part.shape == .block && part.bondedLayer == nil {
+                    notchEditor(part).disabled(!experiment.canEdit)
+                }
+            }
+            Text("Initial motion").font(.subheadline.weight(.semibold)).padding(.top, 4)
+            HStack(spacing: 6) {
+                bodyNumber("X velocity (m/s)", part, \.velocity.x, -1.5...1.5)
+                bodyNumber("Y velocity (m/s)", part, \.velocity.y, -1.5...1.5)
+            }
+            let links = experiment.scene.connections.filter { $0.first == part.id || $0.second == part.id }
+            Text(links.isEmpty ? "Constraints · Free body" : "Constraints · \(links.count) body-to-body \(links.count == 1 ? "link" : "links")")
+                .font(.caption).foregroundStyle(.secondary)
+                .help("Assembly bodies can translate and rotate. Links transfer load between the connected bodies.")
+            DisclosureGroup("Mesh", isExpanded: $meshSettings) {
+                Picker("Body mesh", selection: Binding(get: { part.refinement }, set: { level in
+                    experiment.updatePart(part.id) { $0.refinement = level }
+                })) {
+                    Text("Use assembly mesh").tag(nil as AssemblyScene.Resolution?)
+                    ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag(Optional($0)) }
+                }
+                    .disabled(!experiment.canEdit)
+                    .help("Override the triangle size for this body")
             }
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
                     profiles("Apply illustrative profile", elasticOnly: part.bondedLayer != nil) { profile in
-                        experiment.updatePart(part.id) { profile.apply(to: &$0) }
-                    }
+                        experiment.updatePart(part.id, action: "Apply Material") { profile.apply(to: &$0) }
+                    }.disabled(!experiment.canEdit)
                     Text("Profiles use illustrative numerical values.")
                         .font(.caption).foregroundStyle(.secondary)
                     Picker("Response", selection: Binding(get: { part.plasticity.response },
                                                           set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
                         ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
-                    .disabled(part.bondedLayer != nil)
+                    .disabled(!experiment.canEdit || part.bondedLayer != nil)
                     Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                         GridRow {
-                            bodyNumber("Modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
+                            bodyNumber("Young’s modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
+                                .help("Elastic stiffness in uniaxial loading")
                             bodyNumber("Density (kg/m³)", part, \.material.density, SceneConfiguration.densityRange)
                         }
                         GridRow {
                             bodyNumber("Poisson ratio", part, \.material.poisson, SceneConfiguration.poissonRange)
+                                .help("Transverse contraction relative to axial extension in uniaxial loading")
                         }
                         if part.plasticity.response == .elastoplastic {
                             GridRow {
@@ -199,11 +214,59 @@ struct AssemblyEditor: View {
                             }
                         }
                     }
-                    if part.shape == .block { bondedLayerEditor(part) }
+                    if part.bondedLayer == nil {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
+                                experiment.updatePart(part.id) { $0.fracture = enabled ? MaterialFractureSettings() : nil }
+                            })).toggleStyle(.checkbox)
+                            if let fracture = part.fracture {
+                                HStack {
+                                    numeric("Strength / E (%)", value: fracture.strengthFraction,
+                                            range: MaterialFractureSettings.strengthRange, scale: 100) { value in
+                                        experiment.updatePart(part.id) { $0.fracture?.strengthFraction = value }
+                                    }
+                                    numeric("Fracture energy (J/m²)", value: fracture.energy,
+                                            range: MaterialFractureSettings.energyRange, scale: 1) { value in
+                                        experiment.updatePart(part.id) { $0.fracture?.energy = value }
+                                    }
+                                }
+                                if part.shape == .block {
+                                    Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
+                                        experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
+                                    })) {
+                                        ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) {
+                                            Text($0.rawValue).tag($0)
+                                        }
+                                    }
+                                }
+                                let resolution = part.refinement ?? experiment.scene.resolution
+                                Text(resolution.rawValue <= 3
+                                     ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
+                                     : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.disabled(!experiment.canEdit)
+                    } else {
+                        Text("Bonded layers require elastic material and use permanent bonds.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if part.shape == .block { bondedLayerEditor(part).disabled(!experiment.canEdit) }
                 }.padding(.top, 7)
             }
             gaugeEditor(part)
         }
+    }
+
+    private func materialDescription(_ part: AssemblyPart) -> String {
+        if let layer = part.bondedLayer {
+            return layer.third == nil ? "Two bonded elastic layers" : "Three bonded elastic layers"
+        }
+        if let profile = AssemblyMaterialProfile.allCases.first(where: {
+            $0.response == part.plasticity.response && $0.material == part.material
+        }) {
+            return profile.rawValue
+        }
+        return part.plasticity.response.rawValue
     }
 
     private func notchEditor(_ part: AssemblyPart) -> some View {
@@ -317,8 +380,8 @@ struct AssemblyEditor: View {
                             experiment.updateGauge(gauge.id) { $0.location.y = y }
                         }
                         Button("Remove gauge", systemImage: "trash") {
-                            experiment.edit { $0.gauges?.removeAll { $0.id == gauge.id } }
-                        }.labelStyle(.iconOnly)
+                            experiment.edit("Remove Gauge") { $0.gauges?.removeAll { $0.id == gauge.id } }
+                        }.labelStyle(.iconOnly).disabled(!experiment.canEdit)
                     }
                     Text("Pressure \(value.pressure / 1000, specifier: "%+.3f") kPa · Strain \(100 * value.strain, specifier: "%+.3f")%")
                         .font(.caption.monospacedDigit())
@@ -335,14 +398,14 @@ struct AssemblyEditor: View {
                 Text("Connection properties").font(.headline)
                 Spacer()
                 Button("Remove connection", systemImage: "trash") {
-                    experiment.edit { $0.connections.removeAll { $0.id == link.id } }
-                }.labelStyle(.iconOnly)
+                    experiment.edit("Remove Connection") { $0.connections.removeAll { $0.id == link.id } }
+                }.labelStyle(.iconOnly).disabled(!experiment.canEdit)
             }
             Picker("Type", selection: Binding(get: { link.kind }, set: { kind in
                 experiment.updateConnection(link.id) { $0.kind = kind }
             })) {
                 ForEach(AssemblyConnection.Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
+            }.disabled(!experiment.canEdit)
             Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                 GridRow {
                     linkNumber("Stiffness (kN/m²)", link, \.stiffness, 500...250_000, scale: 0.001)
@@ -380,36 +443,37 @@ struct AssemblyEditor: View {
     }
 
     private var runSettings: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("Run settings").font(.headline)
-            Picker("Assembly mesh", selection: Binding(get: { experiment.scene.resolution }, set: { resolution in
-                experiment.edit { $0.meshResolution = resolution }
-            })) {
-                ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag($0) }
-            }
-            Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.2f") µs step")
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            numeric("Duration (ms)", value: experiment.scene.duration, range: 0.02...0.25, scale: 1000) { value in
-                experiment.edit { $0.duration = value }
-            }
-            if !experiment.scene.parts.isEmpty {
-                Picker("Track body", selection: Binding(get: { experiment.scene.monitor ?? experiment.scene.parts.first?.id }, set: { id in
-                    experiment.edit {
-                        $0.monitor = id
-                        if $0.relativeTo == id { $0.relativeTo = nil }
-                    }
+        DisclosureGroup("Simulation settings", isExpanded: $simulationSettings) {
+            VStack(alignment: .leading, spacing: 9) {
+                Picker("Assembly mesh", selection: Binding(get: { experiment.scene.resolution }, set: { resolution in
+                    experiment.edit { $0.meshResolution = resolution }
                 })) {
-                    ForEach(experiment.scene.parts) { Text($0.name).tag(Optional($0.id)) }
+                    ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag($0) }
+                }.disabled(!experiment.canEdit)
+                Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.2f") µs step")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                numeric("Duration (ms)", value: experiment.scene.duration, range: 0.02...0.25, scale: 1000) { value in
+                    experiment.edit { $0.duration = value }
                 }
-                Picker("Relative to", selection: Binding(get: { experiment.scene.relativeTo }, set: { id in
-                    experiment.edit { $0.relativeTo = id }
-                })) {
-                    Text("Lab frame").tag(nil as UUID?)
-                    ForEach(experiment.scene.parts.filter {
-                        $0.id != (experiment.scene.monitor ?? experiment.scene.parts.first?.id)
-                    }) { Text($0.name).tag(Optional($0.id)) }
+                if !experiment.scene.parts.isEmpty {
+                    Picker("Track body", selection: Binding(get: { experiment.scene.monitor ?? experiment.scene.parts.first?.id }, set: { id in
+                        experiment.edit {
+                            $0.monitor = id
+                            if $0.relativeTo == id { $0.relativeTo = nil }
+                        }
+                    })) {
+                        ForEach(experiment.scene.parts) { Text($0.name).tag(Optional($0.id)) }
+                    }.disabled(!experiment.canEdit)
+                    Picker("Relative to", selection: Binding(get: { experiment.scene.relativeTo }, set: { id in
+                        experiment.edit { $0.relativeTo = id }
+                    })) {
+                        Text("Lab frame").tag(nil as UUID?)
+                        ForEach(experiment.scene.parts.filter {
+                            $0.id != (experiment.scene.monitor ?? experiment.scene.parts.first?.id)
+                        }) { Text($0.name).tag(Optional($0.id)) }
+                    }.disabled(!experiment.canEdit)
                 }
-            }
+            }.padding(.top, 5)
         }
     }
 
@@ -435,6 +499,35 @@ struct AssemblyEditor: View {
                 if newValue.isFinite { set(min(range.upperBound, max(range.lowerBound, newValue / scale))) }
             }), format: .number.precision(.fractionLength(0...3)))
             .labelsHidden().textFieldStyle(.roundedBorder).monospacedDigit()
+            .disabled(!experiment.canEdit)
+            .help("Allowed range \((range.lowerBound * scale).formatted()) to \((range.upperBound * scale).formatted()). Press Return to apply.")
         }
+    }
+}
+
+private struct AssemblyBodyName: View {
+    let part: AssemblyPart
+    let experiment: AssemblyExperiment
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Body name", text: $draft)
+            .textFieldStyle(.roundedBorder)
+            .focused($focused)
+            .disabled(!experiment.canEdit)
+            .help("Press Return to rename the body")
+            .onAppear { draft = part.name }
+            .onChange(of: part.name) { draft = part.name }
+            .onChange(of: focused) { if !focused { commit() } }
+            .onSubmit { commit() }
+    }
+
+    private func commit() {
+        guard experiment.canEdit else { return }
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? part.name : String(trimmed.prefix(48))
+        draft = name
+        experiment.updatePart(part.id, action: "Rename Body") { $0.name = name }
     }
 }

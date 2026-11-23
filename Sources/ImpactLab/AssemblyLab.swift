@@ -13,7 +13,16 @@ struct AssemblyLab: View {
     @State private var library = false
     @State private var studySmokeResult: Result<AssemblyStudy, Error>?
     @State private var signal = 0
-    @State private var confirmClear = false
+    @State private var replacement: Replacement?
+    @State private var confirmReplacement = false
+
+    private struct Replacement {
+        let scene: AssemblyScene
+        let title: String
+        var url: URL? = nil
+        var field = AssemblyField.stress
+        var signal = 0
+    }
     private let timer = Timer.publish(every: 1.0 / 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -44,45 +53,24 @@ struct AssemblyLab: View {
         .sheet(isPresented: $study) {
             studyView
         }
-        .sheet(isPresented: $library) {
-            ExperimentLibrary(load: loadPreset)
+        .sheet(isPresented: $library, onDismiss: applyPendingReplacement) {
+            ExperimentLibrary { scene, name in
+                replacement = Replacement(scene: scene, title: name)
+                library = false
+            }
         }
         .alert("Assembly", isPresented: Binding(get: { experiment.error != nil }, set: { if !$0 { experiment.error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(experiment.error ?? "")
         }
-        .confirmationDialog("Replace this assembly?", isPresented: $confirmClear) {
-            Button("New blank assembly", role: .destructive) {
-                do { try experiment.configure(AssemblyScene()) }
-                catch { experiment.error = error.localizedDescription }
+        .confirmationDialog("Replace the unsaved assembly?", isPresented: $confirmReplacement) {
+            Button("Save and Continue") {
+                if save() { applyReplacement(refreshFile: true) }
+                else { replacement = nil }
             }
-            Button("Load enclosure example") {
-                do {
-                    let scene = AssemblyScene.enclosureExample()
-                    try experiment.configure(scene)
-                    if let monitor = scene.monitor { experiment.select(monitor) }
-                } catch { experiment.error = error.localizedDescription }
-            }
-            Button("Load bending fracture example") {
-                do {
-                    let scene = AssemblyScene.bendingFractureExample()
-                    try experiment.configure(scene)
-                    if let monitor = scene.monitor { experiment.select(monitor) }
-                    field = .damage
-                    signal = 3
-                } catch { experiment.error = error.localizedDescription }
-            }
-            Button("Load bonded wave example") {
-                let scene = AssemblyScene.bondedWaveExample()
-                do {
-                    try experiment.configure(scene)
-                    if let monitor = scene.monitor { experiment.select(monitor) }
-                    field = .pressure
-                } catch { experiment.error = error.localizedDescription }
-            }
-        } message: {
-            Text("Save your current setup first if you want to reopen it.")
+            Button("Discard Changes", role: .destructive) { applyReplacement() }
+            Button("Cancel", role: .cancel) { replacement = nil }
         }
     }
 
@@ -94,27 +82,46 @@ struct AssemblyLab: View {
         return view
     }
 
-    private func loadPreset(_ scene: AssemblyScene) {
-        do {
-            try experiment.configure(scene)
-            if let monitor = scene.monitor { experiment.select(monitor) }
-            field = .stress
-            signal = 0
-            library = false
-        } catch {
-            library = false
-            experiment.error = error.localizedDescription
+    private func applyPendingReplacement() {
+        guard replacement != nil else { return }
+        experiment.pause()
+        if experiment.isDirty {
+            confirmReplacement = true
+        } else {
+            applyReplacement()
         }
+    }
+
+    private func applyReplacement(refreshFile: Bool = false) {
+        guard let next = replacement else { return }
+        replacement = nil
+        do {
+            let scene = if refreshFile, let url = next.url { try AssemblyScene.open(url) } else { next.scene }
+            try experiment.load(scene, title: next.title, url: next.url)
+            field = next.field
+            signal = next.signal
+        } catch { experiment.error = error.localizedDescription }
+    }
+
+    private func loadPreset(_ scene: AssemblyScene, title: String) {
+        replacement = Replacement(scene: scene, title: title)
+        applyPendingReplacement()
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Assembly laboratory").font(.system(size: 29, weight: .semibold))
-                Text("\(experiment.scene.parts.count) bodies · \(experiment.scene.connections.count) connections")
-                    .font(.subheadline).foregroundStyle(assemblyMint)
+                Text(experiment.title).font(.system(size: 24, weight: .semibold)).lineLimit(1)
+                    .help(experiment.fileURL?.path ?? experiment.title)
+                HStack(spacing: 8) {
+                    Text(experiment.canEdit ? "Edit assembly" : "Inspect run")
+                        .foregroundStyle(assemblyMint)
+                    if experiment.isDirty {
+                        Label("Unsaved changes", systemImage: "circle.fill").foregroundStyle(assemblyAmber)
+                    }
+                }.font(.caption)
             }
-            Spacer()
+            Spacer(minLength: 8)
             Button("Study", systemImage: "chart.line.uptrend.xyaxis") {
                 experiment.pause()
                 experiment.placingGauge = false
@@ -126,13 +133,32 @@ struct AssemblyLab: View {
                 experiment.placingGauge = false
                 library = true
             }
-            Button("New / Examples", systemImage: "doc.badge.plus") {
-                experiment.pause()
-                confirmClear = true
-            }
+            Menu("New / Examples", systemImage: "doc.badge.plus") {
+                Button("Blank Assembly") { loadPreset(AssemblyScene(), title: "Untitled assembly") }
+                Button("Enclosure Example") { loadPreset(.enclosureExample(), title: "Enclosure example") }
+                Button("Bending Fracture Example") {
+                    replacement = Replacement(scene: .bendingFractureExample(), title: "Bending fracture example",
+                                              field: .damage, signal: 3)
+                    applyPendingReplacement()
+                }
+                Button("Bonded Wave Example") {
+                    replacement = Replacement(scene: .bondedWaveExample(), title: "Bonded wave example", field: .pressure)
+                    applyPendingReplacement()
+                }
+            }.fixedSize()
             Button("Open", systemImage: "folder") { open() }
+                .keyboardShortcut("o", modifiers: .command)
             Button("Save", systemImage: "square.and.arrow.down") { save() }
-                .disabled(experiment.scene.parts.isEmpty)
+                .keyboardShortcut("s", modifiers: .command)
+            Menu {
+                Button("Save As…") { save(asNewFile: true) }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .accessibilityLabel("More file actions")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
         }
     }
 
@@ -141,13 +167,14 @@ struct AssemblyLab: View {
             Button(experiment.running ? "Pause" : "Run", systemImage: experiment.running ? "pause.fill" : "play.fill") {
                 experiment.toggle()
             }
-            .buttonStyle(.borderedProminent).tint(assemblyMint).foregroundStyle(.black)
+            .buttonStyle(.borderedProminent)
             .disabled(!experiment.running && !experiment.canRun)
             .keyboardShortcut(.space, modifiers: [])
             Button("+1 ms") { experiment.advance(to: experiment.simulation.time + 0.001) }
                 .disabled(experiment.running || !experiment.canRun)
-            Button("Reset", systemImage: "arrow.counterclockwise") { experiment.reset() }
-                .labelStyle(.iconOnly).help("Reset the assembly to its initial state")
+            Button("Reset Run", systemImage: "arrow.counterclockwise") { experiment.reset() }
+                .disabled(experiment.canEdit)
+                .help("Return to the authored assembly and discard the current run’s results")
             Toggle("Slow", isOn: Binding(get: { experiment.slow }, set: { experiment.slow = $0 }))
                 .toggleStyle(.checkbox).help("Play at one fifth of normal playback speed")
             Spacer()
@@ -170,10 +197,13 @@ struct AssemblyLab: View {
                 Label(reason, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(assemblyAmber)
             } else {
                 HStack {
-                    Picker("Field", selection: $field) {
-                        ForEach(AssemblyField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }.labelsHidden().frame(width: 166)
-                    Toggle("Mesh", isOn: $showMesh).toggleStyle(.checkbox)
+                    if !experiment.canEdit {
+                        Picker("Result field", selection: $field) {
+                            ForEach(AssemblyField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }.labelsHidden().frame(width: 166)
+                    }
+                    Toggle("Show mesh", isOn: $showMesh).toggleStyle(.checkbox)
+                        .help("Draw the edges of the simulation triangles")
                     Button(experiment.placingGauge ? "Cancel gauge" : "Place gauge", systemImage: "scope") {
                         experiment.placingGauge.toggle()
                     }
@@ -183,6 +213,10 @@ struct AssemblyLab: View {
                     if experiment.placingGauge {
                         Text("Click inside a body to place a material gauge.")
                             .font(.caption).foregroundStyle(assemblyMint)
+                    } else if experiment.canEdit {
+                        Text("Drag to move · Circle rotates · Square resizes")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .help("Use Zoom to Selection to reveal the handles on a small body.")
                     } else if let index = experiment.selectedIndex, field == .stress || field == .plastic {
                         let peak = field.values(index, in: experiment.simulation).max() ?? 0
                         Text(field == .stress
@@ -193,8 +227,6 @@ struct AssemblyLab: View {
                         let names = experiment.scene.parts
                         Text("First contact · \(names[pair.key.x].name) / \(names[pair.key.y].name) · \(pair.value * 1000, specifier: "%.2f") ms")
                             .font(.caption).monospacedDigit().lineLimit(1)
-                    } else {
-                        Text("Drag a body to move it at the start of a run.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -374,19 +406,34 @@ struct AssemblyLab: View {
         experiment.pause()
         let dialog = NSOpenPanel()
         dialog.allowedContentTypes = [.json]
+        dialog.directoryURL = experiment.fileURL?.deletingLastPathComponent()
         guard dialog.runModal() == .OK, let url = dialog.url else { return }
-        do { try experiment.configure(AssemblyScene.open(url)) }
-        catch { experiment.error = error.localizedDescription }
+        do {
+            replacement = Replacement(scene: try AssemblyScene.open(url), title: AssemblyExperiment.fileTitle(url), url: url)
+            applyPendingReplacement()
+        } catch { experiment.error = error.localizedDescription }
     }
 
-    private func save() {
+    @discardableResult private func save(asNewFile: Bool = false) -> Bool {
         experiment.pause()
-        let dialog = NSSavePanel()
-        dialog.allowedContentTypes = [.json]
-        dialog.nameFieldStringValue = "Assembly.impact-assembly.json"
-        guard dialog.runModal() == .OK, let url = dialog.url else { return }
-        do { try experiment.scene.save(to: url) }
-        catch { experiment.error = error.localizedDescription }
+        let url: URL
+        if let existing = experiment.fileURL, !asNewFile {
+            url = existing
+        } else {
+            let dialog = NSSavePanel()
+            dialog.allowedContentTypes = [.json]
+            dialog.nameFieldStringValue = "\(experiment.title).impact-assembly.json"
+            dialog.directoryURL = experiment.fileURL?.deletingLastPathComponent()
+            guard dialog.runModal() == .OK, let destination = dialog.url else { return false }
+            url = destination
+        }
+        do {
+            try experiment.save(to: url)
+            return true
+        } catch {
+            experiment.error = error.localizedDescription
+            return false
+        }
     }
 
     private func startup() async {
@@ -394,8 +441,8 @@ struct AssemblyLab: View {
         if let index = args.firstIndex(of: "--assembly-inspect"), args.indices.contains(index + 2) {
             do {
                 let scene = try AssemblyScene.open(URL(fileURLWithPath: args[index + 1]))
-                try experiment.configure(scene)
-                if let id = scene.monitor { experiment.select(id) }
+                let url = URL(fileURLWithPath: args[index + 1])
+                try experiment.load(scene, title: AssemblyExperiment.fileTitle(url), url: url)
                 if scene.parts.contains(where: { $0.fracture != nil }) {
                     field = .damage
                     signal = 3
@@ -426,7 +473,8 @@ struct AssemblyLab: View {
         }
         var checks = ["native library=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })"]
         let scene = AssemblyExperimentPreset.bondedComposite.scene(boundary: .supports, resolution: .fine)
-        loadPreset(scene)
+        library = false
+        loadPreset(scene, title: AssemblyExperimentPreset.bondedComposite.rawValue)
         checks.append("loaded preset=\(experiment.canRun && experiment.selectedPart == scene.monitor && experiment.scene == scene)")
         checks.append("supports and gauges visible in model=\(experiment.scene.parts.count == 4 && experiment.gauges.count == 3)")
         let specimen = scene.parts[1].id

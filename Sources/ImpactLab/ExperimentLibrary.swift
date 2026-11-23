@@ -2,7 +2,7 @@ import ImpactPhysics
 import SwiftUI
 
 struct ExperimentLibrary: View {
-    let load: (AssemblyScene) -> Void
+    let load: (AssemblyScene, String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selection: AssemblyExperimentPreset = .inclinedPlate
     @State private var boundary = AssemblyExperimentPreset.inclinedPlate.defaultBoundary
@@ -44,7 +44,7 @@ struct ExperimentLibrary: View {
                 Text("Loading replaces the current assembly.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Load experiment") { load(draft) }
+                Button("Load experiment") { load(draft, selection.rawValue) }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
         }
