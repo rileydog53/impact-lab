@@ -1,0 +1,11 @@
+case,pattern,coupon_refinement,step_us,insertion_ms,detachment_ms,max_energy_error_percent,max_overlap_percent,max_linear_momentum_error_Ns_per_m
+original-aligned-3,Aligned,3,0.4346,5.045706,24.056848,0.020129,1.309537,2.006e-14
+original-aligned-4,Aligned,4,0.4346,5.025280,14.063221,0.054447,2.037511,1.643e-14
+original-aligned-3-half,Aligned,3,0.2173,5.045706,24.296530,0.005033,1.442634,1.071e-13
+original-staggered-3,Staggered,3,0.4346,5.147402,100.259178,0.031620,1.134609,1.643e-14
+original-element-stress-3,Aligned,3,0.4346,5.003550,12.336556,0.034580,1.673615,1.643e-14
+symmetric-aligned-3,Aligned,3,0.4346,5.045706,34.790165,0.024577,1.309537,1.643e-14
+symmetric-aligned-4,Aligned,4,0.4346,5.025280,23.843894,0.107088,1.526079,1.643e-14
+symmetric-aligned-3-half,Aligned,3,0.2173,5.045706,22.770432,0.005609,1.309362,1.097e-13
+trial-crossed-3,Crossed,3,0.4346,5.072651,20.162398,0.051552,2.585377,2.120e-14
+trial-crossed-4,Crossed,4,0.4346,5.047010,13.530836,0.248509,1.759548,1.783e-14

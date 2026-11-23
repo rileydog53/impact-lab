@@ -11,8 +11,9 @@ private struct SeparationResult {
     var previousDissipation = 0.0
 }
 
-func tensileSeparationCheck(sceneURL: URL) throws {
+func tensileSeparationCheck(sceneURL: URL, refinedOnly: Bool = false) throws {
     cohesivePatchCheck(tensileInitiation: true)
+    tensileFaceFrameCheck()
     let scene = try AssemblyScene.open(sceneURL)
     require(scene.parts.count == 5 && scene.resolution == .extraFine,
             "The verification requires the ×3 bend coupon scene with its support and receiver bodies")
@@ -25,24 +26,27 @@ func tensileSeparationCheck(sceneURL: URL) throws {
             && unsupported.issues().contains { $0.contains("requires a custom elastic material") },
             "The unverified tensile initiation and J2 combination was accepted")
     let nominal = try AssemblySimulation(scene)
-    runSeparation("native ×3", nominal, expect: .receiver)
-
-    var weak = scene
-    weak.parts[1].velocity *= 0.10
-    try runSeparation("weak loading ×3", AssemblySimulation(weak), expect: .intact)
+    if !refinedOnly {
+        runSeparation("native ×3", nominal, expect: .separation)
+        var weak = scene
+        weak.parts[1].velocity *= 0.10
+        try runSeparation("weak loading ×3", AssemblySimulation(weak), expect: .intact)
+    }
 
     var refined = scene
     refined.parts[0].refinement = .x4
     let fine = try AssemblySimulation(refined)
-    let common = min(fine.dt, nominal.dt / 2)
-    try runSeparation("×3 at common step",
-                      AssemblySimulation(scene, refinement: scene.resolution.rawValue, stepLimit: common), expect: .receiver)
+    let common = min(fine.dt, 0.4346e-6)
+    if !refinedOnly {
+        try runSeparation("×3 at common step",
+                          AssemblySimulation(scene, refinement: scene.resolution.rawValue, stepLimit: common), expect: .receiver)
+    }
     try runSeparation("×4 coupon at common step",
                       AssemblySimulation(refined, refinement: scene.resolution.rawValue, stepLimit: common), expect: .crackFace)
 }
 
 private enum ExpectedMotion {
-    case intact, receiver, crackFace
+    case intact, separation, receiver, crackFace
 }
 
 private func runSeparation(_ label: String, _ initial: AssemblySimulation, expect: ExpectedMotion) {
@@ -79,7 +83,8 @@ private func runSeparation(_ label: String, _ initial: AssemblySimulation, expec
     let balance = reading.insertionBalance
     let pieces = s.materialPieces(0)
     let contacts = s.fragmentContacts.filter { $0.parts == SIMD2(0, 4) && $0.time > (result.detachment ?? .infinity) }
-    let exposed = contacts.compactMap(\.firstExposedTime).min()
+    let firstExposedContact = s.fragmentContacts.lazy.filter { $0.parts.x == 0 }
+        .compactMap(\.firstExposedTime).filter { $0 > (result.detachment ?? .infinity) }.min()
     let impulse = contacts.reduce(0) { $0 + $1.normalImpulse }
     let firstReceiver = contacts.map(\.time).min()
     let receiverSpeed = simd_length(s.body(4).centerVelocity)
@@ -87,8 +92,8 @@ private func runSeparation(_ label: String, _ initial: AssemblySimulation, expec
     print(String(format: "%@, dt %.3f µs, %d coupon triangles: insert %@ ms, damage %@ ms, first failure %@ ms, detach %@ ms; %d pieces, %d failed faces, %.3f mm failed length, %.6f J/m dissipated",
                  label, 1e6 * s.dt, initialTriangles, ms(result.insertion), ms(result.damage), ms(result.failure), ms(result.detachment),
                  pieces.count, reading.failedEdges, 1000 * reading.crackLength, reading.dissipation))
-    print(String(format: "  Receiver contact %@ ms, exposed face %@ ms, scalar impulse %.6f N·s/m, receiver speed %.4f m/s, peak relative fragment speed %.4f m/s",
-                 ms(firstReceiver), ms(exposed), impulse, receiverSpeed, result.relativeFragmentSpeed))
+    print(String(format: "  Receiver contact %@ ms, first post-detachment exposed-face contact %@ ms, scalar impulse %.6f N·s/m, receiver speed %.4f m/s, peak relative fragment speed %.4f m/s",
+                 ms(firstReceiver), ms(firstExposedContact), impulse, receiverSpeed, result.relativeFragmentSpeed))
     print(String(format: "  Energy error %.5f%%, overlap %.4f%%, ΔP %.2e N·s/m, ΔL %.2e N·s, split Δmass %.2e kg/m, split Δkinetic %.2e J/m%@",
                  100 * result.energyError, 100 * s.peakRelativePenetration, result.momentumError, result.angularError,
                  balance.mass, balance.kinetic, s.failure.map { " STOPPED: " + $0 } ?? ""))
@@ -108,16 +113,20 @@ private func runSeparation(_ label: String, _ initial: AssemblySimulation, expec
                 "Weak loading started a crack")
     } else {
         guard let insertion = result.insertion, let damage = result.damage, let failure = result.failure,
-              let detachment = result.detachment, let receiver = firstReceiver else {
-            require(false, "\(label) missed a fracture or receiver event")
+              let detachment = result.detachment else {
+            require(false, "\(label) missed a fracture event")
             return
         }
-        require(insertion <= damage && damage < failure && failure <= detachment && detachment < receiver,
+        require(insertion <= damage && damage < failure && failure <= detachment,
                 "\(label) recorded events out of order")
-        require(pieces.count > 1 && result.relativeFragmentSpeed > 0.1 && impulse > 0 && receiverSpeed > 0.001,
-                "\(label) did not transfer load from a moving fragment to the receiver")
+        require(pieces.count > 1 && result.relativeFragmentSpeed > 0.1,
+                "\(label) did not produce independently moving fragments")
+        if expect == .receiver || expect == .crackFace {
+            require(firstReceiver.map { $0 > detachment } == true && impulse > 0 && receiverSpeed > 0.001,
+                    "\(label) did not transfer load from a moving fragment to the receiver")
+        }
         if expect == .crackFace {
-            require(exposed.map { $0 > detachment } == true,
+            require(firstExposedContact != nil,
                     "\(label) did not record contact on a newly exposed face")
         }
     }

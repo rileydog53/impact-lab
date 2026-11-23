@@ -120,6 +120,9 @@ package struct MaterialFracture: Sendable {
     // mean of the two adjacent constant-strain triangles (legacy 0.8 criterion,
     // retained only for A/B verification via ImpactCheck --legacy-insertion).
     package nonisolated(unsafe) static var recoveredInsertionStress = true
+    // ImpactCheck can reproduce the pre-existing one-lip frame for comparison.
+    package nonisolated(unsafe) static var symmetricTensileFrame = true
+
     private struct Face: Sendable {
         let left, right: Edge // Element corner IDs, both in the left triangle's orientation.
         let normal: Point
@@ -136,8 +139,10 @@ package struct MaterialFracture: Sendable {
 
         var failed: Bool { min(maxima.x, maxima.y) >= law.finalOpening }
 
-        func frame(_ positions: [Point]) -> (tangent: Point, normal: Point, length: Double) {
-            let chord = positions[left.b] - positions[left.a]
+        func frame(_ positions: [Point], rightWeight: Double) -> (tangent: Point, normal: Point, length: Double) {
+            let leftChord = positions[left.b] - positions[left.a]
+            let rightChord = positions[right.b] - positions[right.a]
+            let chord = (1 - rightWeight) * leftChord + rightWeight * rightChord
             let length = simd_length(chord)
             let t = chord / length
             return (t, Point(t.y, -t.x), length)
@@ -440,12 +445,25 @@ package struct MaterialFracture: Sendable {
         values.storedEnergy = 0
         values.dissipation = 0
         var contactEnergy = 0.0
+        // Equal participation makes the local work and force independent of
+        // which triangle happened to provide the first lip during insertion.
+        let rightWeight = tensileInitiation && Self.symmetricTensileFrame ? 0.5 : 0
         for i in interfaces.indices {
             var seam = interfaces[i]
             let length = faces[seam.face].length
-            let frame = seam.frame(position)
-            guard frame.length.isFinite && frame.length > 0.15 * length else { return nil }
             let (gapA, gapB) = seam.gap(position)
+            if rightWeight > 0 && seam.failed && !pairedClosure {
+                // A spent interface has no forces. Its disconnected lips can
+                // rotate past each other; geometric contact acts independently.
+                values.damagedEdges += 1
+                values.failedEdges += 1
+                values.crackLength += length
+                values.dissipation += length * seam.law.energy
+                values.separation = max(values.separation, simd_length(gapA), simd_length(gapB))
+                continue
+            }
+            let frame = seam.frame(position, rightWeight: rightWeight)
+            guard frame.length.isFinite && frame.length > 0.15 * length else { return nil }
             let weight = 0.5 * length
             for q in 0..<2 {
                 let b = q == 0 ? 0.21132486540518713 : 0.7886751345948129
@@ -458,10 +476,10 @@ package struct MaterialFracture: Sendable {
                 // Differentiate the rotating local frame as well as the gap.
                 let rotation = -weight * (sample.traction.x * local.y - sample.traction.y * local.x)
                     / frame.length * frame.normal
-                force[seam.left.a] += a * traction + rotation
-                force[seam.left.b] += b * traction - rotation
-                force[seam.right.a] -= a * traction
-                force[seam.right.b] -= b * traction
+                force[seam.left.a] += a * traction + (1 - rightWeight) * rotation
+                force[seam.left.b] += b * traction - (1 - rightWeight) * rotation
+                force[seam.right.a] += -a * traction + rightWeight * rotation
+                force[seam.right.b] += -b * traction - rightWeight * rotation
                 values.storedEnergy += weight * sample.stored
                 values.dissipation += weight * sample.loss
                 contactEnergy += weight * sample.closure

@@ -1,5 +1,7 @@
 # Experimental tensile fracture and separation
 
+These runs record checkpoint `fc188ee` and its original cohesive frame. The symmetric-frame results and current interpretation are in [Tensile crack propagation and fragment motion](TENSILE_PROPAGATION.md).
+
 Impact Lab can now initiate cohesive cracks in a custom elastic material at an explicit tensile traction in pascals. The [bend coupon scene](scene-examples/tensile-separation.json) shows the coupon deforming, losing cohesion, separating, and making contact with a deformable receiver. Its material and fracture parameters are illustrative.
 
 ## Open the experiment

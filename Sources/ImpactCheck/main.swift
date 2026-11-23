@@ -104,10 +104,16 @@ if ["--legacy-insertion", "--sibling-contact", "--detachment-contact"].contains(
     MaterialFracture.recoveredInsertionStress = false
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--tensile-propagation") {
+    try tensilePropagationCheck(Array(CommandLine.arguments.dropFirst(index + 1)))
+    exit(EXIT_SUCCESS)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--tensile-separation") {
     let args = CommandLine.arguments
-    let path = args.indices.contains(index + 1) ? args[index + 1] : "docs/scene-examples/tensile-separation.json"
-    try tensileSeparationCheck(sceneURL: URL(fileURLWithPath: path))
+    let options = args.dropFirst(index + 1)
+    let path = options.first(where: { !$0.hasPrefix("--") }) ?? "docs/scene-examples/tensile-separation.json"
+    try tensileSeparationCheck(sceneURL: URL(fileURLWithPath: path), refinedOnly: options.contains("--refined-only"))
     exit(EXIT_SUCCESS)
 }
 

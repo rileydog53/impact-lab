@@ -222,6 +222,68 @@ func cohesivePatchCheck(tensileInitiation: Bool = false) {
     }
 }
 
+// Two orderings of the same triangles describe the same physical interface.
+func tensileFaceFrameCheck() {
+    let length = 0.02
+    let points = [Point(0, 0), Point(length, 0), Point(length / 2, length), Point(length / 2, -length)]
+    let top = (0, 1, 2), bottom = (1, 0, 3)
+    let material = Material()
+    var settings = MaterialFractureSettings()
+    settings.tensileStrength = 20_000
+    let stress = ElementPiola(.zero, Point(0, 20_000))
+    func specimen(_ triangles: [(Int, Int, Int)]) -> (MaterialFracture, Mesh) {
+        let mesh = Mesh(reference: points, triangles: triangles, boundary: [])
+        let body = Body(mesh: mesh, material: material, position: points, velocity: .zero)
+        var fracture = MaterialFracture(body: body, settings: settings)
+        let split = fracture.insert(position: points, piola: [stress, stress], mesh: mesh)!
+        return (fracture, split.mesh)
+    }
+    func evaluation(_ triangles: [(Int, Int, Int)]) -> (energy: Double, work: Double, forces: [Point]) {
+        var (fracture, mesh) = specimen(triangles)
+        let upper = mesh.elements.first { $0.c == 2 }!
+        let lower = mesh.elements.first { $0.c == 3 }!
+        var positions = mesh.reference
+        positions[upper.a] += Point(4e-5, -1e-5)
+        positions[upper.b] += Point(-1e-5, 6e-5)
+        positions[lower.a] += Point(1.5e-4, -3e-4)
+        positions[lower.b] += Point(-1.5e-4, -1.5e-4)
+        var force = Array(repeating: Point.zero, count: positions.count)
+        require(fracture.accumulate(position: positions, reference: mesh.reference, force: &force, pairedClosure: false) != nil,
+                "A distorted cohesive patch failed")
+        let momentError = abs(zip(positions, force).reduce(0.0) { $0 + moment($1.0, $1.1) })
+        require(momentError < 1e-10 && simd_length(force.reduce(.zero, +)) < 1e-10,
+                "A distorted cohesive patch exerts a net force or torque")
+        require(fracture.reading.dissipation > 0 && fracture.reading.failedEdges == 0,
+                "Lip-order check should load a partially damaged seam")
+        return (fracture.reading.storedEnergy, fracture.reading.dissipation,
+                [upper.a, upper.b, lower.a, lower.b].map { force[$0] })
+    }
+    let forward = evaluation([top, bottom]), reverse = evaluation([bottom, top])
+    let forceError = zip(forward.forces, reverse.forces).map { simd_distance($0, $1) }.max()!
+    require(max(abs(forward.energy - reverse.energy), abs(forward.work - reverse.work)) < 1e-12 && forceError < 1e-10,
+            "Exchanging cohesive lips changed work or force")
+    print(String(format: "Exchanged cohesive lips: force change %.2e N/m, fracture-work change %.2e J/m",
+                 forceError, abs(forward.work - reverse.work)))
+
+    var (fracture, mesh) = specimen([top, bottom])
+    let upper = mesh.elements[0], lower = mesh.elements[1]
+    var positions = mesh.reference
+    for node in [lower.a, lower.b, lower.c] { positions[node].y -= 0.01 }
+    var force = Array(repeating: Point.zero, count: positions.count)
+    _ = fracture.accumulate(position: positions, reference: mesh.reference, force: &force, pairedClosure: false)
+    require(fracture.reading.pieces == 2, "The opening control did not release both lips")
+    let spentWork = fracture.reading.dissipation
+    // Rotate the lower piece half a turn about its separation axis. The
+    // mid-chord is now zero. Geometric contact, outside this patch, is separate.
+    positions.swapAt(lower.a, lower.b)
+    positions[lower.c] = 0.5 * (positions[lower.a] + positions[lower.b]) + Point(0, length)
+    force = Array(repeating: .zero, count: positions.count)
+    require(fracture.accumulate(position: positions, reference: mesh.reference, force: &force, pairedClosure: false) == 0
+            && fracture.reading.dissipation == spentWork && force.allSatisfy { $0 == .zero }
+            && simd_distance(positions[upper.a], positions[lower.b]) > 0,
+            "A fully spent seam still couples rotation or changes fracture work")
+}
+
 private struct FractureOutcome {
     var dt = 0.0
     var energyError = 0.0
