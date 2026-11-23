@@ -1,13 +1,171 @@
 # Impact Lab product recovery
 
-The six cards below are the active plan from checkpoint `15e8a6d`. The [full cards](docs/PRODUCT_RECOVERY.md) contain implementation scope and acceptance criteria. The original foundation plan follows for historical reference.
+The recovery plan started at checkpoint `15e8a6d`. The [original recovery cards](docs/PRODUCT_RECOVERY.md) retain the scope and acceptance criteria for Cards 1–6. The amendment below extends those requirements and governs execution order. The original foundation plan follows for historical reference.
 
 - [x] Card 1 — Make the Application Usable
 - [x] Card 2 — Build a Genuine Assembly Workshop
 - [ ] Card 3 — Make Materials and Physical Conditions Meaningful
 - [ ] Card 4 — Make the Calculated Physics Visible
 - [ ] Card 5 — Scale the Computational Engine
+- [ ] Card 7 — Build the Experimental Scenario Library
 - [ ] Card 6 — Prove the Complete Product Works
+
+## Amended execution order
+
+**Card 2 → Card 3 core (3A and 3B) → Card 4 → Card 5 → Card 7 → Card 6.** Cards 1 and 2 are complete. Card 7 takes its own acceptance gate before final release verification. Card 6 retains its number and all four original end-to-end exercises.
+
+Impact Lab is a native macOS laboratory for research, education, and exploration in materials and structural dynamics. Users should be able to construct experiments, assign materials, configure supported loads and initial conditions, calculate physical behavior, and inspect deformation, stress, plasticity, damage, fracture, and contact. Use general mechanics terminology and keep the architecture applicable to physical systems. The product scope excludes weapon-specific optimization, human-injury modeling, and depictions of harm to people. Shock waves, energetic-material phenomena, extreme deformation, and fragmentation remain topics for scientific exploration where supported by defensible models.
+
+### Card 3 — Materials and physical conditions
+
+- **3A · Data and usable reference profiles.** Deliver a searchable library starting with structural carbon steel, annealed stainless steel 304, aluminum 6061-T6, and annealed copper C11000. Expose the supported constitutive model, parameters, units, provenance, and limitations. Let users assign, duplicate, edit, save, and recover profiles. Preserve the Card 2 workflow for independently assigning materials to bodies and assigning materials to supported regions. The selected profile must change the solver inputs.
+- **3B · Verified metal mechanics.** Review the current Swift J2 update before changing it. Add or improve tabulated isotropic hardening where needed. Provide a preview of the response the solver uses, and verify a meaningful comparison between two metal parameter sets. Apply the conventions and verification gates in the [material specifications](#material-model-specifications-and-source-references).
+- **3C · Extensible constitutive architecture.** Reuse the solver’s existing interfaces where they already support the required kinematics, state, stress, energy, timestep, and field outputs. Add testable extension points where a concrete model needs them.
+- **3D · Selected advanced material extensions.** Treat brittle and cohesive extensions and the other model families below as independently justified work. Each needs evidence, a compatible numerical formulation, and standalone verification before use in scenarios. This research can continue after initial product acceptance.
+
+Keep the original physical-condition controls and acceptance criteria, including the preview of initial velocity magnitude and direction, constraints, and supported loads. Show relevant mass, momentum, and kinetic energy. Explain static setups, bodies that cannot interact in the run window, and incompatible settings. Fixed or clamped constraints still require solver support. Advance to Card 4 once 3A and 3B satisfy the core material workflow and verification gates. Work in 3C and 3D does not gate later cards.
+
+### Card 4 — Calculated physics and visualization
+
+Extend the existing replay, field inspection, and instrumentation work with equivalent and principal stress, plastic strain, damage, material-interface state, recoverable energy, dissipated energy, and comparisons of constitutive response where the solver supports them. Give each field a definition, stress measure where relevant, units, and limitations. Show whether a displayed value comes from the solver, a valid derivation, or display interpolation. Distinguish permanent bonds, damaged interfaces, and physical separation. Keep the original playback, gauges, Study comparisons, and export criteria.
+
+### Card 5 — Computational scaling
+
+Profile constitutive updates separately from other FEM work, force assembly, contact, geometry, and output recording. Measure state memory per element and the time and memory costs of representative material models at relevant resolutions. Compare optimized or parallel runs against the verified baseline using documented numerical tolerances. Preserve the original progress, cancellation, reproducibility, and measured-performance criteria.
+
+### Card 7 — Experimental scenario library
+
+Build on the existing library and use the native editor, solver, and replay workflow. Prioritize scenarios built from verified core physics.
+
+| Scenario | What the user compares |
+|---|---|
+| Elastic contrast | Wave speed and impedance for two elastic materials |
+| Elastic versus yielding response | Recovery and permanent set under comparable loading |
+| Strain hardening | Two J2 responses with calibrated or clearly illustrative hardening |
+| Bonded layers | Stress and wave transmission across a permanent bond |
+| Interface failure | Opening, energy dissipation, and recontact for an independently specified cohesive interface, when validated |
+| Brittle versus ductile and other nonlinear responses | Material-specific behavior after the corresponding constitutive model and failure criteria have passed standalone checks |
+
+**Acceptance.** Demonstrate the core scenarios in the native app. Each shipped scenario must expose meaningful controls, produce a calculated physical event, show visible results and relevant measurements, and explain the scientific limitations. Users must be able to edit and rerun the scenarios. Advanced demonstrations enter the library when their models are verified and need not delay the core library.
+
+### Card 6 — Final product verification
+
+Add the material comparison to the existing preset exercise and carry the material assignment and provenance checks into the blank-canvas exercise. In the native app, load a recognizable profile, inspect its properties and evidence, assign it to an editable body, and calculate the response. Substitute a materially different profile, measure and compare the changed result, and explain which conclusions are quantitative, qualitative, or illustrative. A profile picker alone does not satisfy acceptance. Keep the refinement and computational stress exercises, regression evidence, native walkthrough, and personal user acceptance. Verify the shipped Card 7 scenario workflow before release.
+
+## Material model specifications and source references
+
+### Common framework
+
+Before adding a model, inspect how the current Swift solver receives deformation, advances internal state, calculates stress, and accounts for energy. Preserve the validated finite-deformation framework. In the reference configuration, momentum balance is
+
+$$
+\rho_0\ddot{\mathbf u}=\operatorname{Div}\mathbf P+\rho_0\mathbf b .
+$$
+
+Here \(\rho_0\) is reference density, \(\mathbf u\) is displacement, \(\mathbf P\) is first Piola–Kirchhoff stress, and \(\mathbf b\) is body acceleration. Derive any transformation between infinitesimal and finite-deformation formulations. Verify the stress measure, objective update, flow rule, and work conjugacy. State whether a 2D model uses plane strain or plane stress and explain its out-of-plane assumptions.
+
+For 3D isotropic linear elasticity, with Young’s modulus \(E\) and Poisson’s ratio \(\nu\),
+
+$$
+G=\frac{E}{2(1+\nu)},\qquad
+K=\frac{E}{3(1-2\nu)},\qquad
+\lambda=\frac{E\nu}{(1+\nu)(1-2\nu)},\qquad
+\boldsymbol\sigma=2G\boldsymbol\varepsilon+\lambda\,\operatorname{tr}(\boldsymbol\varepsilon)\mathbf I .
+$$
+
+Check positivity and admissibility of elastic inputs. The model interface should carry identity, units and parameters, element kinematics and prior state, updated stress and state, recoverable energy, dissipation increments, any stable-timestep contribution, and fields available for display. Track recoverable elastic energy, plastic and viscous dissipation, damage or fracture energy, contact work and energy, external work, and kinetic energy where applicable. Account for dissipated and stored energy separately.
+
+### Material data and provenance
+
+Record a stable identifier, display name, family, alloy or grade, temper or processing condition, density, elastic constants, constitutive law and model version. Include plastic, damage, fracture, rate, and thermal parameters where supported. Record source citations or URLs, product form, reference temperature, applicable strain-rate range when known, uncertainty, simplifications, and unsupported behavior. Track provenance per parameter or calibrated set. Values for one part of a model establish evidence for that part only.
+
+- **Reference-backed.** A traceable source supports the relevant values. Identify any remaining calibration gaps and whether each value is typical, a minimum, or an estimate.
+- **Representative / approximate.** The values support exploration within stated limits. Identify assumptions and incomplete calibration.
+- **Illustrative.** The values demonstrate model behavior without claiming to characterize a specific material condition.
+
+Show the selected material’s explanation, actual model, numerical inputs, represented and unsupported behaviors, evidence, and constitutive preview where applicable. Explain unavailable model combinations. Save custom profiles independently of recoverable built-ins. Attribute hardening, failure strains, fracture toughness, and rate coefficients to real materials only when the data support that attribution.
+
+| Starting candidate | Density (kg/m³) | Young’s modulus (GPa) | Poisson’s ratio | Initial yield (MPa) |
+|---|---:|---:|---:|---:|
+| Structural carbon steel, A36-like | ~7,850 | ~200 | ~0.30 | ~250 |
+| Stainless steel 304, annealed | ~8,000 | ~193 | ~0.29 | ~205 |
+| Aluminum 6061-T6 | ~2,700 | ~68.9 | ~0.33 | ~276 |
+| Copper C11000, annealed | ~8,940 | ~117 | ~0.34 | ~70 |
+
+These are preliminary candidates. Before treating a value as reference-backed, verify the material condition, product form, temperature, strength definition, and uncertainty with a primary or authoritative source. Prefer data from one consistent material condition. Where no reliable hardening curve is available, retain source-backed elastic values and label optional plastic behavior as illustrative. Aluminum 5083, Ti-6Al-4V, and hardened high-strength steel are later candidates when the data and model support them.
+
+Candidate sources for the implementation session are [NASA MAPTIS](https://maptis.nasa.gov/), [NIST Materials Data Repository](https://www.nist.gov/programs-projects/materials-data-repository), [ASM/MatWeb 6061-T6](https://asm.matweb.com/search/SpecificMaterial.asp?bassnum=MA6061T6), [Copper Development Association C11000](https://alloys.copper.org/alloy/C11000), [Aperam stainless steel technical data](https://www.aperam.com/), and [Abaqus constitutive model documentation](https://docs.software.vt.edu/abaqusv2026/). Check access, reuse rights, and calibration coverage independently. Use citations and manually curated profile records where necessary. Respect restrictions on scraping and dataset redistribution.
+
+### J2 metal plasticity
+
+With Cauchy stress \(\boldsymbol\sigma\), deviatoric stress \(\mathbf s\), and accumulated equivalent plastic strain \(\bar\varepsilon^p\),
+
+$$
+\mathbf s=\boldsymbol\sigma-\tfrac13\operatorname{tr}(\boldsymbol\sigma)\mathbf I,\qquad
+q=\sqrt{\tfrac32\mathbf s:\mathbf s},\qquad
+f=q-\sigma_y(\bar\varepsilon^p)\leq0,\qquad
+\sigma_y=H(\bar\varepsilon^p).
+$$
+
+J2 is pressure-insensitive. Pressure-sensitive crushing, concrete failure, and foam densification require different formulations. Define table interpolation, extrapolation, and rejection of invalid entries. Use a monotonic or justified regularized hardening curve. For monotonic uniaxial tests before necking, the usual conversions are
+
+$$
+\sigma_{\rm true}=\sigma_{\rm eng}(1+\varepsilon_{\rm eng}),\qquad
+\varepsilon_{\rm true}=\ln(1+\varepsilon_{\rm eng}),\qquad
+\varepsilon^p_{\rm true}\approx\varepsilon_{\rm true}-\sigma_{\rm true}/E .
+$$
+
+Use a separate calibration procedure for post-necking data. The conventional small-strain radial-return relation and its linear-hardening specialization are
+
+$$
+q_{\rm trial}-3G\Delta\gamma-\sigma_y(\bar\varepsilon_n^p+\Delta\gamma)=0,\qquad
+\Delta\gamma=\frac{q_{\rm trial}-\sigma_y(\bar\varepsilon_n^p)}{3G+H'} .
+$$
+
+Use these relations as references when evaluating the existing finite-deformation update. Verify uniaxial elasticity, yield onset, monotonic hardening, unloading with permanent strain, reloading, work partition, mesh and timestep sensitivity, and a comparison between different parameter sets. Display the curve the selected model actually consumes. A future \(\sigma_y(\bar\varepsilon^p,\dot{\bar\varepsilon}^p,T)\) law may use calibrated Johnson–Cook, Perzyna, or another suitable model after independent justification.
+
+### Brittle fracture and cohesive interfaces
+
+A simplified tensile criterion \(f_t=\sigma_1-f_t^{\rm crit}\) describes initiation from maximum principal stress. Propagation needs a separate law, regularization, and evidence for energy dissipation and crack-path behavior. For cohesive separation,
+
+$$
+G_c=\int_0^{\delta_f}t(\delta)\,d\delta,\qquad
+G_c=\tfrac12t_{\max}\delta_f\quad\text{for a triangular traction–separation area}.
+$$
+
+Retain the verified cohesive insertion and Version 0.8 and 0.9 contact behavior. Account for initial stiffness, insertion, damage state, opening definition, and mode mixity. Keep bulk damage separate from interface failure. Failure-capable interfaces can use their own normal and shear strengths, mode-I and mode-II fracture energies, and mixed-mode criterion. Permanent bonds remain intact under the permanent-bond model. Glass and ceramic profiles may use simplified tensile behavior with explicit limits on crushing, confinement, pulverization, and 3D crack networks. Verify tensile opening, traction–separation, work of separation, compression, mixed mode when supported, opening and recontact, refinement, and conservation through topology changes.
+
+### Advanced constitutive families
+
+**Hyperelastic elastomers.** A candidate compressible neo-Hookean potential uses \(W=\mu(\bar I_1-3)/2+K(J-1)^2/2\), with \(J=\det\mathbf F\), \(\bar I_1=J^{-2/3}I_1\) in 3D, and \(\mathbf P=\partial W/\partial\mathbf F\). It needs finite-strain kinematics, suitable 2D reduction, deformation data, and a stable treatment of near-incompressibility that checks locking and timestep effects. Verify uniaxial deformation, shear, volume response, unloading, and an independent energy comparison.
+
+**Viscoelastic polymers and interlayers.** A candidate relaxation modulus is \(G(t)=G_\infty+\sum_iG_i e^{-t/\tau_i}\). Use calibrated relaxation times and moduli, history variables, stable time integration, and viscous dissipation. Verify relaxation, cyclic loading, and comparison across loading rates. An ordinary J2 law represents plastic flow.
+
+**Orthotropic composites.** A candidate plane-stress relation in material coordinates is
+
+$$
+\begin{bmatrix}\varepsilon_1\\\varepsilon_2\\\gamma_{12}\end{bmatrix}
+=
+\begin{bmatrix}
+1/E_1&-\nu_{21}/E_2&0\\
+-\nu_{12}/E_1&1/E_2&0\\
+0&0&1/G_{12}
+\end{bmatrix}
+\begin{bmatrix}\sigma_1\\\sigma_2\\\tau_{12}\end{bmatrix},
+\qquad \nu_{12}/E_1=\nu_{21}/E_2 .
+$$
+
+Use independent directional data, enforce positive definiteness and reciprocity, and rotate the constitutive tensor by material orientation. Verify axial, transverse, shear, and rotated tests. Woven behavior and fiber failure require their own models and checks.
+
+**Crushable foams and cellular cores.** Use a documented pressure-sensitive yield surface and volumetric hardening law, such as a suitable Deshpande–Fleck formulation. The inputs include \(p=-\operatorname{tr}(\boldsymbol\sigma)/3\), the J2 equivalent stress \(q\) defined above, and volumetric plastic state. Verify irreversible compaction, the crush plateau, densification, work accounting, and rate effects where supported. Explicitly meshed honeycomb walls can buckle as a structure. Distinguish that response from homogenized material crushability.
+
+**Concrete and pressure-sensitive brittle solids.** A suitable Drucker–Prager-type or damaged-plasticity formulation needs data and controls for tensile and compressive response, confinement, irreversible deformation, and regularized damage or fracture energy. Verify tension, compression under different confinement, stiffness degradation, and energy across mesh sizes.
+
+**Dynamic thermomechanics.** A candidate energy balance is \(\rho c_p\dot T=\beta\boldsymbol\sigma:\dot{\boldsymbol\varepsilon}^{p}+\text{heat-transfer terms}\), with \(\beta\) the calibrated or assumed fraction of plastic work converted to heat. Require compatible thermal parameters and boundary conditions, thermodynamic consistency, and verified heating and heat transfer. Localization and extreme-rate flow require separate kinematic, mesh regularization, and coupled-model validation.
+
+### Verification gate for any new family
+
+Start with a minimal standalone control and use analytically tractable tests where possible. Check equations, units and stress measures, state updates, conservation and dissipation, loading and unloading, timestep sensitivity, relevant mesh sensitivity, and pathological inputs. Verify material selection and editing in the app and confirm that reopening a saved scene reconstructs the same model and parameters. Run focused regressions for substantive changes. Use numerical verification to establish whether the implementation solves the stated model and experimental validation to establish whether the model represents the material.
 
 ## Card 1 checkpoint
 
@@ -16,6 +174,8 @@ Commit `dded9a2` on `main` ships the native assembly editor. In the running app,
 Native undo and redo restored the edited values. Save and Open restored the same position, dimensions, and rotation, and Open prompted before replacing unsaved edits. The existing launcher opened the release app. `ImpactCheck --assembly`, `ImpactCheck --experiment-library`, and `git diff --check` passed. Physical trackpad pinch remains untested.
 
 ## Card 2 verification
+
+The implementation checkpoint is `5317179` on `main`.
 
 In an isolated native release build, a blank assembly became a round driver, a plate with three permanently bonded materials, and a rotated deformable support. The plate and support were aligned and spaced 10 mm apart. A spring was placed by clicking its two material anchors. The native mesh report showed 526 triangles after refining the plate. Saving and reopening preserved the geometry, materials, refinement, group, and spring.
 
