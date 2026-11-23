@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "impact-lab-scene-v1",
+  "title": "Impact Lab assembly scene, version 1",
+  "description": "Hand-written, generated or saved Impact Lab scenes. SI units throughout: metres, seconds, m/s, pascals, kg/m³; angles in degrees. Omitted settings take the workshop defaults. Impact Lab itself applies further cross-field rules (listed in docs/SCENE_FORMAT.md) and explains any violation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["parts"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "description": { "type": "string", "description": "Free text. Not kept when the app saves." },
+    "assemblyVersion": { "const": 1 },
+    "duration": { "type": "number", "minimum": 0.0001, "maximum": 0.25, "default": 0.12, "description": "Simulated time in seconds." },
+    "meshResolution": { "$ref": "#/$defs/resolution", "description": "Assembly mesh for every body without its own refinement. Default standard." },
+    "parts": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/part" } },
+    "connections": { "type": "array", "maxItems": 12, "items": { "$ref": "#/$defs/connection" } },
+    "gauges": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/gauge" } },
+    "monitor": { "$ref": "#/$defs/bodyReference", "description": "Body tracked in the motion plot. Default: the first body." },
+    "relativeTo": { "$ref": "#/$defs/bodyReference", "description": "Plot the monitored body's motion relative to this body." },
+    "bodyOrder": { "type": "array", "items": { "$ref": "#/$defs/bodyReference" }, "description": "Workshop list order only; does not affect physics." },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["members"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "members": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/bodyReference" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "description": "A UUID, or for bodies any readable text such as \"striker\". Optional; generated when omitted." },
+    "bodyReference": { "type": "string", "description": "A body's name, readable id or UUID." },
+    "point": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } }
+      ]
+    },
+    "resolution": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1, "maximum": 7 },
+        { "enum": ["standard", "fine", "extraFine", "x4", "x5", "x6", "x7"] }
+      ],
+      "description": "Element size about 9 mm divided by the level: standard 9, fine 4.5, extraFine 3, x4 2.25, x5 1.8, x6 1.5, x7 1.29 mm."
+    },
+    "profile": {
+      "enum": ["structural-steel-a36", "stainless-304-annealed", "aluminum-6061-t6", "copper-c11000-annealed"]
+    },
+    "material": {
+      "oneOf": [
+        { "$ref": "#/$defs/profile" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["profile"],
+          "properties": {
+            "profile": { "$ref": "#/$defs/profile" },
+            "elasticOnly": { "type": "boolean", "default": false, "description": "Use the profile's elastic constants without its J2 plasticity." }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "young": { "type": "number", "minimum": 500000, "maximum": 400000000000, "default": 1000000, "description": "Young's modulus, Pa." },
+            "density": { "type": "number", "minimum": 100, "maximum": 25000, "default": 1000, "description": "kg/m³." },
+            "poisson": { "type": "number", "minimum": -0.9, "maximum": 0.48, "default": 0 },
+            "provenance": { "type": "object", "description": "Written by the app for library profiles. Prefer the profile form when writing by hand." }
+          }
+        }
+      ]
+    },
+    "plasticity": {
+      "type": "object", "additionalProperties": false,
+      "description": "Only for custom materials. A profile sets plasticity itself.",
+      "properties": {
+        "response": { "enum": ["Elastic", "Elastoplastic", "elastic", "elastoplastic"], "default": "Elastic" },
+        "yieldFraction": { "type": "number", "minimum": 0.010, "maximum": 0.035, "default": 0.016, "description": "Yield stress as a fraction of Young's modulus, when no table is given." },
+        "hardeningFraction": { "type": "number", "minimum": 0.25, "maximum": 0.45, "default": 0.32, "description": "Linear hardening modulus as a fraction of Young's modulus, when no table is given." },
+        "table": {
+          "type": "object", "additionalProperties": false, "required": ["points"],
+          "properties": {
+            "points": {
+              "type": "array", "minItems": 2, "maxItems": 32,
+              "description": "Equivalent plastic strain (0–1, starting at 0, increasing) and Kirchhoff flow stress (Pa, never decreasing).",
+              "items": {
+                "oneOf": [
+                  { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                  { "type": "object", "additionalProperties": false, "required": ["strain", "stress"],
+                    "properties": { "strain": { "type": "number" }, "stress": { "type": "number" } } }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "part": {
+      "type": "object", "additionalProperties": false, "required": ["name", "size"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 48 },
+        "description": { "type": "string" },
+        "shape": { "enum": ["Block", "Enclosure", "Round body", "block", "rectangle", "enclosure", "hollow", "round", "circle", "ellipse"], "default": "Block" },
+        "center": { "$ref": "#/$defs/point", "default": [0, 0], "description": "Body centre, m, each coordinate −1 to 1." },
+        "size": { "$ref": "#/$defs/point", "description": "Width and height (or the two diameters of a round body), each 0.025–0.30 m." },
+        "angle": { "type": "number", "minimum": -360, "maximum": 360, "default": 0, "description": "Counter-clockwise rotation, degrees." },
+        "velocity": { "$ref": "#/$defs/point", "default": [0, 0], "description": "Initial uniform velocity [vx, vy], m/s, each −150 to 150." },
+        "wall": { "type": "number", "default": 0.012, "description": "Enclosure wall thickness, m; 0.005 m to 0.4 × the smaller size." },
+        "refinement": { "$ref": "#/$defs/resolution", "description": "This body's mesh level, overriding meshResolution." },
+        "material": { "$ref": "#/$defs/material" },
+        "plasticity": { "$ref": "#/$defs/plasticity" },
+        "fracture": {
+          "type": "object", "additionalProperties": false,
+          "description": "Illustrative cohesive cracking. Blocks and enclosures with a custom (non-profile) material only.",
+          "properties": {
+            "strengthFraction": { "type": "number", "minimum": 0.005, "maximum": 0.08, "default": 0.03, "description": "Tensile strength as a fraction of Young's modulus." },
+            "energy": { "type": "number", "minimum": 0.5, "maximum": 50, "default": 7, "description": "Fracture energy, J/m²." },
+            "meshPattern": { "enum": ["Aligned", "Staggered", "aligned", "staggered"] }
+          }
+        },
+        "notch": {
+          "type": "object", "additionalProperties": false, "description": "V-notch on the local bottom edge of a block.",
+          "properties": {
+            "centerFraction": { "type": "number", "minimum": -0.3, "maximum": 0.3, "default": 0 },
+            "widthFraction": { "type": "number", "minimum": 0.12, "maximum": 0.36, "default": 0.2 },
+            "depthFraction": { "type": "number", "minimum": 0.02, "maximum": 0.45, "default": 0.2 }
+          }
+        },
+        "bondedLayer": {
+          "type": "object", "additionalProperties": false,
+          "description": "Permanently bonded second (and third) elastic material along the block's local x axis. Elastic blocks without fracture or notch only.",
+          "properties": {
+            "interfaceFraction": { "type": "number", "minimum": 0.1, "maximum": 0.9, "default": 0.5 },
+            "material": { "$ref": "#/$defs/material" },
+            "third": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "interfaceFraction": { "type": "number", "minimum": 0.1, "maximum": 0.9, "default": 0.75 },
+                "material": { "$ref": "#/$defs/material" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "connection": {
+      "type": "object", "additionalProperties": false, "required": ["first", "second"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "first": { "$ref": "#/$defs/bodyReference" },
+        "second": { "$ref": "#/$defs/bodyReference" },
+        "kind": { "enum": ["Spring", "Breakable", "spring", "breakable", "cohesive"], "default": "Spring" },
+        "firstAnchor": { "$ref": "#/$defs/point", "default": [1, 0], "description": "On the first body, in fractions of its half-size (−1 to 1). [1, 0] is the middle of its right edge." },
+        "secondAnchor": { "$ref": "#/$defs/point", "default": [-1, 0] },
+        "stiffness": { "type": "number", "minimum": 500, "maximum": 250000, "default": 12000, "description": "N/m² (force per unit extension, per metre of out-of-plane depth). Shown as kN/m² in the app." },
+        "criticalExtension": { "type": "number", "minimum": 0.0005, "maximum": 0.04, "default": 0.006, "description": "Extension at which a breakable link fails, m." },
+        "span": { "type": "number", "minimum": 0, "maximum": 1.9, "default": 0, "description": "Spread the link along the edge, as a fraction of the half-size." }
+      }
+    },
+    "gauge": {
+      "type": "object", "additionalProperties": false, "required": ["name", "body", "location"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 48 },
+        "body": { "$ref": "#/$defs/bodyReference" },
+        "location": { "$ref": "#/$defs/point", "description": "In the body's own (unrotated) coordinates: metres from its centre, or fractions of its half-size when usesBodyFractions is true. Must lie inside material." },
+        "usesBodyFractions": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "description": "A steel ball strikes an aluminum plate backed by a steel block. Swap the plate's profile to compare metals.",
+  "duration": 0.001,
+  "meshResolution": "extraFine",
+  "parts": [
+    { "name": "Plate", "size": [0.11, 0.025], "center": [0, 0],
+      "material": "aluminum-6061-t6" },
+    { "name": "Ball", "shape": "round", "size": [0.03, 0.03], "center": [0.072, 0],
+      "velocity": [-40, 0],
+      "material": { "profile": "structural-steel-a36", "elasticOnly": true } },
+    { "name": "Backing block", "size": [0.045, 0.06], "center": [-0.078, 0],
+      "material": { "profile": "structural-steel-a36", "elasticOnly": true } }
+  ],
+  "monitor": "Plate",
+  "gauges": [
+    { "name": "Impact face", "body": "Plate", "location": [0.9, 0], "usesBodyFractions": true },
+    { "name": "Rear face", "body": "Plate", "location": [-0.9, 0], "usesBodyFractions": true }
+  ]
+}

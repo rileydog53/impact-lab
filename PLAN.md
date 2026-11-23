@@ -116,6 +116,41 @@ Add the material comparison to the existing preset exercise and carry the materi
 
 **Acceptance.** All four end-to-end exercises and the material substitution were completed through the real application. Card 6 stays unchecked until the user completes `docs/CARD6_USER_CHECKLIST.md` and accepts it.
 
+### Usability requirement — Declarative scene files (added 2026-11-23)
+
+Users can write or generate a scene as JSON, open it, inspect and edit it in the workshop, calculate, and save or export the revised scene. The existing assembly file is the only format. `AssemblyScene.open` now reads it through `Sources/ImpactPhysics/SceneDocument.swift`, which accepts hand-written forms and validates strictly. Complete saved files pass through bit-for-bit, because numbers never go through JSONSerialization. The solver is unchanged.
+
+**Accepted short forms.** Omitted settings take the workshop defaults. Bodies may be referred to by name or by a readable id. A reference profile can be named, as `"aluminum-6061-t6"` or `{ "profile": …, "elasticOnly": true }`, and expands to its constants, provenance and hardening table. Mesh levels accept names such as `"fine"`, and points accept `[x, y]`.
+
+**Validation.** Unknown keys are rejected, with a suggestion for typos. Settings the solver cannot represent are rejected with the reason: fixed constraints, gravity and loads, friction, spin, temperature and rate effects, timestep and mass. Every range and cross-field rule is reported with its path, value and allowed range, all problems in one list. Overlapping bodies still open, and the workshop explains the overlap.
+
+**App.** The file actions menu (⋯) offers **Import Scene JSON…**, **Export Scene JSON Copy…** (does not change the open file), **Reload from Disk** (⇧⌘R) and **Scene JSON Format…** (an in-app reference with a copyable example).
+
+**Docs.** `docs/SCENE_FORMAT.md`, the JSON Schema `docs/scene-format.schema.json`, and `docs/scene-examples/`: five working scenes, a deliberately invalid one, and the generator `generate_stack.py`.
+
+**Verification.** `ImpactCheck --scene-documents` (about 45 s) checks four things:
+- **Round trip.** 19 built-in scenes reopen identical to the previous decoder.
+- **Error explanations.** Across 3,000 random edits, an explanation appears exactly when the solver rejects a scene (about 840 rejections).
+- **Short forms.** The defaults, profiles and named references load correctly, and 12 specific error messages are correct.
+- **Examples.** Every example loads, runs to completion with energy drift ≤0.104%, and re-imports its own export identically.
+
+The examples behave as documented:
+- `metal-plate-impact.json` reproduces the Card 6 blank-canvas aluminum run exactly: 60,220 steps, 2,350 J/m plastic.
+- In `notched-beam-fracture.json` the beam cracks, a piece detaches, and new-face contact follows.
+- In `linked-chain.json` the breakable link fails.
+
+The native walkthrough covered several steps:
+- The invalid example's error dialog.
+- Opening `linked-chain.json`, calculating, and seeing the link fail.
+- Editing the striker speed and dragging a body.
+- Exporting a copy.
+- Editing that file with a script (adding a short-form copper body) and using Reload from Disk.
+- Saving, which wrote the complete form.
+
+`--assembly`, `--assembly-replay`, `--assembly-study`, `--experiment-library`, `--metal-profiles`, `--fracture` and `--scenario-library` were rerun on this build.
+
+**Limits.** Custom Material Library profiles cannot be named in a file; assign them in the app and save. `description` text is not kept on save. Examples were not machine-validated against the JSON Schema, because no schema validator is installed; the app's own reader is the authority. One stiff metal body in a long soft-material scene makes runs slow, because the stable timestep is global.
+
 ## Material model specifications and source references
 
 ### Common framework

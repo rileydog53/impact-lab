@@ -320,11 +320,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     }
 
     public static func open(_ url: URL) throws -> Self {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
-        guard data.count <= 128 * 1024 else { throw AssemblyError.invalidSettings }
-        let scene = try JSONDecoder().decode(Self.self, from: data)
-        _ = try AssemblySimulation(scene)
-        return scene
+        try document(try Data(contentsOf: url, options: .mappedIfSafe))
     }
 }
 

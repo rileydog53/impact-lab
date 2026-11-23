@@ -15,6 +15,7 @@ struct AssemblyLab: View {
     @State private var showMeshReport = false
     @State private var showPieces = false
     @State private var compare = false
+    @State private var sceneGuide = false
     @State private var study = false
     @State private var library = false
     @State private var studySmokeResult: Result<AssemblyStudy, Error>?
@@ -72,6 +73,7 @@ struct AssemblyLab: View {
             }
         }
         .sheet(isPresented: $showMeshReport) { meshReport }
+        .sheet(isPresented: $sceneGuide) { SceneFormatGuide() }
         .sheet(isPresented: $measurements) {
             ReplayMeasurements(scene: experiment.scene, frames: experiment.frames,
                                events: experiment.replay?.events ?? [], time: experiment.displayTime)
@@ -345,6 +347,13 @@ struct AssemblyLab: View {
             Menu {
                 Button("Save As…") { save(asNewFile: true) }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                Divider()
+                Button("Import Scene JSON…") { open() }
+                Button("Export Scene JSON Copy…") { exportCopy() }
+                Button("Reload from Disk") { reloadFromDisk() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(experiment.fileURL == nil)
+                Button("Scene JSON Format…") { sceneGuide = true }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .accessibilityLabel("More file actions")
@@ -762,6 +771,27 @@ struct AssemblyLab: View {
         dialog.allowedContentTypes = [.json]
         dialog.directoryURL = experiment.fileURL?.deletingLastPathComponent()
         guard dialog.runModal() == .OK, let url = dialog.url else { return }
+        do {
+            replacement = Replacement(scene: try AssemblyScene.open(url), title: AssemblyExperiment.fileTitle(url), url: url)
+            applyPendingReplacement()
+        } catch { experiment.error = error.localizedDescription }
+    }
+
+    /// Writes the current scene for external tools without changing which file is open.
+    private func exportCopy() {
+        experiment.pause()
+        let dialog = NSSavePanel()
+        dialog.allowedContentTypes = [.json]
+        dialog.nameFieldStringValue = "\(experiment.title) export.json"
+        dialog.directoryURL = experiment.fileURL?.deletingLastPathComponent()
+        guard dialog.runModal() == .OK, let url = dialog.url else { return }
+        do { try experiment.scene.save(to: url) } catch { experiment.error = error.localizedDescription }
+    }
+
+    /// Re-reads the open file, for example after an external script rewrote it.
+    private func reloadFromDisk() {
+        guard let url = experiment.fileURL else { return }
+        experiment.pause()
         do {
             replacement = Replacement(scene: try AssemblyScene.open(url), title: AssemblyExperiment.fileTitle(url), url: url)
             applyPendingReplacement()

@@ -1,0 +1,17 @@
+{
+  "description": "A notched beam on two supports is struck from above. The illustrative crack model lets it break; raise fracture.energy to make it tougher.",
+  "duration": 0.06,
+  "parts": [
+    { "name": "Notched beam", "size": [0.163, 0.026],
+      "material": { "young": 1.0e6, "density": 950, "poisson": 0.12 },
+      "notch": { "depthFraction": 0.25 },
+      "fracture": { "strengthFraction": 0.03, "energy": 3.5 } },
+    { "name": "Striker", "size": [0.025, 0.043], "center": [0, 0.040], "velocity": [0, -1.45],
+      "material": { "young": 3.0e6, "density": 2200, "poisson": 0.15 } },
+    { "name": "Left support", "size": [0.033, 0.11], "center": [-0.062, -0.070],
+      "material": { "young": 3.5e6, "density": 2500, "poisson": 0.1 } },
+    { "name": "Right support", "size": [0.033, 0.11], "center": [0.062, -0.070],
+      "material": { "young": 3.5e6, "density": 2500, "poisson": 0.1 } }
+  ],
+  "monitor": "Notched beam"
+}

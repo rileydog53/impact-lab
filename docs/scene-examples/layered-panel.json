@@ -1,0 +1,22 @@
+{
+  "description": "A stress pulse crosses three bonded layers: a polymer-like facing, aluminum and steel. Gauges sit in each layer.",
+  "duration": 0.0004,
+  "meshResolution": "fine",
+  "parts": [
+    { "name": "Layered panel", "size": [0.2, 0.04], "center": [0, 0],
+      "material": { "young": 3e9, "density": 1200, "poisson": 0.35 },
+      "bondedLayer": {
+        "interfaceFraction": 0.4,
+        "material": "aluminum-6061-t6",
+        "third": { "interfaceFraction": 0.7, "material": "structural-steel-a36" }
+      } },
+    { "name": "Striker", "size": [0.04, 0.04], "center": [-0.1205, 0], "velocity": [10, 0],
+      "material": { "young": 3e9, "density": 1200, "poisson": 0.35 } }
+  ],
+  "monitor": "Layered panel",
+  "gauges": [
+    { "name": "Facing", "body": "Layered panel", "location": [-0.5, 0], "usesBodyFractions": true },
+    { "name": "Aluminum", "body": "Layered panel", "location": [0.1, 0], "usesBodyFractions": true },
+    { "name": "Steel", "body": "Layered panel", "location": [0.7, 0], "usesBodyFractions": true }
+  ]
+}

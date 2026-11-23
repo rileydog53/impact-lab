@@ -1,0 +1,88 @@
+{
+  "description": "5-plate stack struck at 25.0 m/s (generated)",
+  "duration": 0.0006,
+  "meshResolution": "fine",
+  "parts": [
+    {
+      "name": "Plate 1",
+      "size": [
+        0.025,
+        0.12
+      ],
+      "center": [
+        0.0,
+        0
+      ],
+      "material": "aluminum-6061-t6"
+    },
+    {
+      "name": "Plate 2",
+      "size": [
+        0.025,
+        0.12
+      ],
+      "center": [
+        0.025500000000000002,
+        0
+      ],
+      "material": "copper-c11000-annealed"
+    },
+    {
+      "name": "Plate 3",
+      "size": [
+        0.025,
+        0.12
+      ],
+      "center": [
+        0.051000000000000004,
+        0
+      ],
+      "material": "stainless-304-annealed"
+    },
+    {
+      "name": "Plate 4",
+      "size": [
+        0.025,
+        0.12
+      ],
+      "center": [
+        0.07650000000000001,
+        0
+      ],
+      "material": "structural-steel-a36"
+    },
+    {
+      "name": "Plate 5",
+      "size": [
+        0.025,
+        0.12
+      ],
+      "center": [
+        0.10200000000000001,
+        0
+      ],
+      "material": "aluminum-6061-t6"
+    },
+    {
+      "name": "Striker",
+      "shape": "round",
+      "size": [
+        0.03,
+        0.03
+      ],
+      "center": [
+        -0.028,
+        0
+      ],
+      "velocity": [
+        25.0,
+        0
+      ],
+      "material": {
+        "profile": "structural-steel-a36",
+        "elasticOnly": true
+      }
+    }
+  ],
+  "monitor": "Plate 1"
+}

@@ -1,0 +1,23 @@
+{
+  "description": "A tilted chain of three soft blocks joined by a spring and a breakable link, struck by a round body. Watch whether the link fails.",
+  "duration": 0.08,
+  "meshResolution": "standard",
+  "parts": [
+    { "name": "Block A", "size": [0.05, 0.04], "center": [-0.06, 0], "angle": 5,
+      "material": { "young": 2e6, "density": 1000, "poisson": 0.2 } },
+    { "name": "Block B", "size": [0.05, 0.04], "center": [0, 0],
+      "material": { "young": 2e6, "density": 1000, "poisson": 0.2 } },
+    { "name": "Block C", "size": [0.05, 0.04], "center": [0.06, 0], "angle": -5,
+      "material": { "young": 2e6, "density": 1000, "poisson": 0.2 } },
+    { "name": "Striker", "shape": "round", "size": [0.04, 0.04], "center": [-0.12, 0.01],
+      "velocity": [3, 0], "material": { "young": 5e6, "density": 2500, "poisson": 0.2 } }
+  ],
+  "connections": [
+    { "first": "Block A", "second": "Block B", "kind": "spring", "stiffness": 20000, "span": 0.6 },
+    { "first": "Block B", "second": "Block C", "kind": "breakable", "stiffness": 20000,
+      "criticalExtension": 0.002, "span": 0.6 }
+  ],
+  "monitor": "Block C",
+  "relativeTo": "Block A",
+  "groups": [ { "members": ["Block A", "Block B", "Block C"] } ]
+}

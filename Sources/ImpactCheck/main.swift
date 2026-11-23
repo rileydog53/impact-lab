@@ -206,6 +206,13 @@ if CommandLine.arguments.dropFirst().contains("--experiment-library") {
     exit(EXIT_SUCCESS)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--scene-documents") {
+    let args = CommandLine.arguments
+    let directory = args.indices.contains(index + 1) ? args[index + 1] : "docs/scene-examples"
+    try sceneDocumentsCheck(examples: URL(fileURLWithPath: directory))
+    exit(EXIT_SUCCESS)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--scenario-library") {
     let args = CommandLine.arguments
     try scenarioLibraryCheck(only: args.indices.contains(index + 1) ? args[index + 1].lowercased() : nil)

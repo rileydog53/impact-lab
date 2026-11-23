@@ -30,6 +30,13 @@ Card 6 ends with you trying the app yourself. Open it with `launch.command`, wor
 - [ ] Click **Scenarios**, choose **Strain hardening**, and press **Run A and B**. Read the results table and the takeaway.
 - [ ] Hover over the locked **Brittle versus ductile** entry to see why it is not available yet.
 
+## 6. Describe an experiment as a text file (about 5 min)
+- [ ] Click **Open**, go to the project folder → `docs/scene-examples`, and open `linked-chain.json`. Press **Calculate**. The breakable link should snap.
+- [ ] Open `invalid-example.json`. A list should explain each problem in plain terms.
+- [ ] Open **⋯ → Scene JSON Format…** and press **Copy Example**. Paste it into TextEdit (Format → Make Plain Text) and save it as `my-test.json`. If TextEdit offers `.txt`, choose "Use .json". Open it in Impact Lab.
+- [ ] With `my-test.json` open, change the Ball's `"velocity"` in TextEdit and save. In Impact Lab, use **⋯ → Reload from Disk**: the new speed appears.
+- [ ] Change something in the workshop and use **⋯ → Export Scene JSON Copy…**. The copy is ordinary JSON you can read or edit.
+
 ## What to expect, honestly
 - **Trust the numbers** in the elastic wave-speed and bonded-layer scenarios, and for the energy totals in any run. All of these are checked against theory.
 - **Trust the trends** for metal comparisons: which metal dents more, and which absorbs more energy. The exact values depend on mesh size and on illustrative hardening curves.
