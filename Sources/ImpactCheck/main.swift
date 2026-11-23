@@ -206,6 +206,16 @@ if CommandLine.arguments.dropFirst().contains("--experiment-library") {
     exit(EXIT_SUCCESS)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--showcase") {
+    try showcaseReport(Array(CommandLine.arguments.dropFirst(index + 1)))
+    exit(EXIT_SUCCESS)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--mpm-compare") {
+    mpmComparison(Array(CommandLine.arguments.dropFirst(index + 1)))
+    exit(EXIT_SUCCESS)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--scene-documents") {
     let args = CommandLine.arguments
     let directory = args.indices.contains(index + 1) ? args[index + 1] : "docs/scene-examples"

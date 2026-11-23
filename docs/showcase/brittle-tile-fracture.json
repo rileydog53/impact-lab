@@ -1,0 +1,112 @@
+{
+  "description": "Fracture showcase: a stiff round hammer strikes a notched brittle tile resting on two free posts. The illustrative cohesive crack model lets cracks form, open and release fragments that tumble onto the posts and a catcher. Illustrative material, not a calibrated metal or ceramic.",
+  "duration": 0.08,
+  "parts": [
+    {
+      "name": "Brittle tile",
+      "size": [
+        0.2,
+        0.03
+      ],
+      "center": [
+        0,
+        0
+      ],
+      "refinement": "fine",
+      "material": {
+        "young": 1000000.0,
+        "density": 950,
+        "poisson": 0.12
+      },
+      "fracture": {
+        "strengthFraction": 0.03,
+        "energy": 7.0
+      },
+      "notch": {
+        "centerFraction": 0.1,
+        "depthFraction": 0.25
+      }
+    },
+    {
+      "name": "Hammer",
+      "shape": "round",
+      "size": [
+        0.05,
+        0.05
+      ],
+      "center": [
+        0.02,
+        0.0405
+      ],
+      "velocity": [
+        0,
+        -3
+      ],
+      "material": {
+        "young": 3000000.0,
+        "density": 2500,
+        "poisson": 0.15
+      }
+    },
+    {
+      "name": "Left post",
+      "size": [
+        0.03,
+        0.08
+      ],
+      "center": [
+        -0.075,
+        -0.0555
+      ],
+      "material": {
+        "young": 3500000.0,
+        "density": 2500,
+        "poisson": 0.1
+      }
+    },
+    {
+      "name": "Right post",
+      "size": [
+        0.03,
+        0.08
+      ],
+      "center": [
+        0.075,
+        -0.0555
+      ],
+      "material": {
+        "young": 3500000.0,
+        "density": 2500,
+        "poisson": 0.1
+      }
+    },
+    {
+      "name": "Catcher",
+      "size": [
+        0.09,
+        0.03
+      ],
+      "center": [
+        0,
+        -0.11
+      ],
+      "material": {
+        "young": 2500000.0,
+        "density": 2100,
+        "poisson": 0.15
+      }
+    }
+  ],
+  "monitor": "Brittle tile",
+  "gauges": [
+    {
+      "name": "Above notch",
+      "body": "Brittle tile",
+      "location": [
+        0.1,
+        -0.5
+      ],
+      "usesBodyFractions": true
+    }
+  ]
+}

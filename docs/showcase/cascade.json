@@ -1,0 +1,96 @@
+{
+  "description": "Main showcase: a stainless slug strikes a tilted copper bar off-centre. The bar deforms, spins and drives a chain of secondary impacts into a stainless puck, an inclined aluminum plate and a steel block.",
+  "duration": 0.004,
+  "meshResolution": "fine",
+  "parts": [
+    {
+      "name": "Stainless slug",
+      "shape": "round",
+      "size": [
+        0.035,
+        0.035
+      ],
+      "center": [
+        -0.135,
+        0.012
+      ],
+      "velocity": [
+        80,
+        0
+      ],
+      "material": "stainless-304-annealed"
+    },
+    {
+      "name": "Copper bar",
+      "size": [
+        0.028,
+        0.1
+      ],
+      "center": [
+        -0.07,
+        0
+      ],
+      "angle": 25,
+      "material": "copper-c11000-annealed"
+    },
+    {
+      "name": "Stainless puck",
+      "shape": "round",
+      "size": [
+        0.03,
+        0.03
+      ],
+      "center": [
+        -0.03,
+        0.075
+      ],
+      "material": "stainless-304-annealed"
+    },
+    {
+      "name": "Aluminum plate",
+      "size": [
+        0.025,
+        0.12
+      ],
+      "center": [
+        -0.012,
+        -0.01
+      ],
+      "angle": -12,
+      "material": "aluminum-6061-t6"
+    },
+    {
+      "name": "Steel block",
+      "size": [
+        0.06,
+        0.06
+      ],
+      "center": [
+        0.052,
+        0.02
+      ],
+      "material": "structural-steel-a36"
+    }
+  ],
+  "monitor": "Copper bar",
+  "gauges": [
+    {
+      "name": "Bar impact zone",
+      "body": "Copper bar",
+      "location": [
+        -0.6,
+        0.15
+      ],
+      "usesBodyFractions": true
+    },
+    {
+      "name": "Steel block face",
+      "body": "Steel block",
+      "location": [
+        -0.8,
+        0.6
+      ],
+      "usesBodyFractions": true
+    }
+  ]
+}
