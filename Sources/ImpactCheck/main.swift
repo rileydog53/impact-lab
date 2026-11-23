@@ -201,6 +201,11 @@ if CommandLine.arguments.dropFirst().contains("--assembly-study") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--experiment-library") {
+    try await experimentLibraryCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--off-axis") {
     try offAxisImpactCheck()
     exit(EXIT_SUCCESS)

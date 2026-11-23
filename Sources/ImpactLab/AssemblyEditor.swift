@@ -143,7 +143,10 @@ struct AssemblyEditor: View {
                         }
                     }
                 }
-                Text("Experimental fracture. Crack paths and later contacts can change with the mesh.")
+                let resolution = part.refinement ?? experiment.scene.resolution
+                Text(resolution.rawValue <= 3
+                     ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
+                     : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             DisclosureGroup("Geometry and initial motion", isExpanded: $bodySettings) {
@@ -153,8 +156,8 @@ struct AssemblyEditor: View {
                         bodyNumber("Y (mm)", part, \.center.y, -1...1, scale: 1000)
                     }
                     GridRow {
-                        bodyNumber("Width (mm)", part, \.size.x, 0.025...0.30, scale: 1000)
-                        bodyNumber("Height (mm)", part, \.size.y, 0.025...0.30, scale: 1000)
+                        bodyNumber("Local width (mm)", part, \.size.x, 0.025...0.30, scale: 1000)
+                        bodyNumber("Local height (mm)", part, \.size.y, 0.025...0.30, scale: 1000)
                     }
                     GridRow {
                         bodyNumber("Angle (°)", part, \.angle, -360...360)
@@ -171,6 +174,11 @@ struct AssemblyEditor: View {
             }
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
+                    profiles("Apply illustrative profile", elasticOnly: part.bondedLayer != nil) { profile in
+                        experiment.updatePart(part.id) { profile.apply(to: &$0) }
+                    }
+                    Text("Profiles use illustrative numerical values.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Picker("Response", selection: Binding(get: { part.plasticity.response },
                                                           set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
                         ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -220,7 +228,8 @@ struct AssemblyEditor: View {
     }
 
     private func bondedLayerEditor(_ part: AssemblyPart) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        let minimum = AssemblyPart.BondedLayer.minimumFraction
+        return VStack(alignment: .leading, spacing: 7) {
             Toggle("Bonded second material", isOn: Binding(get: { part.bondedLayer != nil }, set: { enabled in
                 experiment.updatePart(part.id) { $0.bondedLayer = enabled ? AssemblyPart.BondedLayer() : nil }
             }))
@@ -228,38 +237,83 @@ struct AssemblyEditor: View {
             .disabled(part.notch != nil || part.fracture != nil || part.plasticity.response != .elastic)
             .help("Available on unnotched elastic blocks with material fracture off")
             if let layer = part.bondedLayer {
-                Text("The two elastic materials share nodes at a permanent bond. The second material lies to its local right.")
+                Text("Elastic layers share nodes at permanent bonds. Layer positions are measured along the local width.")
                     .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    numeric("Bond from left (% width)", value: layer.interfaceFraction, range: 0.10...0.90, scale: 100) { value in
-                        experiment.updatePart(part.id) { $0.bondedLayer?.interfaceFraction = value }
-                    }
-                    numeric("Second E (MPa)", value: layer.material.young, range: SceneConfiguration.youngRange, scale: 1e-6) { value in
-                        experiment.updatePart(part.id) { $0.bondedLayer?.material.young = value }
-                    }
+                let firstUpperBound = layer.third.map { $0.interfaceFraction - minimum } ?? 1 - minimum
+                numeric("First bond from left (% width)", value: layer.interfaceFraction,
+                        range: minimum...max(minimum, firstUpperBound), scale: 100) { value in
+                    experiment.updatePart(part.id) { $0.bondedLayer?.interfaceFraction = value }
                 }
-                HStack {
-                    numeric("Second density (kg/m³)", value: layer.material.density, range: SceneConfiguration.densityRange, scale: 1) { value in
-                        experiment.updatePart(part.id) { $0.bondedLayer?.material.density = value }
+                layerMaterial("Second layer", layer.material) { material in
+                    experiment.updatePart(part.id) { $0.bondedLayer?.material = material }
+                }
+                Toggle("Bonded third material", isOn: Binding(get: { layer.third != nil }, set: { enabled in
+                    experiment.updatePart(part.id) {
+                        let fraction = min(1 - minimum, max(0.75, layer.interfaceFraction + minimum))
+                        $0.bondedLayer?.third = enabled ? .init(interfaceFraction: fraction) : nil
                     }
-                    numeric("Second Poisson ratio", value: layer.material.poisson, range: SceneConfiguration.poissonRange, scale: 1) { value in
-                        experiment.updatePart(part.id) { $0.bondedLayer?.material.poisson = value }
+                })).toggleStyle(.checkbox)
+                    .disabled(layer.third == nil && layer.interfaceFraction > 1 - 2 * minimum)
+                if let third = layer.third {
+                    numeric("Second bond from left (% width)", value: third.interfaceFraction,
+                            range: min(1 - minimum, layer.interfaceFraction + minimum)...(1 - minimum), scale: 100) { value in
+                        experiment.updatePart(part.id) { $0.bondedLayer?.third?.interfaceFraction = value }
+                    }
+                    layerMaterial("Third layer", third.material) { material in
+                        experiment.updatePart(part.id) { $0.bondedLayer?.third?.material = material }
                     }
                 }
             }
         }.padding(.vertical, 4)
     }
 
+    private func profiles(_ title: String, elasticOnly: Bool, choose: @escaping (AssemblyMaterialProfile) -> Void) -> some View {
+        Menu(title) {
+            ForEach(AssemblyMaterialProfile.allCases.filter { !elasticOnly || $0.response == .elastic }, id: \.self) { profile in
+                Button(profile.rawValue) { choose(profile) }
+            }
+        }
+    }
+
+    private func layerMaterial(_ title: String, _ material: ImpactPhysics.Material,
+                               set: @escaping (ImpactPhysics.Material) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            profiles("\(title) illustrative profiles", elasticOnly: true) { set($0.material) }
+            HStack {
+                numeric("E (MPa)", value: material.young, range: SceneConfiguration.youngRange, scale: 1e-6) { value in
+                    var next = material
+                    next.young = value
+                    set(next)
+                }
+                numeric("Density (kg/m³)", value: material.density, range: SceneConfiguration.densityRange, scale: 1) { value in
+                    var next = material
+                    next.density = value
+                    set(next)
+                }
+                numeric("Poisson ratio", value: material.poisson, range: SceneConfiguration.poissonRange, scale: 1) { value in
+                    var next = material
+                    next.poisson = value
+                    set(next)
+                }
+            }
+        }
+    }
+
     private func gaugeEditor(_ part: AssemblyPart) -> some View {
         ForEach(experiment.gauges.filter { $0.body == part.id }) { gauge in
             if let index = experiment.gauges.firstIndex(where: { $0.id == gauge.id }) {
                 let value = experiment.simulation.gaugeReading(index)
+                let fractions = gauge.usesBodyFractions == true
+                let unit = fractions ? "% half-size" : "mm"
+                let scale = fractions ? 100.0 : 1000.0
                 DisclosureGroup {
                     HStack {
-                        numeric("Local X (mm)", value: gauge.location.x, range: -part.size.x/2...part.size.x/2, scale: 1000) { x in
+                        numeric("Local X (\(unit))", value: gauge.location.x,
+                                range: fractions ? -1...1 : -part.size.x/2...part.size.x/2, scale: scale) { x in
                             experiment.updateGauge(gauge.id) { $0.location.x = x }
                         }
-                        numeric("Local Y (mm)", value: gauge.location.y, range: -part.size.y/2...part.size.y/2, scale: 1000) { y in
+                        numeric("Local Y (\(unit))", value: gauge.location.y,
+                                range: fractions ? -1...1 : -part.size.y/2...part.size.y/2, scale: scale) { y in
                             experiment.updateGauge(gauge.id) { $0.location.y = y }
                         }
                         Button("Remove gauge", systemImage: "trash") {

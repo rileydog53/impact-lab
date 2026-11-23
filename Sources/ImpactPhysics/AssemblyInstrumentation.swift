@@ -5,17 +5,24 @@ public struct AssemblyGauge: Codable, Equatable, Identifiable, Sendable {
     public var id = UUID()
     public var body: UUID
     public var name: String
-    /// Material coordinates in metres, before body rotation and translation.
+    /// Local material coordinates in metres, or in fractions of the half-size.
     public var location: Point
+    public var usesBodyFractions: Bool?
 
-    public init(body: UUID, name: String, location: Point) {
+    public init(body: UUID, name: String, location: Point, usesBodyFractions: Bool? = nil) {
         self.body = body
         self.name = name
         self.location = location
+        self.usesBodyFractions = usesBodyFractions
     }
 
     var isValid: Bool {
         !name.isEmpty && name.count <= 48 && location.x.isFinite && location.y.isFinite
+            && (usesBodyFractions != true || max(abs(location.x), abs(location.y)) <= 1)
+    }
+
+    func materialLocation(in part: AssemblyPart) -> Point {
+        usesBodyFractions == true ? 0.5 * part.size * location : location
     }
 }
 

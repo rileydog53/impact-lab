@@ -36,16 +36,36 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     }
 
     public struct BondedLayer: Codable, Equatable, Sendable {
+        public struct ThirdLayer: Codable, Equatable, Sendable {
+            public var interfaceFraction: Double
+            public var material: Material
+
+            public init(interfaceFraction: Double = 0.75, material: Material = Material()) {
+                self.interfaceFraction = interfaceFraction
+                self.material = material
+            }
+        }
+
+        public static let minimumFraction = 0.10
         public var interfaceFraction = 0.5
         public var material = Material(young: 2e6, density: 2000)
+        public var third: ThirdLayer?
 
         public init() {}
 
+        var regions: [(fraction: Double, material: Material)] {
+            var result = [(interfaceFraction, material)]
+            if let third { result.append((third.interfaceFraction, third.material)) }
+            return result
+        }
+
         var isValid: Bool {
-            (0.10...0.90).contains(interfaceFraction)
-                && SceneConfiguration.youngRange.contains(material.young)
-                && SceneConfiguration.densityRange.contains(material.density)
-                && SceneConfiguration.poissonRange.contains(material.poisson)
+            let range = Self.minimumFraction...(1 - Self.minimumFraction)
+            return regions.allSatisfy { fraction, material in
+                range.contains(fraction) && SceneConfiguration.youngRange.contains(material.young)
+                    && SceneConfiguration.densityRange.contains(material.density)
+                    && SceneConfiguration.poissonRange.contains(material.poisson)
+            } && (third.map { $0.interfaceFraction - interfaceFraction >= Self.minimumFraction - 1e-12 } ?? true)
         }
     }
 
@@ -132,7 +152,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         if let notch {
             cuts += [center - notch.widthFraction / 2, center, center + notch.widthFraction / 2]
         }
-        if let bondedLayer { cuts.append(bondedLayer.interfaceFraction) }
+        let regions = bondedLayer?.regions ?? []
+        cuts += regions.map(\.fraction)
         cuts.sort()
         var stations = [0.0]
         for (left, right) in zip(cuts, cuts.dropFirst()) {
@@ -143,8 +164,9 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             stations.append(right)
         }
         let columns = stations.count - 1
-        let interface = bondedLayer.flatMap { stations.firstIndex(of: $0.interfaceFraction) }
-        let mesh = Mesh.rectangle(columns: columns, rows: rows, interfaceColumn: interface,
+        let interfaces = regions.compactMap { stations.firstIndex(of: $0.fraction) }
+        let mesh = Mesh.rectangle(columns: columns, rows: rows, interfaceColumn: interfaces.first,
+                                  additionalInterfaceColumn: interfaces.dropFirst().first,
                                   staggerDiagonals: staggered) { u, v in
             let column = Int((u * Double(columns)).rounded())
             let row = Int((v * Double(rows)).rounded())
@@ -159,10 +181,12 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             let rise = notch.map { size.y * $0.depthFraction * max(0, 1 - 2 * abs(x - center) / $0.widthFraction) } ?? 0
             return Point((x - 0.5) * size.x, (v - 0.5) * size.y + rise * (1 - v))
         }
-        let materials = interface.flatMap { column in
-            bondedLayer.map { layer in
-                mesh.elements.indices.map { ($0 / 2) % columns < column ? material : layer.material }
-            }
+        guard let first = interfaces.first else { return (mesh, nil) }
+        let materials = mesh.elements.indices.map { index in
+            let column = (index / 2) % columns
+            if column < first { return material }
+            if let second = interfaces.dropFirst().first, column >= second { return regions[1].material }
+            return regions[0].material
         }
         return (mesh, materials)
     }

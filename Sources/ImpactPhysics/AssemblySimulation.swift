@@ -337,7 +337,8 @@ public struct AssemblySimulation: Sendable {
         let indices = Dictionary(uniqueKeysWithValues: scene.parts.enumerated().map { ($0.element.id, $0.offset) })
         gaugeAnchors = try (scene.gauges ?? []).map { gauge in
             let part = indices[gauge.body]!
-            guard let anchor = MaterialAnchor.locate(gauge.location, mesh: bodies[part].mesh) else {
+            let location = gauge.materialLocation(in: scene.parts[part])
+            guard let anchor = MaterialAnchor.locate(location, mesh: bodies[part].mesh) else {
                 throw AssemblyError.gaugeOutsideMaterial(gauge.name)
             }
             return (part, anchor)

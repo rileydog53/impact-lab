@@ -10,6 +10,7 @@ struct AssemblyLab: View {
     @State private var showPieces = false
     @State private var compare = false
     @State private var study = false
+    @State private var library = false
     @State private var studySmokeResult: Result<AssemblyStudy, Error>?
     @State private var signal = 0
     @State private var confirmClear = false
@@ -42,6 +43,9 @@ struct AssemblyLab: View {
         }
         .sheet(isPresented: $study) {
             studyView
+        }
+        .sheet(isPresented: $library) {
+            ExperimentLibrary(load: loadPreset)
         }
         .alert("Assembly", isPresented: Binding(get: { experiment.error != nil }, set: { if !$0 { experiment.error = nil } })) {
             Button("OK", role: .cancel) {}
@@ -90,6 +94,19 @@ struct AssemblyLab: View {
         return view
     }
 
+    private func loadPreset(_ scene: AssemblyScene) {
+        do {
+            try experiment.configure(scene)
+            if let monitor = scene.monitor { experiment.select(monitor) }
+            field = .stress
+            signal = 0
+            library = false
+        } catch {
+            library = false
+            experiment.error = error.localizedDescription
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
@@ -104,6 +121,11 @@ struct AssemblyLab: View {
                 study = true
             }
             .disabled(experiment.scene.parts.isEmpty || experiment.simulation.initialIssue != nil)
+            Button("Experiments", systemImage: "books.vertical") {
+                experiment.pause()
+                experiment.placingGauge = false
+                library = true
+            }
             Button("New / Examples", systemImage: "doc.badge.plus") {
                 experiment.pause()
                 confirmClear = true
@@ -390,9 +412,43 @@ struct AssemblyLab: View {
             await fractureSmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if let index = args.firstIndex(of: "--study-smoke"), args.indices.contains(index + 1) {
             await studySmoke(report: URL(fileURLWithPath: args[index + 1]))
+        } else if let index = args.firstIndex(of: "--library-smoke"), args.indices.contains(index + 1) {
+            await librarySmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if experiment.selectedPart == nil, let id = experiment.scene.monitor {
             experiment.select(id)
         }
+    }
+
+    private func librarySmoke(report: URL) async {
+        library = true
+        for _ in 0..<20 where !NSApplication.shared.windows.contains(where: { $0.attachedSheet?.isVisible == true }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        var checks = ["native library=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })"]
+        let scene = AssemblyExperimentPreset.bondedComposite.scene(boundary: .supports, resolution: .fine)
+        loadPreset(scene)
+        checks.append("loaded preset=\(experiment.canRun && experiment.selectedPart == scene.monitor && experiment.scene == scene)")
+        checks.append("supports and gauges visible in model=\(experiment.scene.parts.count == 4 && experiment.gauges.count == 3)")
+        let specimen = scene.parts[1].id
+        experiment.updatePart(specimen) { part in
+            part.size.x = 0.052
+            part.bondedLayer?.third?.material = AssemblyMaterialProfile.stiff.material
+        }
+        let mesh = experiment.simulation.body(1).mesh
+        let edited = experiment.canRun && experiment.scene.parts[1].size.x == 0.052
+            && experiment.scene.parts[1].bondedLayer?.third?.material == AssemblyMaterialProfile.stiff.material
+            && mesh.interfaceLines.count == 2
+        checks.append("edited thickness and material=\(edited)")
+        experiment.advance(to: 0.026)
+        let measured = experiment.simulation.failure == nil && !experiment.simulation.firstContactTimes.isEmpty
+            && experiment.simulation.gaugeReading(0).pressure.isFinite
+        checks.append("forces and material gauges=\(measured)")
+        do {
+            try (checks.joined(separator: "\n") + "\n").write(to: report, atomically: true, encoding: .utf8)
+        } catch {
+            exit(EXIT_FAILURE)
+        }
+        exit(checks.contains { $0.contains("=false") } ? EXIT_FAILURE : EXIT_SUCCESS)
     }
 
     private func studySmoke(report: URL) async {

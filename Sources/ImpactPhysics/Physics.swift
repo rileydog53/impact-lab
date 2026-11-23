@@ -51,15 +51,16 @@ public struct Mesh: Sendable {
     public let elements: [Triangle]
     public let boundary: [Edge]
     public let probe: [Int]
-    public let interfaceNodes: [Int]
+    public let interfaceLines: [[Int]]
+    public var interfaceNodes: [Int] { interfaceLines.first ?? [] }
 
     package init(reference: [Point], triangles: [(Int, Int, Int)], boundary: [Edge],
-         probe: [Int] = [], interfaceNodes: [Int] = []) {
+         probe: [Int] = [], interfaceLines: [[Int]] = []) {
         self.reference = reference
         elements = triangles.map { Triangle($0.0, $0.1, $0.2, reference) }
         self.boundary = boundary
         self.probe = probe
-        self.interfaceNodes = interfaceNodes
+        self.interfaceLines = interfaceLines
     }
 
     public static func bar(columns: Int = 120, rows: Int = 6, width: Double = 1, height: Double = 0.1) -> Mesh {
@@ -69,6 +70,7 @@ public struct Mesh: Sendable {
     }
 
     static func rectangle(columns: Int, rows: Int, probeColumn: Int? = nil, interfaceColumn: Int? = nil,
+                          additionalInterfaceColumn: Int? = nil,
                           staggerDiagonals: Bool = false,
                           position: (Double, Double) -> Point) -> Mesh {
         precondition(columns >= 2 && rows >= 1)
@@ -103,8 +105,9 @@ public struct Mesh: Sendable {
                 if i == 0 { edges.append(Edge(d, a)) }
             }
         }
-        let interfaceNodes = interfaceColumn.map { column in (0...rows).map { node(column, $0) } } ?? []
-        return Mesh(reference: nodes, triangles: triangles, boundary: edges, probe: probe, interfaceNodes: interfaceNodes)
+        let interfaces = [interfaceColumn, additionalInterfaceColumn].compactMap { $0 }
+            .map { column in (0...rows).map { node(column, $0) } }
+        return Mesh(reference: nodes, triangles: triangles, boundary: edges, probe: probe, interfaceLines: interfaces)
     }
 }
 

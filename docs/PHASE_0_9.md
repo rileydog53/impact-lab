@@ -8,6 +8,16 @@
 
 Pressure is the negative mean of the three plane-strain Cauchy normal stresses. Positive values indicate compression. Gauge position and velocity use the triangle's interpolation, while stress and strain come from the containing element. Put gauges inside the material on the side of an interface you want to measure. The chart connects sampled values. The scalar normal load sums positive contributions from the contact quadrature, and its integral is a scalar measure. Peaks and impulse use every accepted step. Force peaks remain sensitive to contact compliance and mesh spacing.
 
+## Experiment library
+
+Open **Assembly → Experiments** to preview and load an inclined plate, separated plates, a three-layer bonded composite, a hollow sandwich, or independently angled panels. Choose free bodies or deformable end supports and set the starting mesh. Supports have mass and move under load. The composite shares nodes at two permanent elastic bonds. The hollow sandwich has a cavity and a common thickness for its faces and side walls.
+
+Select a body to edit its position, angle, initial velocity, and mesh. Ordinary plate thickness is its local height. Composite thickness is its local width because the preset rotates the coupon 90°. The hollow panel's **Wall** setting changes both faces and side walls. **Material** offers four illustrative profiles as well as direct parameter edits. The profile values are numerical examples and have no real-material calibration.
+
+Preset gauges follow proportional positions when the geometry is resized. **Study** records their histories along with contact loads and the energy ledger. Material fracture remains optional on supported homogeneous bodies. Treat coarse fracture previews as qualitative and run mesh and timestep comparisons for quantities of interest.
+
+All ten preset and boundary combinations completed in the focused check with peak sampled energy residual below 0.07% and peak relative overlap at or below 0.51%. In the separated-plates fixture, the striker reached the front plate at 2.54 ms and the front plate contacted the receiver at 14.78 ms. The striker impulse through 20 ms changed 1.11% between ×2 and ×3 at a common 2.399 µs timestep. Changing only the rear panel angle from 9° to 4° shifted inter-panel contact from 20.87 to 25.87 ms in the coarse preview. Run `ImpactCheck --experiment-library` to reproduce these checks. The native library smoke test opened the sheet, loaded the supported composite, edited thickness and material, and advanced to contact.
+
 ## Measured checks
 
 | Check | Result |

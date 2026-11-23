@@ -211,10 +211,11 @@ struct AssemblyCanvas: View {
         let active = experiment.simulation.activeContacts.contains { $0.x == i || $0.y == i }
         let selected = experiment.selectedPart == part.id
         context.stroke(outline, with: .color(active ? .white : color), lineWidth: selected ? 2.3 : 1.3)
-        if let first = body.mesh.interfaceNodes.first {
+        for line in body.mesh.interfaceLines {
+            guard let first = line.first else { continue }
             let bond = Path { path in
                 path.move(to: nodes[first])
-                for node in body.mesh.interfaceNodes.dropFirst() { path.addLine(to: nodes[node]) }
+                for node in line.dropFirst() { path.addLine(to: nodes[node]) }
             }
             context.stroke(bond, with: .color(assemblyInk.opacity(0.85)),
                            style: StrokeStyle(lineWidth: 1.4, dash: [4, 3]))
