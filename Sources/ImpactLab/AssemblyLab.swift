@@ -9,6 +9,8 @@ struct AssemblyLab: View {
     @State private var showMesh = false
     @State private var showPieces = false
     @State private var compare = false
+    @State private var study = false
+    @State private var studySmokeResult: Result<AssemblyStudy, Error>?
     @State private var signal = 0
     @State private var confirmClear = false
     private let timer = Timer.publish(every: 1.0 / 60, on: .main, in: .common).autoconnect()
@@ -38,6 +40,9 @@ struct AssemblyLab: View {
                 ComparisonView(reference: reference, current: experiment.current)
             }
         }
+        .sheet(isPresented: $study) {
+            studyView
+        }
         .alert("Assembly", isPresented: Binding(get: { experiment.error != nil }, set: { if !$0 { experiment.error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -64,9 +69,25 @@ struct AssemblyLab: View {
                     signal = 3
                 } catch { experiment.error = error.localizedDescription }
             }
+            Button("Load bonded wave example") {
+                let scene = AssemblyScene.bondedWaveExample()
+                do {
+                    try experiment.configure(scene)
+                    if let monitor = scene.monitor { experiment.select(monitor) }
+                    field = .pressure
+                } catch { experiment.error = error.localizedDescription }
+            }
         } message: {
             Text("Save your current setup first if you want to reopen it.")
         }
+    }
+
+    private var studyView: some View {
+        var view = AssemblyStudyView(scene: experiment.scene, selectedBody: experiment.selectedPart)
+        if CommandLine.arguments.contains("--study-smoke") {
+            view.smokeResult = { studySmokeResult = $0 }
+        }
+        return view
     }
 
     private var header: some View {
@@ -77,6 +98,12 @@ struct AssemblyLab: View {
                     .font(.subheadline).foregroundStyle(assemblyMint)
             }
             Spacer()
+            Button("Study", systemImage: "chart.line.uptrend.xyaxis") {
+                experiment.pause()
+                experiment.placingGauge = false
+                study = true
+            }
+            .disabled(experiment.scene.parts.isEmpty || experiment.simulation.initialIssue != nil)
             Button("New / Examples", systemImage: "doc.badge.plus") {
                 experiment.pause()
                 confirmClear = true
@@ -107,7 +134,7 @@ struct AssemblyLab: View {
             Button("Compare", systemImage: "chart.xyaxis.line") { experiment.pause(); compare = true }
                 .disabled(experiment.reference == nil || experiment.samples.count < 2)
             Button("Refine", systemImage: "square.grid.3x3") { experiment.refine() }
-                .help("Pin this run and rerun at the next finer mesh resolution")
+                .help("Pin this run and refine bodies that use the assembly mesh")
                 .disabled(!experiment.canRefine)
             Text(String(format: "%.2f ms", experiment.simulation.time * 1000))
                 .font(.system(.body, design: .monospaced)).frame(minWidth: 84, alignment: .trailing)
@@ -125,8 +152,16 @@ struct AssemblyLab: View {
                         ForEach(AssemblyField.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }.labelsHidden().frame(width: 166)
                     Toggle("Mesh", isOn: $showMesh).toggleStyle(.checkbox)
+                    Button(experiment.placingGauge ? "Cancel gauge" : "Place gauge", systemImage: "scope") {
+                        experiment.placingGauge.toggle()
+                    }
+                    .disabled(experiment.running || experiment.simulation.time > 0 || experiment.scene.parts.isEmpty
+                              || experiment.gauges.count >= AssemblyGauge.limit)
                     Spacer()
-                    if let index = experiment.selectedIndex, field == .stress || field == .plastic {
+                    if experiment.placingGauge {
+                        Text("Click inside a body to place a material gauge.")
+                            .font(.caption).foregroundStyle(assemblyMint)
+                    } else if let index = experiment.selectedIndex, field == .stress || field == .plastic {
                         let peak = field.values(index, in: experiment.simulation).max() ?? 0
                         Text(field == .stress
                              ? String(format: "Selected body · %.2f kPa peak", peak / 1000)
@@ -353,9 +388,57 @@ struct AssemblyLab: View {
             await smoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if let index = args.firstIndex(of: "--fracture-smoke"), args.indices.contains(index + 1) {
             await fractureSmoke(report: URL(fileURLWithPath: args[index + 1]))
+        } else if let index = args.firstIndex(of: "--study-smoke"), args.indices.contains(index + 1) {
+            await studySmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if experiment.selectedPart == nil, let id = experiment.scene.monitor {
             experiment.select(id)
         }
+    }
+
+    private func studySmoke(report: URL) async {
+        var checks: [String] = []
+        do {
+            try experiment.configure(AssemblyScene())
+            let part = experiment.add(.block)!
+            experiment.updatePart(part) {
+                $0.notch = AssemblyPart.Notch()
+                $0.refinement = .x5
+            }
+            checks.append("notch and mesh override=\(experiment.scene.parts[0].notch != nil && experiment.elementCount > 1_000)")
+            let gauge = experiment.addGauge(body: part, at: Point(0.002, 0.003))
+            checks.append("authored gauge=\(gauge != nil && experiment.gauges.count == 1)")
+            let setting = AssemblyScene.bondedWaveExample()
+            let sceneURL = report.deletingPathExtension().appendingPathExtension("json")
+            try experiment.configure(setting)
+            try experiment.scene.save(to: sceneURL)
+            try experiment.configure(AssemblyScene.open(sceneURL))
+            experiment.select(setting.parts[1].id)
+            field = .pressure
+            checks.append("saved and reopened bonded setup=\(experiment.scene == setting && experiment.gauges.count == 2)")
+            study = true
+            for _ in 0..<300 where studySmokeResult == nil {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            checks.append("native window=\(NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" })")
+            checks.append("native study sheet=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
+            if let outcome = studySmokeResult {
+                let outcome = try outcome.get()
+                checks.append("rendered study=\(outcome.cases.count == 3 && outcome.cases.allSatisfy { $0.failure == nil })")
+                let url = report.deletingPathExtension().appendingPathExtension("csv")
+                try outcome.exportCSV(to: url)
+                checks.append("exported CSV=\(FileManager.default.fileExists(atPath: url.path))")
+            } else {
+                checks.append("rendered study=false")
+            }
+        } catch {
+            checks.append("smoke=false \(error.localizedDescription)")
+        }
+        do {
+            try (checks.joined(separator: "\n") + "\n").write(to: report, atomically: true, encoding: .utf8)
+        } catch {
+            exit(EXIT_FAILURE)
+        }
+        exit(checks.contains { $0.contains("=false") } ? EXIT_FAILURE : EXIT_SUCCESS)
     }
 
     private func fractureSmoke(report: URL) async {

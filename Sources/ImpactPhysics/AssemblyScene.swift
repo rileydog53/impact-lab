@@ -22,6 +22,33 @@ public struct MaterialFractureSettings: Codable, Equatable, Sendable {
 }
 
 public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
+    public struct Notch: Codable, Equatable, Sendable {
+        public var centerFraction = 0.0
+        public var widthFraction = 0.20
+        public var depthFraction = 0.20
+
+        public init() {}
+
+        var isValid: Bool {
+            (-0.30...0.30).contains(centerFraction) && (0.12...0.36).contains(widthFraction)
+                && (0.02...0.45).contains(depthFraction)
+        }
+    }
+
+    public struct BondedLayer: Codable, Equatable, Sendable {
+        public var interfaceFraction = 0.5
+        public var material = Material(young: 2e6, density: 2000)
+
+        public init() {}
+
+        var isValid: Bool {
+            (0.10...0.90).contains(interfaceFraction)
+                && SceneConfiguration.youngRange.contains(material.young)
+                && SceneConfiguration.densityRange.contains(material.density)
+                && SceneConfiguration.poissonRange.contains(material.poisson)
+        }
+    }
+
     public enum Shape: String, CaseIterable, Codable, Sendable {
         case block = "Block"
         case enclosure = "Enclosure"
@@ -38,6 +65,9 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public var material = Material()
     public var plasticity = ImpactPlasticity(response: .elastic)
     public var fracture: MaterialFractureSettings?
+    public var refinement: AssemblyScene.Resolution?
+    public var notch: Notch?
+    public var bondedLayer: BondedLayer?
 
     public init(_ name: String, shape: Shape = .block, center: Point = .zero,
                 size: Point = Point(0.06, 0.06)) {
@@ -57,26 +87,33 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && SceneConfiguration.densityRange.contains(material.density)
             && SceneConfiguration.poissonRange.contains(material.poisson)
             && plasticity.isValid && (fracture?.isValid ?? true) && !name.isEmpty && name.count <= 48
+            && (notch.map { shape == .block && $0.isValid } ?? true)
+            && (bondedLayer.map { shape == .block && $0.isValid && fracture == nil && notch == nil
+                && plasticity.response == .elastic } ?? true)
     }
 
     func makeBody(refinement: Int, notchDepth: Double = 0) -> Body {
         let mesh: Mesh
+        var elementMaterials: [Material]?
         switch shape {
         case .block:
             let columns = max(3, Int((size.x / 0.009).rounded()))
             let nx = columns * refinement
             let ny = max(3, Int((size.y / 0.009).rounded())) * refinement
             let staggered = fracture?.pattern == .staggered
-            mesh = .rectangle(columns: nx, rows: ny, staggerDiagonals: staggered) { u, v in
-                var x = (u - 0.5) * size.x
-                if staggered && u > 0 && u < 1 && v > 0 && v < 1 {
-                    let row = Int((v * Double(ny)).rounded())
-                    x += (row.isMultiple(of: 2) ? 0.24 : -0.24) * size.x / Double(nx)
+            if notch != nil || bondedLayer != nil {
+                (mesh, elementMaterials) = partitionedBlock(rows: ny, refinement: refinement, staggered: staggered)
+            } else {
+                mesh = .rectangle(columns: nx, rows: ny, staggerDiagonals: staggered) { u, v in
+                    var x = (u - 0.5) * size.x
+                    if staggered && u > 0 && u < 1 && v > 0 && v < 1 {
+                        let row = Int((v * Double(ny)).rounded())
+                        x += (row.isMultiple(of: 2) ? 0.24 : -0.24) * size.x / Double(nx)
+                    }
+                    // Preserve the mesh used by the archived verification notch.
+                    let rise = notchDepth * max(0, 1 - abs(x) * Double(columns) / size.x)
+                    return Point(x, (v - 0.5) * size.y + rise * (1 - v))
                 }
-                // Verification uses a triangular notch with the same physical
-                // boundary at each refinement and both interior mesh patterns.
-                let rise = notchDepth * max(0, 1 - abs(x) * Double(columns) / size.x)
-                return Point(x, (v - 0.5) * size.y + rise * (1 - v))
             }
         case .enclosure:
             mesh = .enclosure(size: size, wall: wall, refinement: refinement)
@@ -84,7 +121,50 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         let radians = angle * .pi / 180
         let c = cos(radians), s = sin(radians)
         let position = mesh.reference.map { center + Point(c * $0.x - s * $0.y, s * $0.x + c * $0.y) }
-        return Body(mesh: mesh, material: material, position: position, velocity: velocity)
+        return Body(mesh: mesh, material: material, position: position, velocity: velocity,
+                    elementMaterials: elementMaterials)
+    }
+
+    private func partitionedBlock(rows: Int, refinement: Int, staggered: Bool) -> (Mesh, [Material]?) {
+        var cuts = [0.0, 1.0]
+        let center = 0.5 + (notch?.centerFraction ?? 0)
+        let halfWidth = (notch?.widthFraction ?? 0) / 2
+        if let notch {
+            cuts += [center - notch.widthFraction / 2, center, center + notch.widthFraction / 2]
+        }
+        if let bondedLayer { cuts.append(bondedLayer.interfaceFraction) }
+        cuts.sort()
+        var stations = [0.0]
+        for (left, right) in zip(cuts, cuts.dropFirst()) {
+            let count = max(1, Int(((right - left) * size.x / 0.009).rounded())) * refinement
+            for i in 1..<count {
+                stations.append(left + (right - left) * Double(i) / Double(count))
+            }
+            stations.append(right)
+        }
+        let columns = stations.count - 1
+        let interface = bondedLayer.flatMap { stations.firstIndex(of: $0.interfaceFraction) }
+        let mesh = Mesh.rectangle(columns: columns, rows: rows, interfaceColumn: interface,
+                                  staggerDiagonals: staggered) { u, v in
+            let column = Int((u * Double(columns)).rounded())
+            let row = Int((v * Double(rows)).rounded())
+            var x = stations[column]
+            if staggered && column > 0 && column < columns && row > 0 && row < rows {
+                let direction = row.isMultiple(of: 2) ? 1 : -1
+                // Keep the sloping notch cells aligned across rows.
+                if stations[column + 1] <= center - halfWidth || stations[column - 1] >= center + halfWidth {
+                    x += 0.24 * (stations[column + direction] - x)
+                }
+            }
+            let rise = notch.map { size.y * $0.depthFraction * max(0, 1 - 2 * abs(x - center) / $0.widthFraction) } ?? 0
+            return Point((x - 0.5) * size.x, (v - 0.5) * size.y + rise * (1 - v))
+        }
+        let materials = interface.flatMap { column in
+            bondedLayer.map { layer in
+                mesh.elements.indices.map { ($0 / 2) % columns < column ? material : layer.material }
+            }
+        }
+        return (mesh, materials)
     }
 }
 
@@ -122,12 +202,14 @@ public struct AssemblyConnection: Codable, Equatable, Identifiable, Sendable {
 public struct AssemblyScene: Codable, Equatable, Sendable {
     public enum Resolution: Int, CaseIterable, Codable, Sendable {
         case standard = 1, fine, extraFine
+        case x4, x5, x6, x7
 
         public var label: String {
             switch self {
             case .standard: "Standard (≈9 mm)"
             case .fine: "Fine (≈4.5 mm)"
             case .extraFine: "Extra fine (≈3 mm)"
+            default: String(format: "×%d (≈%.2f mm)", rawValue, 9.0 / Double(rawValue))
             }
         }
     }
@@ -137,6 +219,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     public var duration = 0.12
     public var monitor: UUID?
     public var relativeTo: UUID?
+    public var gauges: [AssemblyGauge]?
     // Optional on disk so scenes from 0.6 retain their original meshes.
     public var meshResolution: Resolution?
     public var resolution: Resolution { meshResolution ?? .standard }
@@ -149,6 +232,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     public mutating func removePart(_ id: UUID) {
         parts.removeAll { $0.id == id }
         connections.removeAll { $0.first == id || $0.second == id }
+        gauges?.removeAll { $0.body == id }
         if monitor == id { monitor = nil }
         if relativeTo == id || relativeTo == (monitor ?? parts.first?.id) { relativeTo = nil }
     }
@@ -159,6 +243,9 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
               ids.count == parts.count, Set(connections.map(\.id)).count == connections.count,
               (0.02...0.25).contains(duration), monitor.map(ids.contains) ?? true,
               relativeTo.map({ ids.contains($0) && $0 != (monitor ?? parts.first?.id) }) ?? true,
+              (gauges?.count ?? 0) <= AssemblyGauge.limit,
+              Set(gauges?.map(\.id) ?? []).count == (gauges?.count ?? 0),
+              gauges?.allSatisfy({ $0.isValid && ids.contains($0.body) }) ?? true,
               parts.allSatisfy(\.isValid), connections.allSatisfy({ $0.isValid && ids.contains($0.first) && ids.contains($0.second) })
         else { throw AssemblyError.invalidSettings }
     }
@@ -183,12 +270,14 @@ enum AssemblyError: LocalizedError {
     case invalidSettings
     case overlap(String, String)
     case coincidentAnchors(Int)
+    case gaugeOutsideMaterial(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidSettings: "Assembly settings are outside the supported ranges."
         case .overlap(let a, let b): "\(a) and \(b) overlap or touch at the start. Leave a small clearance."
         case .coincidentAnchors(let index): "Connection \(index + 1) needs at least 0.5 mm between its start anchors."
+        case .gaugeOutsideMaterial(let name): "\(name) must be inside its body's reference material."
         }
     }
 }

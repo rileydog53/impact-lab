@@ -113,9 +113,16 @@ struct AssemblyEditor: View {
                 if !name.isEmpty { experiment.updatePart(part.id) { $0.name = String(name.prefix(48)) } }
             }))
             .textFieldStyle(.roundedBorder)
+            Picker("Body mesh", selection: Binding(get: { part.refinement }, set: { level in
+                experiment.updatePart(part.id) { $0.refinement = level }
+            })) {
+                Text("Use assembly mesh").tag(nil as AssemblyScene.Resolution?)
+                ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag(Optional($0)) }
+            }
             Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
                 experiment.updatePart(part.id) { $0.fracture = enabled ? MaterialFractureSettings() : nil }
             })).toggleStyle(.checkbox)
+                .disabled(part.bondedLayer != nil)
             if let fracture = part.fracture {
                 HStack {
                     numeric("Strength / E (%)", value: fracture.strengthFraction,
@@ -160,6 +167,7 @@ struct AssemblyEditor: View {
                         bodyNumber("VY (m/s)", part, \.velocity.y, -1.5...1.5)
                     }
                 }.padding(.top, 7)
+                if part.shape == .block && part.bondedLayer == nil { notchEditor(part) }
             }
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
@@ -167,6 +175,7 @@ struct AssemblyEditor: View {
                                                           set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
                         ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
+                    .disabled(part.bondedLayer != nil)
                     Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                         GridRow {
                             bodyNumber("Modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
@@ -182,7 +191,86 @@ struct AssemblyEditor: View {
                             }
                         }
                     }
+                    if part.shape == .block { bondedLayerEditor(part) }
                 }.padding(.top, 7)
+            }
+            gaugeEditor(part)
+        }
+    }
+
+    private func notchEditor(_ part: AssemblyPart) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Toggle("V-notch on local bottom edge", isOn: Binding(get: { part.notch != nil }, set: { enabled in
+                experiment.updatePart(part.id) { $0.notch = enabled ? AssemblyPart.Notch() : nil }
+            })).toggleStyle(.checkbox)
+            if let notch = part.notch {
+                HStack {
+                    numeric("Offset (% width)", value: notch.centerFraction, range: -0.30...0.30, scale: 100) { value in
+                        experiment.updatePart(part.id) { $0.notch?.centerFraction = value }
+                    }
+                    numeric("Width (%)", value: notch.widthFraction, range: 0.12...0.36, scale: 100) { value in
+                        experiment.updatePart(part.id) { $0.notch?.widthFraction = value }
+                    }
+                    numeric("Depth (%)", value: notch.depthFraction, range: 0.02...0.45, scale: 100) { value in
+                        experiment.updatePart(part.id) { $0.notch?.depthFraction = value }
+                    }
+                }
+            }
+        }
+    }
+
+    private func bondedLayerEditor(_ part: AssemblyPart) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Toggle("Bonded second material", isOn: Binding(get: { part.bondedLayer != nil }, set: { enabled in
+                experiment.updatePart(part.id) { $0.bondedLayer = enabled ? AssemblyPart.BondedLayer() : nil }
+            }))
+            .toggleStyle(.checkbox)
+            .disabled(part.notch != nil || part.fracture != nil || part.plasticity.response != .elastic)
+            .help("Available on unnotched elastic blocks with material fracture off")
+            if let layer = part.bondedLayer {
+                Text("The two elastic materials share nodes at a permanent bond. The second material lies to its local right.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    numeric("Bond from left (% width)", value: layer.interfaceFraction, range: 0.10...0.90, scale: 100) { value in
+                        experiment.updatePart(part.id) { $0.bondedLayer?.interfaceFraction = value }
+                    }
+                    numeric("Second E (MPa)", value: layer.material.young, range: SceneConfiguration.youngRange, scale: 1e-6) { value in
+                        experiment.updatePart(part.id) { $0.bondedLayer?.material.young = value }
+                    }
+                }
+                HStack {
+                    numeric("Second density (kg/m³)", value: layer.material.density, range: SceneConfiguration.densityRange, scale: 1) { value in
+                        experiment.updatePart(part.id) { $0.bondedLayer?.material.density = value }
+                    }
+                    numeric("Second Poisson ratio", value: layer.material.poisson, range: SceneConfiguration.poissonRange, scale: 1) { value in
+                        experiment.updatePart(part.id) { $0.bondedLayer?.material.poisson = value }
+                    }
+                }
+            }
+        }.padding(.vertical, 4)
+    }
+
+    private func gaugeEditor(_ part: AssemblyPart) -> some View {
+        ForEach(experiment.gauges.filter { $0.body == part.id }) { gauge in
+            if let index = experiment.gauges.firstIndex(where: { $0.id == gauge.id }) {
+                let value = experiment.simulation.gaugeReading(index)
+                DisclosureGroup {
+                    HStack {
+                        numeric("Local X (mm)", value: gauge.location.x, range: -part.size.x/2...part.size.x/2, scale: 1000) { x in
+                            experiment.updateGauge(gauge.id) { $0.location.x = x }
+                        }
+                        numeric("Local Y (mm)", value: gauge.location.y, range: -part.size.y/2...part.size.y/2, scale: 1000) { y in
+                            experiment.updateGauge(gauge.id) { $0.location.y = y }
+                        }
+                        Button("Remove gauge", systemImage: "trash") {
+                            experiment.edit { $0.gauges?.removeAll { $0.id == gauge.id } }
+                        }.labelStyle(.iconOnly)
+                    }
+                    Text("Pressure \(value.pressure / 1000, specifier: "%+.3f") kPa · Strain \(100 * value.strain, specifier: "%+.3f")%")
+                        .font(.caption.monospacedDigit())
+                } label: {
+                    Label(gauge.name, systemImage: "scope")
+                }
             }
         }
     }
@@ -240,7 +328,7 @@ struct AssemblyEditor: View {
     private var runSettings: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Run settings").font(.headline)
-            Picker("Mesh", selection: Binding(get: { experiment.scene.resolution }, set: { resolution in
+            Picker("Assembly mesh", selection: Binding(get: { experiment.scene.resolution }, set: { resolution in
                 experiment.edit { $0.meshResolution = resolution }
             })) {
                 ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag($0) }

@@ -4,16 +4,27 @@ private struct MaterialAnchor: Sendable {
     let element: Int
     let weights: SIMD3<Double>
 
-    init(_ point: Point, mesh: Mesh) {
-        let reference = mesh.reference
+    static func locate(_ point: Point, mesh: Mesh) -> Self? {
         for (i, triangle) in mesh.elements.enumerated() {
-            let offset = point - reference[triangle.a]
+            let offset = point - mesh.reference[triangle.a]
             let b = simd_dot(offset, triangle.g1), c = simd_dot(offset, triangle.g2)
             if min(b, c, 1 - b - c) >= -1e-10 {
-                element = i
-                weights = SIMD3(1 - b - c, b, c)
-                return
+                return Self(element: i, weights: SIMD3(1 - b - c, b, c))
             }
+        }
+        return nil
+    }
+
+    private init(element: Int, weights: SIMD3<Double>) {
+        self.element = element
+        self.weights = weights
+    }
+
+    init(_ point: Point, mesh: Mesh) {
+        let reference = mesh.reference
+        if let located = Self.locate(point, mesh: mesh) {
+            self = located
+            return
         }
         var nearest = mesh.boundary[0]
         var distance = Double.infinity
@@ -188,6 +199,7 @@ public struct AssemblySimulation: Sendable {
     private let surfaces: [ContactSurface]
     private let pairs: [Pair]
     private let links: [AssemblyLink]
+    private let gaugeAnchors: [(part: Int, anchor: MaterialAnchor)]
     private let strikerPad: StrikerPad?
     private let padSprings: [PadSpring]
     package private(set) var padPeakCompression = 0.0
@@ -212,6 +224,29 @@ public struct AssemblySimulation: Sendable {
     public func materialPieces(_ index: Int) -> [MaterialPiece] { fractures[index]?.pieceMotion(body(index)) ?? [] }
 
     package func normalLoad(_ a: Int, _ b: Int) -> Double { normalLoads[SIMD2(min(a, b), max(a, b)), default: 0] }
+
+    public func gaugeReading(_ index: Int) -> AssemblyGaugeReading {
+        let (part, anchor) = gaugeAnchors[index]
+        let step = steps[part]
+        let body = step.body
+        let field = step.cauchyFields(anchor.element)
+        return AssemblyGaugeReading(position: anchor.point(in: body.position, mesh: body.mesh),
+                                    velocity: anchor.point(in: body.velocity, mesh: body.mesh),
+                                    strain: step.strain[anchor.element], pressure: field.pressure,
+                                    equivalentStress: field.equivalent,
+                                    plasticStrain: step.history?.current[anchor.element].equivalentStrain ?? 0,
+                                    damage: fractures[part]?.elementDamage(anchor.element) ?? 0)
+    }
+
+    public func gaugePosition(_ index: Int) -> Point {
+        let (part, anchor) = gaugeAnchors[index]
+        let body = steps[part].body
+        return anchor.point(in: body.position, mesh: body.mesh)
+    }
+
+    public func pressure(_ index: Int) -> [Double] {
+        steps[index].body.mesh.elements.indices.map { steps[index].cauchyFields($0, includeEquivalent: false).pressure }
+    }
 
     package func fragmentClearances(_ part: Int, to target: Int) -> [(piece: Int, distance: Double)] {
         guard let fracture = fractures[part] else { return [] }
@@ -255,7 +290,7 @@ public struct AssemblySimulation: Sendable {
         precondition(refinement > 0 && stepLimit > 0 && stepScale > 0 && notchDepth >= 0)
         self.scene = scene
         let bodies = scene.parts.enumerated().map { i, part in
-            part.makeBody(refinement: refinement, notchDepth: i == 0 ? notchDepth : 0)
+            part.makeBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
         }
         let fractures = zip(bodies, scene.parts).map { body, part in
             part.fracture.map { MaterialFracture(body: body, settings: $0) }
@@ -300,6 +335,13 @@ public struct AssemblySimulation: Sendable {
         self.pairs = pairs
 
         let indices = Dictionary(uniqueKeysWithValues: scene.parts.enumerated().map { ($0.element.id, $0.offset) })
+        gaugeAnchors = try (scene.gauges ?? []).map { gauge in
+            let part = indices[gauge.body]!
+            guard let anchor = MaterialAnchor.locate(gauge.location, mesh: bodies[part].mesh) else {
+                throw AssemblyError.gaugeOutsideMaterial(gauge.name)
+            }
+            return (part, anchor)
+        }
         var links: [AssemblyLink] = []
         var springs = Array(repeating: [(Int, Double)](), count: bodies.count)
         if let pad = strikerPad {

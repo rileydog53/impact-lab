@@ -777,23 +777,32 @@ public struct Simulation: Sendable {
 
 extension BodyStep {
     func equivalentCauchyStress() -> [Double] {
-        body.mesh.elements.enumerated().map { index, e in
-            let u = body.position[e.b] - body.position[e.a]
-            let v = body.position[e.c] - body.position[e.a]
-            let x = u * e.g1.x + v * e.g2.x
-            let y = u * e.g1.y + v * e.g2.y
-            let jacobian = cross2D(x, y)
-            if let history {
-                let response = history.model.update(x: x, y: y, from: history.current[index])
-                return (response?.equivalentStress ?? 0) / jacobian
-            }
-            let mu = (body.elementMaterials?[index] ?? body.material).shear
-            // The spherical part cancels in von Mises stress. Fzz is one.
-            let xx = x.x * x.x + y.x * y.x
-            let yy = x.y * x.y + y.y * y.y
-            let xy = x.x * x.y + y.x * y.y
-            let norm = ((xx - yy) * (xx - yy) + (xx - 1) * (xx - 1) + (yy - 1) * (yy - 1)) / 2 + 3 * xy * xy
-            return mu / jacobian * norm.squareRoot()
+        body.mesh.elements.indices.map { cauchyFields($0, includePressure: false).equivalent }
+    }
+
+    func cauchyFields(_ index: Int, includePressure: Bool = true, includeEquivalent: Bool = true)
+        -> (pressure: Double, equivalent: Double) {
+        let e = body.mesh.elements[index]
+        let u = body.position[e.b] - body.position[e.a]
+        let v = body.position[e.c] - body.position[e.a]
+        let x = u * e.g1.x + v * e.g2.x
+        let y = u * e.g1.y + v * e.g2.y
+        let jacobian = cross2D(x, y)
+        if let history {
+            let pressure = includePressure ? -history.model.bulk * log(jacobian) / jacobian : 0
+            let equivalent = includeEquivalent
+                ? (history.model.update(x: x, y: y, from: history.current[index])?.equivalentStress ?? 0) / jacobian : 0
+            return (pressure, equivalent)
         }
+        let material = body.elementMaterials?[index] ?? body.material
+        // Plane strain has Fzz = 1. Pressure is positive in compression.
+        let xx = x.x * x.x + y.x * y.x
+        let yy = x.y * x.y + y.y * y.y
+        let pressure = includePressure
+            ? -(material.shear * (xx + yy - 2) / 3 + material.lambda * log(jacobian)) / jacobian : 0
+        guard includeEquivalent else { return (pressure, 0) }
+        let xy = x.x * x.y + y.x * y.y
+        let norm = ((xx - yy) * (xx - yy) + (xx - 1) * (xx - 1) + (yy - 1) * (yy - 1)) / 2 + 3 * xy * xy
+        return (pressure, material.shear / jacobian * norm.squareRoot())
     }
 }

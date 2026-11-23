@@ -196,6 +196,11 @@ if CommandLine.arguments.dropFirst().contains("--assembly") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--assembly-study") {
+    try await assemblyStudyCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--off-axis") {
     try offAxisImpactCheck()
     exit(EXIT_SUCCESS)

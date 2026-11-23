@@ -511,6 +511,14 @@ package struct MaterialFracture: Sendable {
         return result
     }
 
+    func elementDamage(_ element: Int) -> Double {
+        interfaces.reduce(0.0) { damage, seam in
+            let face = faces[seam.face]
+            guard face.a == element || face.b == element else { return damage }
+            return max(damage, seam.law.progress(max(seam.maxima.x, seam.maxima.y)))
+        }
+    }
+
     func pieceMotion(_ body: Body) -> [MaterialPiece] {
         var totals: [Int: (mass: Double, center: Point, momentum: Point)] = [:]
         for (element, id) in pieces.enumerated() {

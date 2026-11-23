@@ -42,21 +42,37 @@ struct ContactSurface: Sendable {
     let stiffness: [Double]
 
     init(body: Body) {
-        self.init(edges: body.mesh.boundary, reference: body.mesh.reference, young: body.material.young)
+        if let materials = body.elementMaterials {
+            let boundary = Set(body.mesh.boundary.map { SIMD2($0.a, $0.b) })
+            var boundaryModuli: [SIMD2<Int>: Double] = [:]
+            for (element, material) in zip(body.mesh.elements, materials) {
+                for i in 0..<3 {
+                    let nodes = element.nodes
+                    let edge = SIMD2(nodes[i], nodes[(i + 1) % 3])
+                    if boundary.contains(edge) { boundaryModuli[edge] = material.young }
+                }
+            }
+            self.init(edges: body.mesh.boundary, reference: body.mesh.reference, young: body.material.young,
+                      boundaryModuli: boundaryModuli)
+        } else {
+            self.init(edges: body.mesh.boundary, reference: body.mesh.reference, young: body.material.young)
+        }
     }
 
-    init(edges: [Edge], reference: [Point], young: Double, sourceEdges: [Edge]? = nil) {
+    init(edges: [Edge], reference: [Point], young: Double, sourceEdges: [Edge]? = nil,
+         boundaryModuli: [SIMD2<Int>: Double]? = nil) {
         self.edges = edges
         let nodes = Set(edges.flatMap { [$0.a, $0.b] }).sorted()
         var lengths: [Int: Double] = [:]
         for edge in sourceEdges ?? edges {
-            let halfLength = 0.5 * simd_distance(reference[edge.a], reference[edge.b])
+            var halfLength = 0.5 * simd_distance(reference[edge.a], reference[edge.b])
+            if let boundaryModuli { halfLength *= boundaryModuli[SIMD2(edge.a, edge.b)] ?? young }
             lengths[edge.a, default: 0] += halfLength
             lengths[edge.b, default: 0] += halfLength
         }
         self.nodes = nodes
         // The two passes each carry half the tributary-length quadrature.
-        stiffness = nodes.map { 0.5 * lengths[$0, default: 0] * young * 2500 }
+        stiffness = nodes.map { 0.5 * lengths[$0, default: 0] * (boundaryModuli == nil ? young : 1) * 2500 }
     }
 }
 

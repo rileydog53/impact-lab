@@ -17,6 +17,7 @@ struct AssemblyComparison {
     var error: String?
     var selectedPart: UUID?
     var selectedConnection: UUID?
+    var placingGauge = false
     private(set) var reference: AssemblyComparison?
 
     var scene: AssemblyScene { run.simulation.scene }
@@ -26,18 +27,22 @@ struct AssemblyComparison {
     var canRun: Bool { simulation.initialIssue == nil && simulation.failure == nil && !scene.parts.isEmpty && !run.finished }
     var finished: Bool { run.finished }
     var selectedIndex: Int? { scene.parts.firstIndex { $0.id == selectedPart } }
+    var gauges: [AssemblyGauge] { scene.gauges ?? [] }
     var monitoredName: String { scene.parts.first { $0.id == scene.monitor }?.name ?? scene.parts.first?.name ?? "Body" }
     var elementCount: Int { (0..<simulation.bodyCount).reduce(0) { $0 + simulation.body($1).mesh.elements.count } }
     var relativeName: String { scene.parts.first { $0.id == scene.relativeTo }?.name ?? "Lab frame" }
     var current: AssemblyComparison {
         let monitored = scene.parts.first { $0.id == scene.monitor } ?? scene.parts.first
         let pattern = monitored.flatMap { $0.shape == .block ? $0.fracture?.pattern.rawValue : nil }
-        let details = [monitoredName, scene.resolution.label, pattern, "\(elementCount) triangles"].compactMap { $0 }
+        let mesh = monitored?.refinement ?? scene.resolution
+        let details = [monitoredName, mesh.label, pattern, "\(elementCount) triangles"].compactMap { $0 }
         return AssemblyComparison(details: details.joined(separator: " · "), samples: samples,
                                   tracksFracture: scene.parts.contains { $0.fracture != nil })
     }
 
-    var canRefine: Bool { scene.resolution != .extraFine && samples.count > 1 }
+    var canRefine: Bool {
+        scene.parts.contains { $0.refinement == nil } && scene.resolution != .x7 && samples.count > 1
+    }
 
     func refine() {
         guard canRefine, let resolution = AssemblyScene.Resolution(rawValue: scene.resolution.rawValue + 1) else { return }
@@ -49,6 +54,7 @@ struct AssemblyComparison {
     func configure(_ scene: AssemblyScene) throws {
         let next = try AssemblyRun(scene)
         pause()
+        placingGauge = false
         run = next
         if !scene.parts.contains(where: { $0.id == selectedPart }) { selectedPart = nil }
         if !scene.connections.contains(where: { $0.id == selectedConnection }) { selectedConnection = nil }
@@ -70,6 +76,29 @@ struct AssemblyComparison {
     func selectConnection(_ connection: UUID) {
         selectedConnection = connection
         selectedPart = nil
+    }
+
+    @discardableResult func addGauge(body id: UUID, at world: Point) -> UUID? {
+        guard simulation.time == 0, gauges.count < AssemblyGauge.limit,
+              let part = scene.parts.first(where: { $0.id == id }) else { return nil }
+        let radians = part.angle * .pi / 180
+        let c = cos(radians), s = sin(radians)
+        let offset = world - part.center
+        let local = Point(c * offset.x + s * offset.y, -s * offset.x + c * offset.y)
+        let used = Set(gauges.map(\.name))
+        let number = (1...AssemblyGauge.limit).first { !used.contains("Gauge \($0)") }!
+        let gauge = AssemblyGauge(body: id, name: "Gauge \(number)", location: local)
+        edit { $0.gauges = ($0.gauges ?? []) + [gauge] }
+        select(id)
+        placingGauge = false
+        return gauges.contains { $0.id == gauge.id } ? gauge.id : nil
+    }
+
+    func updateGauge(_ id: UUID, _ change: (inout AssemblyGauge) -> Void) {
+        edit {
+            guard let index = $0.gauges?.firstIndex(where: { $0.id == id }) else { return }
+            change(&$0.gauges![index])
+        }
     }
 
     @discardableResult func add(_ shape: AssemblyPart.Shape) -> UUID? {
@@ -130,7 +159,7 @@ struct AssemblyComparison {
 
     func toggle() {
         if running { pause() }
-        else if canRun { running = true }
+        else if canRun { placingGauge = false; running = true }
     }
 
     func tick(now: Double = ProcessInfo.processInfo.systemUptime) {
@@ -157,6 +186,7 @@ struct AssemblyComparison {
 
     func advance(to time: Double) {
         pause()
+        placingGauge = false
         while simulation.time < time && advance() {}
     }
 }

@@ -32,7 +32,47 @@ struct TriangleContact: Sendable {
 
     struct Workspace: Sendable {
         var origin: [Point] = []
-        var candidates: [SIMD2<Int>] = []
+        fileprivate var candidates: [Candidate] = []
+    }
+
+    fileprivate struct Candidate: Sendable {
+        let pair: SIMD2<Int>
+        // A shared vertex and the four stencil nodes in cone order.
+        let vertex: Int
+        let stencil: SIMD4<Int>
+
+        init?(_ a: Int, _ b: Int, elements: [Triangle]) {
+            pair = SIMD2(a, b)
+            let left = elements[a].nodes, right = elements[b].nodes
+            for i in 0..<3 {
+                let node = left[i]
+                let j = node == right.x ? 0 : (node == right.y ? 1 : (node == right.z ? 2 : -1))
+                if j < 0 { continue }
+                let next = left[(i + 1) % 3], previous = left[(i + 2) % 3]
+                let otherNext = right[(j + 1) % 3], otherPrevious = right[(j + 2) % 3]
+                // Positive triangles sharing an edge have disjoint interiors.
+                if next == otherNext || next == otherPrevious || previous == otherNext || previous == otherPrevious {
+                    return nil
+                }
+                vertex = node
+                stencil = SIMD4(next, previous, otherNext, otherPrevious)
+                return
+            }
+            vertex = -1
+            stencil = .zero
+        }
+
+        func separated(at positions: [Point]) -> Bool {
+            guard vertex >= 0 else { return false }
+            let origin = positions[vertex]
+            let u = positions[stencil.x] - origin, v = positions[stencil.y] - origin
+            let w = positions[stencil.z] - origin, z = positions[stencil.w] - origin
+            // These are the four separating axes through the shared vertex.
+            return max(cross2D(u, w), cross2D(u, z)) <= 0
+                || min(cross2D(v, w), cross2D(v, z)) >= 0
+                || max(cross2D(w, u), cross2D(w, v)) <= 0
+                || min(cross2D(z, u), cross2D(z, v)) >= 0
+        }
     }
 
     struct Contact {
@@ -106,16 +146,15 @@ struct TriangleContact: Sendable {
             workspace.origin = positions
             rebuildCandidates(state, into: &workspace.candidates)
         }
-        for pair in workspace.candidates {
-            let a = state.elements[pair.x].nodes, b = state.elements[pair.y].nodes
-            if !Self.separatedAtSharedVertex(a, b, at: positions),
-               let hit = Self.overlap(pair.x, in: state, pair.y, in: state, stiffness: stiffness) {
+        for candidate in workspace.candidates {
+            if !candidate.separated(at: positions),
+               let hit = Self.overlap(candidate.pair.x, in: state, candidate.pair.y, in: state, stiffness: stiffness) {
                 contact(hit)
             }
         }
     }
 
-    private func rebuildCandidates(_ state: State, into candidates: inout [SIMD2<Int>]) {
+    private func rebuildCandidates(_ state: State, into candidates: inout [Candidate]) {
         var bounds: [Bounds] = []
         bounds.reserveCapacity(tree.count)
         let positions = state.positions
@@ -134,12 +173,8 @@ struct TriangleContact: Sendable {
             if !bounds[a].intersects(bounds[b]) { return }
             let l = tree[a], r = tree[b]
             if l.leaf && r.leaf {
-                if a != b {
-                    let v = state.elements[l.first].nodes, w = state.elements[r.first].nodes
-                    let shared = (0..<3).reduce(0) { count, i in
-                        count + (v[i] == w.x || v[i] == w.y || v[i] == w.z ? 1 : 0)
-                    }
-                    if shared < 2 { candidates.append(SIMD2(l.first, r.first)) }
+                if a != b, let candidate = Candidate(l.first, r.first, elements: state.elements) {
+                    candidates.append(candidate)
                 }
             } else if a == b {
                 traverse(l.first, l.first)
@@ -154,28 +189,6 @@ struct TriangleContact: Sendable {
             }
         }
         traverse(tree.count - 1, tree.count - 1)
-    }
-
-    private static func separatedAtSharedVertex(_ a: SIMD3<Int>, _ b: SIMD3<Int>, at position: [Point]) -> Bool {
-        for i in 0..<3 {
-            let shared = a[i]
-            let j = shared == b.x ? 0 : (shared == b.y ? 1 : (shared == b.z ? 2 : -1))
-            guard j >= 0 else { continue }
-            let aNext = a[(i + 1) % 3], aPrevious = a[(i + 2) % 3]
-            let bNext = b[(j + 1) % 3], bPrevious = b[(j + 2) % 3]
-            // Positive triangles with a shared edge have disjoint interiors.
-            if aNext == bPrevious || aPrevious == bNext { return true }
-            let p = position[shared]
-            let u = position[aNext] - p, v = position[aPrevious] - p
-            let w = position[bNext] - p, z = position[bPrevious] - p
-            // The four sides of the two cones at the shared point are
-            // separating axes for the triangles themselves.
-            return max(cross2D(u, w), cross2D(u, z)) <= 0
-                || min(cross2D(v, w), cross2D(v, z)) >= 0
-                || max(cross2D(w, u), cross2D(w, v)) <= 0
-                || min(cross2D(z, u), cross2D(z, v)) >= 0
-        }
-        return false
     }
 
     private static func overlap(_ a: Int, in left: State, _ b: Int, in right: State, stiffness: Double) -> Contact? {
