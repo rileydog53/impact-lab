@@ -1,18 +1,19 @@
 import CoreGraphics
-import ImpactPhysics
-import SwiftUI
+import Foundation
+#if canImport(CoreGraphics)
 
 /// Draws a recovered scalar field as a continuous image. The scalar is interpolated across each
 /// triangle and colour-mapped per pixel, so no triangle edges show unless the mesh overlay is on.
 /// Display only: the input is solver output after averaging, see SmoothField.swift.
-enum FieldRaster {
-    struct Output {
-        let image: CGImage
+public enum FieldRaster {
+    public struct Output {
+        public let image: CGImage
         /// Screen rectangle the image covers.
-        let rect: CGRect
+        public let rect: CGRect
     }
 
-    static func render(screen nodes: [CGPoint], triangles: [SIMD3<Int>], corners: [SIMD3<Double>],
+    /// `nodes` are screen/pixel-space points (y down); `scale` is pixels per unit.
+    public static func render(screen nodes: [CGPoint], triangles: [SIMD3<Int>], corners: [SIMD3<Double>],
                        limit: Double, signed: Bool, scale: CGFloat) -> Output? {
         guard !triangles.isEmpty, scale > 0 else { return nil }
         var minX = CGFloat.infinity, minY = CGFloat.infinity, maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
@@ -69,33 +70,4 @@ enum FieldRaster {
         return Output(image: image, rect: rect)
     }
 }
-
-/// Continuous colour bar with ticks and units, for the smooth display.
-struct SmoothFieldLegend: View {
-    let field: AssemblyField
-    let limit: Double
-
-    var body: some View {
-        let map: FieldColormap = field.signed ? .diverging : .sequential
-        let stops = (0...16).map { i -> Color in
-            let c = map.color(Double(i) / 16)
-            return Color(red: c.x, green: c.y, blue: c.z)
-        }
-        let low = field.signed ? -limit : 0
-        HStack(spacing: 6) {
-            Text(field.display(low, limit: limit))
-            VStack(spacing: 1) {
-                LinearGradient(colors: stops, startPoint: .leading, endPoint: .trailing)
-                    .frame(width: 120, height: 8).clipShape(.capsule)
-                if field.signed {
-                    Text("0").font(.system(size: 8)).foregroundStyle(.secondary)
-                }
-            }
-            Text(field.display(limit, limit: limit))
-        }
-        .font(.caption.monospacedDigit())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Smooth color scale \(field.display(low, limit: limit)) to \(field.display(limit, limit: limit))")
-        .help("Interpolated display of solver output (area-weighted averaging). Values beyond the scale use the end colors.")
-    }
-}
+#endif
