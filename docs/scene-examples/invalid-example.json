@@ -1,6 +1,6 @@
 {
   "description": "Deliberately broken. Open it to see how Impact Lab explains problems instead of ignoring them.",
-  "duration": 2,
+  "duration": 3,
   "gravity": [0, -9.81],
   "parts": [
     { "name": "Floor", "size": [0.5, 0.02], "fixed": true, "material": "titanium" },

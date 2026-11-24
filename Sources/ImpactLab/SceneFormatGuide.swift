@@ -41,17 +41,17 @@ struct SceneFormatGuide: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 8))
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
-                        row("Scene", "parts, connections, gauges, duration (0.0001–0.25 s), meshResolution (standard, fine, extraFine, x4–x7), monitor, relativeTo, groups")
-                        row("Body", "name, shape (block, enclosure, round), size [w, h] 0.025–0.30 m, center, angle, velocity [vx, vy] ±150 m/s, wall, refinement, material, plasticity, fracture, notch, bondedLayer")
+                        row("Scene", "parts, connections, gauges, duration (0.0001–2 s), gravity (m/s², downward), meshResolution (standard, fine, extraFine, x4–x7), monitor, relativeTo, groups")
+                        row("Body", "name, shape (block, enclosure, round), size [w, h] 0.025–0.30 m, center, angle, velocity [vx, vy] ±150 m/s, wall, refinement, material, plasticity, fracture, notch, bondedLayer, support (fixed, clampLeft, clampRight, clampBottom, clampTop)")
                         row("Material", "a profile id, { \"profile\": id, \"elasticOnly\": true }, or { young, density, poisson }")
                         row("Profiles", MaterialProfile.references.map(\.id).joined(separator: ", "))
-                        row("Connections", "first, second (body names), kind (spring, breakable), stiffness, criticalExtension, span, anchors")
+                        row("Connections", "first, second (body names), kind (spring, breakable), stiffness, criticalExtension, span, anchors, preload (m, springs only)")
                         row("Gauges", "name, body, location [x, y] in metres or body fractions with usesBodyFractions")
                     }
                     .font(.callout)
-                    Text("Not available in the solver, and reported as an error if present: fixed or clamped constraints, gravity and applied loads, friction, initial spin, temperature or rate effects, and a user-set timestep. Unknown or misspelled settings are also reported rather than ignored.")
+                    Text("Not available in the solver, and reported as an error if present: pinned points and partial constraints, applied loads other than gravity, friction, initial spin, temperature or rate effects, and a user-set timestep. Unknown or misspelled settings are also reported rather than ignored.")
                         .foregroundStyle(assemblyAmber)
-                    Text("Full reference and examples: docs/SCENE_FORMAT.md and docs/scene-examples in the Impact Lab project folder.")
+                    Text("Full reference and examples: docs/SCENE_FORMAT.md, docs/scene-examples and docs/lab-examples in the Impact Lab project folder.")
                         .foregroundStyle(.secondary)
                 }
                 .fixedSize(horizontal: false, vertical: true)

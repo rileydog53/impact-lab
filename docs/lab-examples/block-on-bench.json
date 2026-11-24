@@ -1,0 +1,13 @@
+{
+  "description": "A rubber-like block set 0.5 mm above a fixed lab bench, with gravity on. It drops, settles and rocks gently on the bench. Check: the time-averaged bench reaction equals the block's weight (m·g per metre of depth). Elastic only.",
+  "gravity": 9.80665,
+  "duration": 0.25,
+  "meshResolution": "fine",
+  "parts": [
+    { "name": "Lab bench", "size": [0.4, 0.03], "center": [0, -0.015], "support": "fixed",
+      "material": { "young": 1e7, "density": 2500, "poisson": 0.2 } },
+    { "name": "Block", "size": [0.06, 0.05], "center": [0, 0.0255],
+      "material": { "young": 3e6, "density": 1100, "poisson": 0.25 } }
+  ],
+  "monitor": "Block"
+}

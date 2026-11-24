@@ -9,6 +9,8 @@ enum WorkshopGeometry: String, CaseIterable {
     case enclosure = "Hollow Enclosure"
     case layered = "Bonded Layer Plate"
     case support = "Deformable Support"
+    case bench = "Lab Bench (fixed)"
+    case roller = "Fixed Roller Support"
 
     var icon: String {
         switch self {
@@ -18,6 +20,8 @@ enum WorkshopGeometry: String, CaseIterable {
         case .enclosure: "square.dashed"
         case .layered: "square.3.layers.3d"
         case .support: "rectangle.bottomthird.inset.filled"
+        case .bench: "rectangle.split.3x1"
+        case .roller: "circle.bottomhalf.filled"
         }
     }
 
@@ -40,6 +44,16 @@ enum WorkshopGeometry: String, CaseIterable {
             var support = AssemblyPart(name, size: Point(0.045, 0.060))
             AssemblyMaterialProfile.stiff.apply(to: &support)
             return support
+        case .bench:
+            var bench = AssemblyPart("Lab bench \(number)", size: Point(0.400, 0.030))
+            AssemblyMaterialProfile.stiff.apply(to: &bench)
+            bench.support = .fixed
+            return bench
+        case .roller:
+            var roller = AssemblyPart("Roller support \(number)", shape: .round, size: Point(0.025, 0.025))
+            AssemblyMaterialProfile.stiff.apply(to: &roller)
+            roller.support = .fixed
+            return roller
         }
     }
 }
@@ -282,6 +296,13 @@ struct WorkshopMeshQuality {
             else { placement.needsOtherBody = true }
             linkPlacement = placement
         }
+    }
+
+    /// A bench goes just under everything already placed, with a 0.5 mm starting gap.
+    func benchPoint(for size: Point) -> Point {
+        guard !scene.parts.isEmpty else { return Point(0, -0.06) }
+        let current = bounds(of: scene.parts.indices)
+        return Point(0.5 * (current.low.x + current.high.x), current.low.y - size.y / 2 - 0.0005)
     }
 
     func insertionPoint(for size: Point) -> Point {

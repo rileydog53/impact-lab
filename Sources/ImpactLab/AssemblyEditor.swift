@@ -14,6 +14,9 @@ struct AssemblyEditor: View {
     @State private var multiSelect = false
     @State private var layoutGap = 0.010
     @State private var showWorkshopLimits = false
+    @AppStorage(RuntimeWarnings.showKey) private var showEstimateAbove = RuntimeWarnings.defaultShow
+    @AppStorage(RuntimeWarnings.confirmKey) private var confirmAbove = RuntimeWarnings.defaultConfirm
+    @AppStorage(RuntimeWarnings.longKey) private var warnAbove = RuntimeWarnings.defaultLong
 
     var body: some View {
         ScrollView {
@@ -34,7 +37,7 @@ struct AssemblyEditor: View {
                 }
                 .controlSize(.small)
                 if !experiment.canEdit {
-                    Text("Reset Run to edit the starting assembly.")
+                    Text("Showing a result. Use Edit a Copy to change the setup while keeping this result as the reference, or Reset Run to discard it.")
                         .font(.caption).foregroundStyle(assemblyAmber)
                 }
                 components
@@ -130,10 +133,12 @@ struct AssemblyEditor: View {
                 case .round: "circle.fill"
                 case .block: part.bondedLayer == nil ? "square.fill" : "square.3.layers.3d"
                 }
-                row(part.name, icon: icon, color: assemblyColor(index),
+                row(part.name + (part.support == nil ? "" : part.support == .fixed ? " · fixed" : " · clamped")
+                    + (part.refinement == nil ? "" : " · own mesh"), icon: icon, color: assemblyColor(index),
                     selected: experiment.selectedParts.contains(part.id)) {
                     experiment.select(part.id, adding: multiSelect || (NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false))
                 }
+                .help(part.refinement == nil ? part.name : "\(part.name) uses its own mesh (\(part.refinement!.label)) instead of the assembly mesh.")
             }
             ForEach(Array((experiment.scene.groups ?? []).enumerated()), id: \.element.id) { number, group in
                 row("Group \(number + 1) · \(group.members.count) bodies", icon: "square.on.square",
@@ -178,9 +183,11 @@ struct AssemblyEditor: View {
     private var workshopLimits: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Workshop limits").font(.headline)
-            Text("Bodies may translate and rotate. A deformable support is a stationary starting block that can move and deform under load. Fixed or clamped boundaries and rigid joints are unavailable in Assembly.")
-            Text("Permanent bonds join elastic layers within a block. Use springs or breakable tension links between separate bodies. Round bodies and bonded blocks do not support material fracture.")
-            Text("Round bodies use an elliptical mesh. Each local dimension can be 25–300 mm. Imported outlines, arbitrary cracks, and nested groups are unavailable.")
+            Text("Bodies may translate and rotate. A body can be a fixed support (a rigid bench, floor or roller that never moves) or have one edge clamped. A deformable support is an ordinary free block that can move and deform under load. Pinned points, rigid joints and partial constraints are unavailable.")
+            Text("Gravity can be switched on in Simulation settings; it pulls every free body downward (−Y). No other applied loads, pressures or friction exist; contact is frictionless.")
+            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies and bonded blocks do not support material fracture, and supported bodies cannot fracture yet.")
+            Text("Round bodies use an elliptical mesh. Each local dimension can be 25–300 mm (a fixed support up to 1,000 mm wide). The 25 mm minimum keeps at least three triangles across a body at the standard mesh; the 300 mm maximum is a workshop limit that keeps triangle counts and run times manageable, not a physical limit. Imported outlines, arbitrary cracks, and nested groups are unavailable.")
+            Text("Everything is two-dimensional plane strain: forces and energies are per metre of depth.")
             Text("Duplicates retain geometry, materials, initial motion, and links within the copied selection. External links and gauges stay with their original bodies.")
         }
         .font(.callout)
@@ -251,8 +258,8 @@ struct AssemblyEditor: View {
                         bodyNumber("Center Y (mm)", part, \.center.y, -1...1, scale: 1000)
                     }
                     GridRow {
-                        bodyNumber(part.shape == .round ? "Local X diameter (mm)" : "Local width (mm)", part, \.size.x, 0.025...0.30, scale: 1000)
-                        bodyNumber(part.shape == .round ? "Local Y diameter (mm)" : "Local height (mm)", part, \.size.y, 0.025...0.30, scale: 1000)
+                        bodyNumber(part.shape == .round ? "Local X diameter (mm)" : "Local width (mm)", part, \.size.x, part.widthRange, scale: 1000)
+                        bodyNumber(part.shape == .round ? "Local Y diameter (mm)" : "Local height (mm)", part, \.size.y, AssemblyPart.sizeRange, scale: 1000)
                     }
                     GridRow {
                         bodyNumber("Rotation (°)", part, \.angle, -360...360)
@@ -262,8 +269,15 @@ struct AssemblyEditor: View {
                         }
                     }
                 }.padding(.top, 5)
+                Text(part.support == .fixed
+                     ? "Sizes 25–300 mm; a fixed support may be up to 1,000 mm wide because it is never calculated as a deforming body. Typed values outside the range are set to the nearest limit."
+                     : "Sizes 25–300 mm. The minimum keeps at least three triangles across the body at the standard mesh; the maximum is a workshop limit on triangle count and run time. Typed values outside the range are set to the nearest limit."
+                     + (part.shape == .enclosure ? " Walls are at least 5 mm (two element layers) and at most 40% of the smaller side." : ""))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if part.shape == .block && part.bondedLayer == nil {
                     notchEditor(part).disabled(!experiment.canEdit)
+                } else if part.shape == .block {
+                    Text("V-notch is unavailable on a bonded-layer block.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             Text("Initial motion").font(.subheadline.weight(.semibold)).padding(.top, 4)
@@ -282,10 +296,7 @@ struct AssemblyEditor: View {
                 Text("Momentum (\(mass * part.velocity.x, specifier: "%.3g"), \(mass * part.velocity.y, specifier: "%.3g")) N·s/m")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
-            let links = experiment.scene.connections.filter { $0.first == part.id || $0.second == part.id }
-            Text(links.isEmpty ? "Constraints · Free body" : "Constraints · \(links.count) body-to-body \(links.count == 1 ? "link" : "links")")
-                .font(.caption).foregroundStyle(.secondary)
-                .help("Assembly bodies can translate and rotate. Links transfer load between bodies. Fixed or clamped supports are unavailable.")
+            supportEditor(part)
             DisclosureGroup("Mesh", isExpanded: $meshSettings) {
                 Picker("Body mesh", selection: Binding(get: { part.refinement }, set: { level in
                     experiment.updatePart(part.id) { $0.refinement = level }
@@ -295,6 +306,11 @@ struct AssemblyEditor: View {
                 }
                     .disabled(!experiment.canEdit)
                     .help("Override the triangle size for this body")
+                Text(part.refinement == nil
+                     ? "Follows the assembly mesh (\(experiment.scene.resolution.label)) set in Simulation settings."
+                     : "Overrides the assembly mesh. This body keeps \(part.refinement!.label) even when the assembly mesh changes. Reset all overrides in Simulation settings.")
+                    .font(.caption).foregroundStyle(part.refinement == nil ? Color.secondary : assemblyAmber)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let index = experiment.selectedIndex {
                     let quality = experiment.meshQuality[index]
                     Text("\(quality.triangleCount) triangles · Minimum shape quality \(quality.minimum, specifier: "%.2f")")
@@ -307,6 +323,7 @@ struct AssemblyEditor: View {
             }
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
+                    materialKind(part)
                     Button("Material Library…", systemImage: "square.stack.3d.up") { materialTarget = .body }
                     profiles("Apply illustrative profile", elasticOnly: part.bondedLayer != nil) { profile in
                         experiment.updatePart(part.id, action: "Apply Material") { profile.apply(to: &$0) }
@@ -322,13 +339,20 @@ struct AssemblyEditor: View {
                             Text("Elastic response").font(.caption)
                         }
                     } else {
-                        Text("Profiles use illustrative numerical values.")
+                        Text("Profiles in the menu above use illustrative numbers chosen to show a behaviour, not a real material.")
                             .font(.caption).foregroundStyle(.secondary)
                         Picker("Response", selection: Binding(get: { part.plasticity.response },
                                                               set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
                             ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
-                        .disabled(!experiment.canEdit || part.bondedLayer != nil)
+                        .disabled(!experiment.canEdit || part.bondedLayer != nil || part.support == .fixed)
+                        if part.bondedLayer != nil {
+                            Text("Response is Elastic because bonded layers share nodes and the plastic model is per body.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if part.support == .fixed {
+                            Text("Response is Elastic because a fixed support never deforms.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                             GridRow {
                                 bodyNumber("Young’s modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
@@ -347,7 +371,24 @@ struct AssemblyEditor: View {
                             }
                         }
                     }
-                    if part.material.provenance != nil {
+                    if let profile = MaterialProfile.references.first(where: { $0.id == part.material.provenance?.id }),
+                       part.shape != .round, part.bondedLayer == nil {
+                        VStack(alignment: .leading, spacing: 7) {
+                            if let estimate = profile.defaultFracture {
+                                Toggle("Material fracture (sourced estimate)", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
+                                    experiment.updatePart(part.id) { $0.fracture = enabled ? estimate : nil }
+                                })).toggleStyle(.checkbox)
+                                if part.fracture == nil {
+                                    Text("Off by default. Turning it on uses the handbook estimate for this material, with its citation.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            } else if case let .unavailable(reason) = profile.fractureEstimate {
+                                Text("Fracture toughness is off for this material. \(reason)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let fracture = part.fracture { fractureControls(part, fracture) }
+                        }.disabled(!experiment.canEdit)
+                    } else if part.material.provenance != nil {
                         Text("The selected metal profile supports elastic and J2 response. Bulk fracture is unavailable.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if part.shape == .round {
@@ -358,32 +399,7 @@ struct AssemblyEditor: View {
                             Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
                                 experiment.updatePart(part.id) { $0.fracture = enabled ? MaterialFractureSettings() : nil }
                             })).toggleStyle(.checkbox)
-                            if let fracture = part.fracture {
-                                HStack {
-                                    numeric("Strength / E (%)", value: fracture.strengthFraction,
-                                            range: MaterialFractureSettings.strengthRange, scale: 100) { value in
-                                        experiment.updatePart(part.id) { $0.fracture?.strengthFraction = value }
-                                    }
-                                    numeric("Fracture energy (J/m²)", value: fracture.energy,
-                                            range: MaterialFractureSettings.energyRange, scale: 1) { value in
-                                        experiment.updatePart(part.id) { $0.fracture?.energy = value }
-                                    }
-                                }
-                                if part.shape == .block {
-                                    Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
-                                        experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
-                                    })) {
-                                        ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) {
-                                            Text($0.rawValue).tag($0)
-                                        }
-                                    }
-                                }
-                                let resolution = part.refinement ?? experiment.scene.resolution
-                                Text(resolution.rawValue <= 3
-                                     ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
-                                     : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
+                            if let fracture = part.fracture { fractureControls(part, fracture) }
                         }.disabled(!experiment.canEdit)
                     } else {
                         Text("Bonded layers require elastic material and use permanent bonds.")
@@ -393,6 +409,47 @@ struct AssemblyEditor: View {
                 }.padding(.top, 7)
             }
             gaugeEditor(part)
+        }
+    }
+
+
+    @ViewBuilder
+    private func fractureControls(_ part: AssemblyPart, _ fracture: MaterialFractureSettings) -> some View {
+        let young = part.material.young
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                // Strength is shown and entered in real units (MPa = 10⁶ Pa). Legacy scenes
+                // show their fraction-of-E strength converted; the saved value only changes
+                // when the user types a new strength.
+                numeric("Cohesive strength (MPa)", value: fracture.resolvedStrength(young: young),
+                        range: MaterialFractureSettings.absoluteStrengthRange, scale: 1e-6) { value in
+                    experiment.updatePart(part.id) { $0.fracture?.strength = value }
+                }
+                numeric("Fracture energy (J/m²)", value: fracture.energy,
+                        range: fracture.activeEnergyRange, scale: 1) { value in
+                    experiment.updatePart(part.id) { $0.fracture?.energy = value; $0.fracture?.energySource = nil }
+                }
+            }
+            if let source = fracture.energySource {
+                Label("Experimental, not validated. \(source.caution)", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("Source") {
+                    Text(source.citation).font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.font(.caption)
+            }
+            if part.shape == .block {
+                Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
+                    experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
+                })) {
+                    ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+            }
+            let resolution = part.refinement ?? experiment.scene.resolution
+            Text(resolution.rawValue <= 3
+                 ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
+                 : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -414,7 +471,11 @@ struct AssemblyEditor: View {
             Toggle("V-notch on local bottom edge", isOn: Binding(get: { part.notch != nil }, set: { enabled in
                 experiment.updatePart(part.id) { $0.notch = enabled ? AssemblyPart.Notch() : nil }
             })).toggleStyle(.checkbox)
+            Text("A triangular cut into the body's local bottom edge. It concentrates stress so yielding, or a crack when Material fracture is on, starts there. It is geometry only: not a crack and not a fracture model.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let notch = part.notch {
+                Text("Offset and width are % of the body width (offset from the centre); depth is % of the body height.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     numeric("Offset (% width)", value: notch.centerFraction, range: -0.30...0.30, scale: 100) { value in
                         experiment.updatePart(part.id) { $0.notch?.centerFraction = value }
@@ -422,7 +483,7 @@ struct AssemblyEditor: View {
                     numeric("Width (%)", value: notch.widthFraction, range: 0.12...0.36, scale: 100) { value in
                         experiment.updatePart(part.id) { $0.notch?.widthFraction = value }
                     }
-                    numeric("Depth (%)", value: notch.depthFraction, range: 0.02...0.45, scale: 100) { value in
+                    numeric("Depth (% height)", value: notch.depthFraction, range: 0.02...0.45, scale: 100) { value in
                         experiment.updatePart(part.id) { $0.notch?.depthFraction = value }
                     }
                 }
@@ -439,8 +500,15 @@ struct AssemblyEditor: View {
             .toggleStyle(.checkbox)
             .disabled(!experiment.canEdit || part.notch != nil || part.fracture != nil || part.plasticity.response != .elastic)
             .help("Available on unnotched elastic blocks with material fracture off")
+            Text("Splits this one block into two or three elastic materials side by side along its width, joined by a perfect permanent bond (shared nodes: no slip and no debonding). For an interface that can come apart, use two separate bodies joined by a Breakable link.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if part.bondedLayer == nil, let reason = [part.notch != nil ? "remove the V-notch" : nil,
+                                                       part.fracture != nil ? "turn off Material fracture" : nil,
+                                                       part.plasticity.response != .elastic ? "set the response to Elastic" : nil].compactMap({ $0 }).first {
+                Text("Unavailable here: \(reason) first.").font(.caption).foregroundStyle(assemblyAmber)
+            }
             if let layer = part.bondedLayer {
-                Text("Elastic layers share nodes at permanent bonds. Layer positions are measured along the local width.")
+                Text("Layer positions are measured from the left along the local width.")
                     .font(.caption).foregroundStyle(.secondary)
                 let firstUpperBound = layer.third.map { $0.interfaceFraction - minimum } ?? 1 - minimum
                 numeric("First bond from left (% width)", value: layer.interfaceFraction,
@@ -566,9 +634,12 @@ struct AssemblyEditor: View {
             })) {
                 ForEach(AssemblyConnection.Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }.disabled(!experiment.canEdit)
-            Text(link.kind == .spring ? "Elastic spring transfers tension and compression."
-                 : "Breakable tension link opens and loses load as it reaches the failure extension.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text(link.kind == .spring
+                 ? ((link.preload ?? 0) == 0
+                    ? "Unloaded spring: its rest length is the starting distance between the anchors, so it carries no force until the bodies move. It transfers tension and compression and never breaks."
+                    : "Preloaded spring: it starts stretched or compressed by the preload, so it pushes or pulls from the first instant. It transfers tension and compression and never breaks.")
+                 : "Breakable link: starts unloaded, carries tension that softens and drops to zero as the extension reaches the failure extension; the lost energy is counted as fracture. It cannot be preloaded.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                 GridRow {
                     linkNumber("Stiffness (kN/m²)", link, \.stiffness, 500...250_000, scale: 0.001)
@@ -586,7 +657,17 @@ struct AssemblyEditor: View {
                 }
                 GridRow {
                     linkNumber("Link band height (%)", link, \.span, 0...1.9, scale: 50)
+                    if link.kind == .spring {
+                        numeric("Preload stretch (mm)", value: link.preload ?? 0, range: AssemblyConnection.preloadRange, scale: 1000) { value in
+                            experiment.updateConnection(link.id, action: "Set Preload") { $0.preload = value == 0 ? nil : value }
+                        }
+                        .help("Positive: the spring starts stretched and pulls the bodies together. Negative: it starts compressed and pushes them apart. 0: unloaded.")
+                    }
                 }
+            }
+            if link.kind == .spring, let preload = link.preload, preload != 0 {
+                Text("Starting force \(abs(link.stiffness * preload), specifier: "%.3g") N/m (\(preload > 0 ? "tension" : "compression")), stored energy \(0.5 * link.stiffness * preload * preload, specifier: "%.3g") J/m. Rest length = starting distance \(preload > 0 ? "−" : "+") \(abs(preload) * 1000, specifier: "%.3g") mm.")
+                    .font(.caption.monospacedDigit()).foregroundStyle(assemblyMint).fixedSize(horizontal: false, vertical: true)
             }
             if let index = experiment.scene.connections.firstIndex(where: { $0.id == link.id }) {
                 let readings = experiment.displayedLinks.filter { $0.connection == index }
@@ -600,7 +681,7 @@ struct AssemblyEditor: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(assemblyMint)
             }
-            Text("Anchors follow the body’s local axes. An anchor in a cavity snaps to the nearest wall. A nonzero band height spreads stiffness across five links.")
+            Text("Drag the white end circles on the canvas to move the anchors; the fields above give exact positions as % of the body half-size. Anchors follow the body’s local axes. An anchor in a cavity snaps to the nearest wall. A nonzero band height spreads stiffness across five links.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -613,11 +694,49 @@ struct AssemblyEditor: View {
                 })) {
                     ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag($0) }
                 }.disabled(!experiment.canEdit)
-                Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.2f") µs step")
+                if experiment.scene.parts.contains(where: { $0.refinement != nil }) {
+                    Button("Reset All Body Mesh Overrides") {
+                        experiment.edit("Reset Mesh Overrides") { scene in
+                            for i in scene.parts.indices { scene.parts[i].refinement = nil }
+                        }
+                    }.disabled(!experiment.canEdit)
+                    Text("\(experiment.scene.parts.filter { $0.refinement != nil }.count) bodies use their own mesh and ignore the assembly mesh.")
+                        .font(.caption).foregroundStyle(assemblyAmber)
+                }
+                Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.3g") µs step")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text(experiment.simulation.timestep.explanation)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 numeric("Duration (ms)", value: experiment.scene.duration, range: AssemblyScene.durationRange, scale: 1000) { value in
                     experiment.edit { $0.duration = value }
                 }
+                Toggle("Gravity", isOn: Binding(get: { (experiment.scene.gravity ?? 0) > 0 }, set: { on in
+                    experiment.edit(on ? "Turn On Gravity" : "Turn Off Gravity") { $0.gravity = on ? AssemblyScene.standardGravity : nil }
+                })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
+                if let g = experiment.scene.gravity, g > 0 {
+                    numeric("Gravity (m/s², downward)", value: g, range: AssemblyScene.gravityRange, scale: 1) { value in
+                        experiment.edit { $0.gravity = value > 0 ? value : nil }
+                    }
+                    Text("Pulls every free body toward −Y. Bodies start at rest under a suddenly applied load, so with no damping they oscillate about their resting position; time averages give the static values.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Off: no weight acts. Turn it on for anything that rests, sags or falls.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                DisclosureGroup("Run-time warnings") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        numeric("Show estimate above (s)", value: showEstimateAbove, range: 0...3600, scale: 1) { showEstimateAbove = $0 }
+                        numeric("Ask to confirm above (s)", value: confirmAbove, range: 0...36_000, scale: 1) { confirmAbove = $0 }
+                        numeric("Long-run warning above (s)", value: warnAbove, range: 0...360_000, scale: 1) { warnAbove = $0 }
+                        Button("Restore Defaults (30 s, 2 min, 10 min)") {
+                            showEstimateAbove = RuntimeWarnings.defaultShow
+                            confirmAbove = RuntimeWarnings.defaultConfirm
+                            warnAbove = RuntimeWarnings.defaultLong
+                        }
+                        Text("These only change when the app warns you. They never change the calculation or its safeguards.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }.padding(.top, 4)
+                }.font(.callout)
                 if !experiment.scene.parts.isEmpty {
                     Picker("Track body", selection: Binding(get: { experiment.scene.monitor ?? experiment.scene.parts.first?.id }, set: { id in
                         experiment.edit {
@@ -637,6 +756,66 @@ struct AssemblyEditor: View {
                     }.disabled(!experiment.canEdit)
                 }
             }.padding(.top, 5)
+        }
+    }
+
+    @ViewBuilder
+    private func supportEditor(_ part: AssemblyPart) -> some View {
+        let links = experiment.scene.connections.filter { $0.first == part.id || $0.second == part.id }
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Support", selection: Binding(get: { part.support }, set: { support in
+                experiment.updatePart(part.id, action: "Set Support") { body in
+                    body.support = support
+                    if support != nil { body.velocity = .zero }
+                    if support == .fixed { body.plasticity.response = .elastic }
+                }
+            })) {
+                Text("Free body").tag(nil as AssemblyPart.Support?)
+                ForEach(AssemblyPart.Support.allCases.filter { part.shape != .round || $0 == .fixed }, id: \.self) {
+                    Text($0.rawValue).tag(Optional($0))
+                }
+            }
+            .disabled(!experiment.canEdit || part.fracture != nil)
+            Group {
+                switch part.support {
+                case nil:
+                    Text("Free: moves and deforms under contact, links\(experiment.scene.gravity != nil ? " and gravity" : ""). " + (links.isEmpty ? "No links." : "\(links.count) body-to-body \(links.count == 1 ? "link" : "links")."))
+                case .fixed?:
+                    Text("Fixed support: a rigid bench, floor or fixture. It never moves or deforms and ignores gravity; its material sets only the contact stiffness. The force it exerts is reported as the support reaction.")
+                case .some:
+                    Text("Clamped edge: the nodes on that local edge are held in place (no movement, no rotation of the edge). The rest of the body deforms freely. The holding force is reported as the support reaction.")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if part.fracture != nil {
+                Text("Supports are unavailable while Material fracture is on (crack insertion would move held nodes).")
+                    .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
+            } else if let conflict = part.supportConflict {
+                Text(conflict).font(.caption).foregroundStyle(assemblyAmber)
+            }
+            if part.support != nil, let index = experiment.selectedIndex, experiment.simulation.time > 0 {
+                let reaction = experiment.simulation.supportReaction(index)
+                Text("Support reaction at the end of the run (\(replayTime(experiment.simulation.time))): \(reaction.x, specifier: "%+.4g"), \(reaction.y, specifier: "%+.4g") N/m. This is one instant; bodies released under gravity oscillate, so compare averages in Measurements.")
+                    .font(.caption.monospacedDigit()).foregroundStyle(assemblyMint).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func materialKind(_ part: AssemblyPart) -> some View {
+        let (title, detail): (String, String) = if let provenance = part.material.provenance {
+            provenance.isCustom
+                ? ("User-defined properties", "Your edits to a reference material. The source describes the original, not your values.")
+                : ("Reference material, sourced properties", "Elastic constants and initial yield come from the cited source. Hardening beyond yield is illustrative, and fracture toughness estimates are experimental, not validated for this 2-D model.")
+        } else if AssemblyMaterialProfile.allCases.contains(where: { $0.response == part.plasticity.response && $0.material == part.material }) {
+            ("Illustrative profile", "Numbers chosen to show a behaviour clearly. Not a real material.")
+        } else {
+            ("User-defined properties", "Values you entered. The app checks only that they are in range.")
+        }
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Material type · \(title)").font(.caption.weight(.semibold))
+            Text(detail + " No material in the app is a validated constitutive model yet.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 

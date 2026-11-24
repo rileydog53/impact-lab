@@ -12,9 +12,13 @@ public struct AssemblyStudyPair: Sendable {
 }
 
 public struct AssemblyStudyContact: Sendable {
+    /// Largest single-step load (N/m). A numerical diagnostic: it scales with
+    /// the penalty stiffness and the mesh, so it is not a physical result.
     public internal(set) var peak = 0.0
     public internal(set) var impulse = 0.0
     public internal(set) var firstTime: Double?
+    /// Pulse summary with stated merge gap and averaging windows.
+    public internal(set) var pulses: ContactPulseReport?
 }
 
 public struct AssemblyStudySample: Sendable {
@@ -23,6 +27,8 @@ public struct AssemblyStudySample: Sendable {
     public let residual: Double
     public let gauges: [AssemblyGaugeReading]
     public let normalLoads, normalImpulses: [Double]
+    /// Trailing averaged load per pair, one value per window in that pair's pulse settings (N/m).
+    public let averagedLoads: [[Double]]
     public let fractures: [MaterialFractureReading?]
 }
 
@@ -31,6 +37,8 @@ public struct AssemblyStudyCase: Sendable {
     public let bodyRefinements: [AssemblyScene.Resolution]
     public let triangles, steps: Int
     public let dt, wallTime, peakPenetration: Double
+    /// Deepest absolute overlap (m), reported beside the edge-relative value.
+    public let peakPenetrationDepth: Double
     public let samples: [AssemblyStudySample]
     public let contacts: [AssemblyStudyContact]
     public let firstInsertions: [Double?]
@@ -49,6 +57,11 @@ package struct AssemblyStudyProgress: Sendable, Identifiable {
 public struct AssemblyStudy: Sendable {
     public let scene: AssemblyScene
     public let pairs: [AssemblyStudyPair]
+    /// Element wave-transit time per pair (s), the longest over all cases,
+    /// and the pulse settings derived from it. Every case uses the same
+    /// settings, so averaged forces are compared over common physical windows.
+    public let transitTimes: [Double]
+    public let pulseSettings: [ContactPulseSettings]
     public let cases: [AssemblyStudyCase]
     public let wallTime: Double
     public static let sampleInterval = SceneRun.sampleInterval
@@ -101,25 +114,29 @@ public struct AssemblyStudy: Sendable {
                 prepared[i].1 = try AssemblySimulation(setup, refinement: setup.resolution.rawValue, stepLimit: sharedStep)
             }
         }
+        let transits = pairs.map { pair in
+            prepared.map { $0.1.elementTransitTime(bodies: [pair.bodies.x, pair.bodies.y]) }.max() ?? 0
+        }
+        let settings = transits.map(ContactPulseSettings.guideline(transit:))
         var measured: [AssemblyStudyCase]
         if parallel && prepared.count > 1 {
             measured = try await withThrowingTaskGroup(of: (Int, AssemblyStudyCase).self) { group in
                 for (index, item) in prepared.enumerated() {
-                    group.addTask { (index, try measure(item.1, label: item.0, pairs: pairs, progress: progress)) }
+                    group.addTask { (index, try measure(item.1, label: item.0, pairs: pairs, settings: settings, progress: progress)) }
                 }
                 var results: [(Int, AssemblyStudyCase)] = []
                 for try await result in group { results.append(result) }
                 return results.sorted { $0.0 < $1.0 }.map(\.1)
             }
         } else {
-            measured = try prepared.map { try measure($0.1, label: $0.0, pairs: pairs, progress: progress) }
+            measured = try prepared.map { try measure($0.1, label: $0.0, pairs: pairs, settings: settings, progress: progress) }
         }
-        return Self(scene: scene, pairs: pairs, cases: measured,
+        return Self(scene: scene, pairs: pairs, transitTimes: transits, pulseSettings: settings, cases: measured,
                     wallTime: ProcessInfo.processInfo.systemUptime - started)
     }
 
     private static func measure(_ initial: AssemblySimulation, label: String, pairs: [AssemblyStudyPair],
-                                progress: (@Sendable (AssemblyStudyProgress) -> Void)?) throws -> AssemblyStudyCase {
+                                settings: [ContactPulseSettings], progress: (@Sendable (AssemblyStudyProgress) -> Void)?) throws -> AssemblyStudyCase {
         let started = ProcessInfo.processInfo.systemUptime
         var simulation = initial
         let triangles = (0..<simulation.bodyCount).reduce(0) { $0 + simulation.body($1).mesh.elements.count }
@@ -129,12 +146,14 @@ public struct AssemblyStudy: Sendable {
         var contacts = Array(repeating: AssemblyStudyContact(), count: pairs.count)
         var insertions = Array<Double?>(repeating: nil, count: simulation.bodyCount)
         var previousActive: [(index: Int, load: Double)] = []
+        var trackers = settings.map(ContactPulseTracker.init)
         func sample() -> AssemblyStudySample {
             let energy = simulation.energies
             return AssemblyStudySample(time: simulation.time, energy: energy,
                 residual: energy.total - simulation.initialEnergy, gauges: gaugeIndices.map(simulation.gaugeReading),
                 normalLoads: pairs.map { simulation.normalLoad($0.bodies.x, $0.bodies.y) },
                 normalImpulses: contacts.map(\.impulse),
+                averagedLoads: trackers.map { $0.averages(at: simulation.time) },
                 fractures: (0..<simulation.bodyCount).map(simulation.fractureReading))
         }
         let sampleInterval = simulation.scene.sampleInterval
@@ -166,6 +185,10 @@ public struct AssemblyStudy: Sendable {
                 contacts[index].peak = max(contacts[index].peak, load)
                 if contacts[index].firstTime == nil { contacts[index].firstTime = simulation.time }
             }
+            for (index, pair) in pairs.enumerated() {
+                trackers[index].record(time: simulation.time, dt: simulation.dt,
+                                       load: simulation.normalLoad(pair.bodies.x, pair.bodies.y))
+            }
             for index in fractureParts where insertions[index] == nil {
                 if (simulation.fractureReading(index)?.insertedEdges ?? 0) > 0 {
                     insertions[index] = simulation.time
@@ -180,10 +203,11 @@ public struct AssemblyStudy: Sendable {
         progress?(AssemblyStudyProgress(id: label, time: simulation.time, duration: duration,
                                         steps: steps, finished: simulation.time >= duration && simulation.failure == nil))
         if samples.last!.time != simulation.time { samples.append(sample()) }
+        for index in contacts.indices { contacts[index].pulses = trackers[index].report }
         let refinements = simulation.scene.parts.map { $0.refinement ?? simulation.scene.resolution }
         return AssemblyStudyCase(label: label, bodyRefinements: refinements, triangles: triangles, steps: steps, dt: simulation.dt,
             wallTime: ProcessInfo.processInfo.systemUptime - started, peakPenetration: simulation.peakRelativePenetration,
-            samples: samples, contacts: contacts, firstInsertions: insertions,
+            peakPenetrationDepth: simulation.peakPenetrationDepth, samples: samples, contacts: contacts, firstInsertions: insertions,
             failure: simulation.initialIssue ?? simulation.failure ?? (steps == 0 ? "Add a body before running a study." : nil))
     }
 
@@ -197,7 +221,9 @@ public struct AssemblyStudy: Sendable {
                        "plastic_strain", "adjacent_face_damage"].map { "gauge_\(i + 1) \(gauge.name) \($0)" }
         }
         for (i, pair) in pairs.enumerated() {
-            header += ["scalar_load_N_per_m", "scalar_impulse_Ns_per_m", "step_peak_N_per_m", "first_contact_s"]
+            let windows = pulseSettings[i].windows.map { "load_avg_\(Self.seconds($0))_N_per_m" }
+            header += (["scalar_load_N_per_m", "scalar_impulse_Ns_per_m"] + windows
+                       + ["raw_step_peak_numerical_diagnostic_N_per_m", "first_contact_s"])
                 .map { "pair_\(i + 1) \(pair.name) \($0)" }
         }
         let fractureParts = scene.parts.indices.filter { scene.parts[$0].fracture != nil }
@@ -205,7 +231,7 @@ public struct AssemblyStudy: Sendable {
             header += ["inserted_edges", "failed_edges", "pieces", "crack_length_m", "face_dissipation_J_per_m",
                        "first_insertion_s"].map { "body_\(part + 1) \(scene.parts[part].name) \($0)" }
         }
-        header += ["peak_relative_penetration", "case_wall_s", "solver_failure"]
+        header += ["peak_relative_penetration", "peak_penetration_depth_m", "case_wall_s", "solver_failure"]
         func quoted(_ cell: String) -> String { "\"\(cell.replacingOccurrences(of: "\"", with: "\"\""))\"" }
         var csv = header.map(quoted).joined(separator: ",") + "\n"
         for item in cases {
@@ -221,18 +247,48 @@ public struct AssemblyStudy: Sendable {
                             g.plasticStrain, g.damage].map { String($0) }
                 }
                 for (index, contact) in item.contacts.enumerated() {
-                    row += [String(sample.normalLoads[index]), String(sample.normalImpulses[index]),
-                            String(contact.peak), contact.firstTime.map { String($0) } ?? ""]
+                    row += [String(sample.normalLoads[index]), String(sample.normalImpulses[index])]
+                    row += sample.averagedLoads[index].map { String($0) }
+                    row += [String(contact.peak), contact.firstTime.map { String($0) } ?? ""]
                 }
                 for part in fractureParts {
                     let f = sample.fractures[part]!
                     row += [String(f.insertedEdges), String(f.failedEdges), String(f.pieces), String(f.crackLength),
                             String(f.dissipation), item.firstInsertions[part].map { String($0) } ?? ""]
                 }
-                row += [String(item.peakPenetration), String(item.wallTime), quoted(item.failure ?? "")]
+                row += [String(item.peakPenetration), String(item.peakPenetrationDepth), String(item.wallTime),
+                        quoted(item.failure ?? "")]
                 csv += row.joined(separator: ",") + "\n"
             }
         }
         try csv.write(to: url, atomically: true, encoding: .utf8)
     }
+
+    /// One row per contact pulse: the headline contact numbers, with the
+    /// merge gap and averaging windows stated on every row.
+    public func exportPulseCSV(to url: URL) throws {
+        var csv = "case,pair,transit_time_s,merge_gap_s,minor_fraction,pulse,start_s,end_s,duration_s,impulse_Ns_per_m,"
+            + "mean_force_N_per_m,averaging_windows_s,peak_windowed_force_N_per_m,solver_episodes,"
+            + "raw_step_peak_numerical_diagnostic_N_per_m,minor_touches,minor_impulse_Ns_per_m\n"
+        func quoted(_ cell: String) -> String { "\"\(cell.replacingOccurrences(of: "\"", with: "\"\""))\"" }
+        for item in cases {
+            for (index, contact) in item.contacts.enumerated() {
+                guard let report = contact.pulses else { continue }
+                let s = report.settings
+                for (n, pulse) in report.pulses.enumerated() {
+                    let cells: [String] = [
+                        quoted(item.label), quoted(pairs[index].name), String(transitTimes[index]), String(s.mergeGap),
+                        String(s.minorFraction), String(n + 1), String(pulse.start), String(pulse.end),
+                        String(pulse.duration), String(pulse.impulse), String(pulse.meanForce),
+                        quoted(s.windows.map { String($0) }.joined(separator: " ")),
+                        quoted(pulse.windowPeaks.map { String($0) }.joined(separator: " ")), String(pulse.episodes),
+                        String(pulse.rawPeak), String(report.minorCount), String(report.minorImpulse)]
+                    csv += cells.joined(separator: ",") + "\n"
+                }
+            }
+        }
+        try csv.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    static func seconds(_ value: Double) -> String { String(format: "%.3g", value) + "s" }
 }

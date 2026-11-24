@@ -28,6 +28,7 @@ struct AssemblyLab: View {
     @State private var scenarioToken: UUID?
     @State private var scenarioResults = false
     @State private var confirmScenario = false
+    @State private var confirmLongRun: RunCostEstimate?
 
     private struct Replacement {
         let scene: AssemblyScene
@@ -98,6 +99,13 @@ struct AssemblyLab: View {
                 }
             }
         }
+        .confirmationDialog(longRunTitle, isPresented: Binding(get: { confirmLongRun != nil }, set: { if !$0 { confirmLongRun = nil } }),
+                            titleVisibility: .visible, presenting: confirmLongRun) { _ in
+            Button("Calculate Anyway") { confirmLongRun = nil; experiment.calculate() }
+            Button("Cancel", role: .cancel) { confirmLongRun = nil }
+        } message: { estimate in
+            Text(longRunMessage(estimate))
+        }
         .confirmationDialog("Replace the unsaved assembly?", isPresented: $confirmScenario) {
             Button("Discard Changes and Continue", role: .destructive) { startScenario() }
             Button("Cancel", role: .cancel) { pendingScenario = nil }
@@ -120,6 +128,40 @@ struct AssemblyLab: View {
             }
             Button("Discard Changes", role: .destructive) { applyReplacement() }
             Button("Cancel", role: .cancel) { replacement = nil }
+        }
+    }
+
+    // MARK: Run cost
+
+    private func requestCalculate() {
+        let estimate = experiment.estimate
+        if estimate.seconds > RuntimeWarnings.thresholds.confirm { confirmLongRun = estimate }
+        else { experiment.calculate() }
+    }
+
+    private var longRunTitle: String {
+        guard let estimate = confirmLongRun else { return "" }
+        return estimate.seconds > RuntimeWarnings.thresholds.long
+            ? "Long run: \(RunCostEstimate.duration(estimate.seconds)) estimated"
+            : "This run is estimated at \(RunCostEstimate.duration(estimate.seconds))"
+    }
+
+    private func longRunMessage(_ estimate: RunCostEstimate) -> String {
+        var text = "\(Int(estimate.steps).formatted()) steps for \(replayTime(experiment.scene.duration - experiment.simulation.time)) of simulated time. "
+            + experiment.simulation.timestep.explanation + "\n\n" + estimate.laneNote + "\n\n" + estimate.uncertainty
+        if estimate.seconds > RuntimeWarnings.thresholds.long {
+            text += "\n\nThis is longer than your long-run threshold. To shorten it without weakening any safeguard: shorten the duration, use a coarser mesh, or turn off Material fracture on stiff bodies. You can cancel at any time and keep the partial result."
+        }
+        return text
+    }
+
+    @ViewBuilder
+    private var estimateNote: some View {
+        let estimate = experiment.estimate
+        if estimate.seconds > RuntimeWarnings.thresholds.show {
+            Text("Estimated \(RunCostEstimate.duration(estimate.seconds)), roughly ×2 either way")
+                .foregroundStyle(estimate.seconds > RuntimeWarnings.thresholds.confirm ? assemblyAmber : .secondary)
+                .help(experiment.simulation.timestep.explanation + " " + estimate.laneNote + " " + estimate.uncertainty)
         }
     }
 
@@ -339,6 +381,17 @@ struct AssemblyLab: View {
                     replacement = Replacement(scene: .bondedWaveExample(), title: "Bonded wave example", field: .pressure)
                     applyPendingReplacement()
                 }
+                Section("Lab examples (supports, gravity, preload)") {
+                    ForEach(LabExample.allCases, id: \.self) { example in
+                        Button(example.rawValue) {
+                            do {
+                                replacement = Replacement(scene: try example.scene(), title: example.rawValue, field: .stress)
+                                applyPendingReplacement()
+                            } catch { experiment.error = error.localizedDescription }
+                        }
+                        .help(example.description)
+                    }
+                }
             }.fixedSize()
             Button("Open", systemImage: "folder") { open() }
                 .keyboardShortcut("o", modifiers: .command)
@@ -389,6 +442,14 @@ struct AssemblyLab: View {
                     Button("\(event.label) · \(replayTime(event.time))") { experiment.seek(to: event.time) }
                 }
             }.fixedSize().disabled(experiment.replay?.events.isEmpty != false)
+            Button("Copy Summary", systemImage: "doc.on.clipboard") {
+                guard let replay = experiment.replay else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(replay.textSummary(scene: experiment.scene, frameIndex: experiment.frameIndex), forType: .string)
+            }
+            .labelStyle(.iconOnly)
+            .help("Copy a text summary of this run at the frame shown, to paste into chat")
+            .disabled(experiment.replay == nil)
         }
         .controlSize(.small)
         .disabled(experiment.solving)
@@ -408,24 +469,37 @@ struct AssemblyLab: View {
                     ForEach([0.25, 0.5, 1, 2, 4], id: \.self) { Text("\($0.formatted())×").tag($0) }
                 }.labelsHidden().fixedSize()
                 .help("At 1×, replay takes five seconds to show the recorded interval.")
-                if experiment.canRun { Button("Resume Calculation", action: experiment.calculate) }
+                if experiment.canRun { Button("Resume Calculation", action: requestCalculate) }
+                Button("Edit a Copy", systemImage: "square.and.pencil", action: experiment.editCopy)
+                    .disabled(experiment.samples.count < 2)
+                    .help("Keep this result as the comparison reference and return to editing a copy of its setup. Nothing is lost.")
             } else {
-                Button("Calculate", systemImage: "play.fill", action: experiment.calculate)
+                Button("Calculate", systemImage: "play.fill", action: requestCalculate)
                     .buttonStyle(.borderedProminent)
                     .disabled(!experiment.canRun)
                     .keyboardShortcut(.space, modifiers: [])
+                if experiment.canRun { estimateNote }
             }
             Button("Reset Run", systemImage: "arrow.counterclockwise", action: experiment.reset)
                 .labelStyle(.iconOnly)
                 .disabled(experiment.canEdit || experiment.solving)
-                .help("Return to the authored assembly and clear this run.")
+                .help("Return to the authored assembly and clear this run. Completed runs stay in the run history.")
             Spacer()
             Button("Measurements", systemImage: "chart.xyaxis.line") { experiment.pause(); measurements = true }
                 .disabled(experiment.frames.count < 2 || experiment.solving)
             Button("Pin", systemImage: "pin", action: experiment.pin)
                 .disabled(experiment.samples.count < 2 || experiment.solving)
+            Menu("History") {
+                ForEach(Array(experiment.history.enumerated()).reversed(), id: \.offset) { index, entry in
+                    Button("Use \(entry.label) as reference · \(entry.details)") { experiment.useAsReference(index) }
+                }
+                if experiment.history.isEmpty { Text("Completed runs appear here.") }
+            }
+            .fixedSize()
+            .help("Completed runs this session (up to \(AssemblyExperiment.historyLimit)). Choose one to compare against.")
             Button("Compare") { experiment.pause(); compare = true }
                 .disabled(experiment.reference == nil || experiment.samples.count < 2 || experiment.solving)
+                .help(experiment.reference.map { "Compare against \($0.label.isEmpty ? "the pinned run" : $0.label)" } ?? "Pin a run or use Edit a Copy first")
             Button("Refine", systemImage: "square.grid.3x3", action: experiment.refine)
                 .labelStyle(.iconOnly)
                 .help("Pin this run and refine bodies that use the assembly mesh")
@@ -654,7 +728,8 @@ struct AssemblyLab: View {
                     metric("Fracture", e.fracture, "J/m")
                     metric("Stored cohesive", e.cohesive, "J/m")
                     metric("Max link load", maxForce, "N/m")
-                    metric("Peak overlap", (frame?.peakRelativePenetration ?? 0) * 100, "%")
+                    metric("Peak overlap", overlapText(relative: frame?.peakRelativePenetration ?? 0,
+                                                       depth: frame?.peakPenetrationDepth ?? 0))
                 }
                 GridRow {
                     metric("Momentum X", (frame?.momentum ?? s.momentum).x, "N·s/m")
@@ -687,6 +762,12 @@ struct AssemblyLab: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Overlap as a share of the local edge and as an absolute depth.
+    private func overlapText(relative: Double, depth: Double) -> String {
+        let absolute = depth < 1e-3 ? String(format: "%.3g µm", depth * 1e6) : String(format: "%.3g mm", depth * 1e3)
+        return String(format: "%.3f%% · ", relative * 100) + absolute
     }
 
     private func metric(_ name: String, _ value: Double, _ unit: String) -> some View {
@@ -847,9 +928,57 @@ struct AssemblyLab: View {
             await scenarioSmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if let index = args.firstIndex(of: "--library-smoke"), args.indices.contains(index + 1) {
             await librarySmoke(report: URL(fileURLWithPath: args[index + 1]))
+        } else if let index = args.firstIndex(of: "--workbench-smoke"), args.indices.contains(index + 1) {
+            await workbenchSmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if experiment.selectedPart == nil, let id = experiment.scene.monitor {
             experiment.select(id)
         }
+    }
+
+    /// Exercises the integration-branch workflow through the real app model: lab example,
+    /// supports and gravity, run-cost warnings, edit a copy, run history and preload.
+    private func workbenchSmoke(report: URL) async {
+        var checks: [String] = []
+        func waitForRun() async {
+            for _ in 0..<1200 where experiment.solving { try? await Task.sleep(for: .milliseconds(100)) }
+        }
+        do {
+            let visible = NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" }
+            checks.append("native window=\(visible)")
+            loadPreset(try LabExample.hanging_springs.scene(), title: LabExample.hanging_springs.rawValue)
+            checks.append("lab example loads=\(experiment.canRun && experiment.scene.gravity != nil && experiment.scene.parts[0].support == .fixed)")
+            checks.append("timestep explained=\(experiment.simulation.timestep.explanation.hasPrefix("Timestep"))")
+            let defaults = UserDefaults.standard
+            let saved = RuntimeWarnings.thresholds
+            defaults.set(0.0, forKey: RuntimeWarnings.confirmKey)
+            requestCalculate()
+            checks.append("confirmation asked above threshold=\(confirmLongRun != nil && !experiment.solving)")
+            confirmLongRun = nil
+            defaults.set(saved.confirm, forKey: RuntimeWarnings.confirmKey)
+            requestCalculate()
+            await waitForRun()
+            let first = experiment.samples
+            checks.append("first run completed=\(experiment.finished && experiment.simulation.failure == nil && experiment.history.count == 1)")
+            let reaction = experiment.simulation.supportReaction(0)
+            checks.append("ceiling reaction finite and upward=\(reaction.y > 0 && reaction.y.isFinite)")
+            experiment.editCopy()
+            checks.append("edit a copy keeps the result=\(experiment.canEdit && experiment.reference?.samples == first && experiment.reference?.label == "Run 1")")
+            let unloaded = experiment.scene.connections[0].id
+            experiment.updateConnection(unloaded, action: "Set Preload") { $0.preload = 0.0078453 }
+            experiment.updateConnection(unloaded, action: "Move Link Anchor") { $0.secondAnchor = Point(0.25, 1) }
+            checks.append("preload and anchor edit=\(experiment.scene.connections[0].preload == 0.0078453 && experiment.scene.connections[0].secondAnchor.x == 0.25 && experiment.canRun)")
+            requestCalculate()
+            await waitForRun()
+            checks.append("second run completed=\(experiment.finished && experiment.history.count == 2 && experiment.reference?.samples == first)")
+            experiment.useAsReference(1)
+            checks.append("history selects reference=\(experiment.reference?.label == "Run 2")")
+            checks.append("rate calibrated=\(RuntimeWarnings.measuredRate != nil)")
+            experiment.reset()
+            experiment.undo()
+            checks.append("undo after reset=\(experiment.scene.connections[0].secondAnchor.x != 0.25 || experiment.scene.connections[0].preload == 0.0078453)")
+        } catch { checks.append("error=false \(error.localizedDescription)") }
+        try? (checks.joined(separator: "\n") + "\n").write(to: report, atomically: true, encoding: .utf8)
+        exit(checks.contains { $0.contains("=false") } ? EXIT_FAILURE : EXIT_SUCCESS)
     }
 
     private func librarySmoke(report: URL) async {

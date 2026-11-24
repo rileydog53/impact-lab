@@ -1,0 +1,18 @@
+{
+  "description": "Two equal blocks hang from a fixed ceiling on equal springs, with gravity on. The left spring starts unloaded, so its block drops and bounces about the equilibrium stretch m·g/k = 7.8 mm. The right spring is preloaded by exactly that stretch, so its block starts in equilibrium and stays almost still. Shows unloaded versus preloaded connections.",
+  "gravity": 9.80665,
+  "duration": 0.5,
+  "parts": [
+    { "name": "Ceiling", "size": [0.3, 0.03], "center": [0, 0.115], "support": "fixed",
+      "material": { "young": 1e7, "density": 2500, "poisson": 0.2 } },
+    { "name": "Unloaded side", "size": [0.04, 0.04], "center": [-0.07, 0],
+      "material": { "young": 2e6, "density": 1000, "poisson": 0.2 } },
+    { "name": "Preloaded side", "size": [0.04, 0.04], "center": [0.07, 0],
+      "material": { "young": 2e6, "density": 1000, "poisson": 0.2 } }
+  ],
+  "connections": [
+    { "first": "Ceiling", "second": "Unloaded side", "firstAnchor": [-0.4667, -1], "secondAnchor": [0, 1], "stiffness": 2000 },
+    { "first": "Ceiling", "second": "Preloaded side", "firstAnchor": [0.4667, -1], "secondAnchor": [0, 1], "stiffness": 2000, "preload": 0.0078453 }
+  ],
+  "monitor": "Unloaded side"
+}

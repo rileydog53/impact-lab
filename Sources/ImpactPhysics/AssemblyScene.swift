@@ -7,17 +7,34 @@ public struct MaterialFractureSettings: Codable, Equatable, Sendable {
         case staggered = "Staggered"
     }
 
+    /// Legacy range, as a fraction of Young's modulus.
     public static let strengthRange = 0.005...0.08
+    /// Legacy range for energy, used while strength is a fraction of E.
     public static let energyRange = 0.5...50.0
+    /// Absolute cohesive strength in pascals, used when `strength` is set.
+    public static let absoluteStrengthRange = 1e4...4e9
+    /// Fracture energy in J/m² when `strength` is set (metal values are far above the legacy cap).
+    public static let absoluteEnergyRange = 0.5...1e6
+
+    /// Legacy strength as a fraction of E. Ignored whenever `strength` is set.
     public var strengthFraction = 0.030
+    /// Cohesive strength in Pa. nil keeps the legacy fraction-of-E behaviour bit for bit.
+    public var strength: Double?
     public var energy = 7.0
+    /// Where `energy` came from when it is an estimate rather than a typed value.
+    public var energySource: FractureEstimateSource?
     public var meshPattern: MeshPattern?
     public var pattern: MeshPattern { meshPattern ?? .aligned }
 
     public init() {}
 
+    public func resolvedStrength(young: Double) -> Double { strength ?? young * strengthFraction }
+    public var usesAbsoluteStrength: Bool { strength != nil }
+    public var activeEnergyRange: ClosedRange<Double> { usesAbsoluteStrength ? Self.absoluteEnergyRange : Self.energyRange }
+
     var isValid: Bool {
-        Self.strengthRange.contains(strengthFraction) && Self.energyRange.contains(energy)
+        (strength.map { Self.absoluteStrengthRange.contains($0) } ?? Self.strengthRange.contains(strengthFraction))
+            && activeEnergyRange.contains(energy)
     }
 }
 
@@ -73,7 +90,22 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         case round = "Round body"
     }
 
+    /// A kinematic boundary condition. Supported nodes never move.
+    public enum Support: String, CaseIterable, Codable, Sendable {
+        /// Every node is held: a rigid, immovable bench, floor or fixture.
+        case fixed = "Fixed support"
+        case clampLeft = "Clamp left edge"
+        case clampRight = "Clamp right edge"
+        case clampBottom = "Clamp bottom edge"
+        case clampTop = "Clamp top edge"
+
+        public var isFixture: Bool { self == .fixed }
+    }
+
     public static let velocityRange = -150.0...150.0
+    public static let sizeRange = 0.025...0.30
+    /// A fixed support is rigid and skips the element calculation, so it may be as wide as a bench.
+    public static let fixtureWidthRange = 0.025...1.0
 
     public var id = UUID()
     public var name: String
@@ -89,6 +121,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public var refinement: AssemblyScene.Resolution?
     public var notch: Notch?
     public var bondedLayer: BondedLayer?
+    /// nil keeps every node free, exactly as in scenes saved before supports existed.
+    public var support: Support?
 
     public init(_ name: String, shape: Shape = .block, center: Point = .zero,
                 size: Point = Point(0.06, 0.06)) {
@@ -98,14 +132,30 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         self.size = size
     }
 
+    public var widthRange: ClosedRange<Double> { support == .fixed ? Self.fixtureWidthRange : Self.sizeRange }
+
+    /// Why a support cannot be used with the body's other settings, or nil when it can.
+    public var supportConflict: String? {
+        guard let support else { return nil }
+        if velocity != .zero { return "A supported body starts at rest; set its velocity to zero." }
+        if fracture != nil { return "Supports cannot be combined with fracture yet (crack insertion would move the held nodes)." }
+        if support.isFixture {
+            if plasticity.response != .elastic { return "A fixed support is rigid, so plasticity has no effect; set the response to Elastic." }
+        } else if shape == .round {
+            return "Round bodies have no straight edge to clamp; use a block or enclosure."
+        }
+        return nil
+    }
+
     var isValid: Bool {
-        (0.025...0.30).contains(size.x) && (0.025...0.30).contains(size.y)
+        widthRange.contains(size.x) && Self.sizeRange.contains(size.y)
+            && supportConflict == nil
             && (-1...1).contains(center.x) && (-1...1).contains(center.y)
             && (-360...360).contains(angle)
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
             && (shape != .enclosure || (0.005...0.4 * min(size.x, size.y)).contains(wall))
             && material.isValidForAssembly
-            && plasticity.isValid && (fracture.map { shape != .round && material.provenance == nil && $0.isValid } ?? true)
+            && plasticity.isValid && (fracture.map { shape != .round && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
             && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)
             && (bondedLayer.map { shape == .block && $0.isValid && fracture == nil && notch == nil
@@ -145,6 +195,21 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         let position = mesh.reference.map { center + Point(c * $0.x - s * $0.y, s * $0.x + c * $0.y) }
         return Body(mesh: mesh, material: material, position: position, velocity: velocity,
                     elementMaterials: elementMaterials)
+    }
+
+    /// Nodes on the clamped edge, found from the reference mesh in the body's own (unrotated) frame.
+    func clampedNodes(_ body: Body, _ support: Support) -> [Int] {
+        let tolerance = 1e-9 + 1e-6 * max(size.x, size.y)
+        return body.mesh.reference.indices.filter { i in
+            let p = body.mesh.reference[i]
+            switch support {
+            case .fixed: return true
+            case .clampLeft: return p.x <= -size.x / 2 + tolerance
+            case .clampRight: return p.x >= size.x / 2 - tolerance
+            case .clampBottom: return p.y <= -size.y / 2 + tolerance
+            case .clampTop: return p.y >= size.y / 2 - tolerance
+            }
+        }
     }
 
     private func partitionedBlock(rows: Int, refinement: Int, staggered: Bool) -> (Mesh, [Material]?) {
@@ -209,6 +274,10 @@ public struct AssemblyConnection: Codable, Equatable, Identifiable, Sendable {
     public var stiffness = 12_000.0
     public var criticalExtension = 0.006
     public var span = 0.0
+    /// Initial stretch in metres (positive pulls the bodies together, negative pushes them apart).
+    /// nil or 0 is an unloaded spring whose rest length is the starting distance. Springs only.
+    public var preload: Double?
+    public static let preloadRange = -0.05...0.05
 
     public init(first: UUID, second: UUID, firstAnchor: Point = Point(1, 0), secondAnchor: Point = Point(-1, 0)) {
         self.first = first
@@ -222,6 +291,7 @@ public struct AssemblyConnection: Codable, Equatable, Identifiable, Sendable {
             && (0...1.9).contains(span) && first != second
             && [firstAnchor.x, firstAnchor.y, secondAnchor.x, secondAnchor.y].allSatisfy { (-1...1).contains($0) }
             && abs(firstAnchor.y) + span / 2 <= 1.000001 && abs(secondAnchor.y) + span / 2 <= 1.000001
+            && (preload.map { Self.preloadRange.contains($0) && ($0 == 0 || kind == .spring) } ?? true)
     }
 }
 
@@ -252,8 +322,12 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     public private(set) var assemblyVersion = 1
     public var parts: [AssemblyPart] = []
     public var connections: [AssemblyConnection] = []
-    public static let durationRange = 0.0001...0.25
+    public static let durationRange = 0.0001...2.0
     public var duration = 0.12
+    /// Downward gravitational acceleration in m/s² (acts along −y). nil keeps the gravity-free behaviour bit for bit.
+    public var gravity: Double?
+    public static let gravityRange = 0.0...50.0
+    public static let standardGravity = 9.80665
     public var monitor: UUID?
     public var relativeTo: UUID?
     public var gauges: [AssemblyGauge]?
@@ -303,7 +377,8 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
               Set(order).count == order.count, order.allSatisfy(ids.contains),
               Set(groups.map(\.id)).count == groups.count, groups.allSatisfy({ $0.members.count >= 2 }),
               Set(members).count == members.count, members.allSatisfy(ids.contains),
-              Self.durationRange.contains(duration), monitor.map(ids.contains) ?? true,
+              Self.durationRange.contains(duration), gravity.map(Self.gravityRange.contains) ?? true,
+              parts.isEmpty || parts.contains(where: { $0.support?.isFixture != true }), monitor.map(ids.contains) ?? true,
               relativeTo.map({ ids.contains($0) && $0 != (monitor ?? parts.first?.id) }) ?? true,
               (gauges?.count ?? 0) <= AssemblyGauge.limit,
               Set(gauges?.map(\.id) ?? []).count == (gauges?.count ?? 0),
@@ -329,6 +404,7 @@ enum AssemblyError: LocalizedError {
     case overlap(String, String)
     case coincidentAnchors(Int)
     case gaugeOutsideMaterial(String)
+    case preloadTooLarge(Int)
 
     var errorDescription: String? {
         switch self {
@@ -336,6 +412,7 @@ enum AssemblyError: LocalizedError {
         case .overlap(let a, let b): "\(a) and \(b) overlap or touch at the start. Leave a small clearance."
         case .coincidentAnchors(let index): "Connection \(index + 1) needs at least 0.5 mm between its start anchors."
         case .gaugeOutsideMaterial(let name): "\(name) must be inside its body's reference material."
+        case .preloadTooLarge(let index): "Connection \(index + 1): the preload compression is longer than the spring itself. The rest length must stay above 0.5 mm."
         }
     }
 }

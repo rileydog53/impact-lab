@@ -153,6 +153,11 @@ if CommandLine.arguments.dropFirst().contains("--receiver-extended") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--contact-reporting") {
+    try contactReportingCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--compliant-striker") {
     try compliantStrikerCheck()
     exit(EXIT_SUCCESS)
@@ -248,6 +253,36 @@ if let index = CommandLine.arguments.firstIndex(of: "--assembly-scaling") {
     }
     let output = args.firstIndex(of: "--write-scene").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
     try assemblyScalingCheck(args[index + 1], sceneFile: output)
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--run-cost") {
+    try runCostCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--lab-examples") {
+    try labExamplesCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--supports-gravity") {
+    try supportsGravityCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--materials") {
+    try materialsCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--legacy-replay") {
+    let args = CommandLine.arguments
+    guard args.indices.contains(index + 2), ["record", "check"].contains(args[index + 1]) else {
+        print("Usage: ImpactCheck --legacy-replay record|check BASELINE_FILE")
+        exit(EXIT_FAILURE)
+    }
+    try legacyReplayCheck(mode: args[index + 1], baseline: args[index + 2])
     exit(EXIT_SUCCESS)
 }
 

@@ -87,8 +87,12 @@ func sceneDocumentsCheck(examples directory: URL) throws {
     require(linked.connections[0].first == linked.parts[0].id && linked.connections[0].second == linked.parts[1].id
             && linked.monitor == linked.parts[1].id && linked.resolution == .fine, "Names and readable ids resolve")
     let cases: [(String, String)] = [
-        (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "fixed": true}]}"#, "fixed or clamped constraints are not supported"),
-        (#"{"gravity": [0, -9.81], "parts": [{"name": "A", "size": [0.05, 0.05]}]}"#, "gravity are not supported"),
+        (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "fixed": true}]}"#, "use support: \"fixed\""),
+        (#"{"gravity": [0, -9.81], "parts": [{"name": "A", "size": [0.05, 0.05]}]}"#, "gravity: expected a number"),
+        (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "support": "fixed"}]}"#, "every body is a fixed support"),
+        (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "support": "clampLeft", "velocity": [1, 0]}]}"#, "starts at rest"),
+        (#"{"parts": [{"name": "A", "size": [0.05, 0.05]}, {"name": "B", "size": [0.05, 0.05], "center": [0.06, 0]}], "connections": [{"first": "A", "second": "B", "kind": "breakable", "preload": 0.001}]}"#, "preload is available for springs only"),
+        (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "pressure": 100}]}"#, "other than gravity"),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "velocty": [1, 0]}]}"#, "did you mean \"velocity\""),
         (#"{"parts": [{"name": "A", "size": [0.01, 0.05]}]}"#, "parts[0] \"A\".size[0] (width) is 0.01 m; allowed 0.025 m to 0.3 m"),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "material": "titanium"}]}"#, "unknown material profile \"titanium\""),
@@ -115,7 +119,7 @@ func sceneDocumentsCheck(examples directory: URL) throws {
             let issues = (try? AssemblyScene.open(file)).map { _ in [String]() } ?? {
                 do { _ = try AssemblyScene.open(file); return [] } catch let error as SceneDocumentError { return error.issues } catch { return [] }
             }()
-            for text in ["gravity", "fixed", "titanium", "did you mean \"velocity\"", "\"Ceiling\"", "duration is 2 s", "(width) is 0.5 m"] {
+            for text in ["gravity", "fixed", "titanium", "did you mean \"velocity\"", "\"Ceiling\"", "duration is 3 s", "(width) is 0.5 m"] {
                 require(issues.contains { $0.contains(text) }, "invalid-example.json explains \(text): \(issues)")
             }
             print("  invalid-example.json: \(issues.count) explained problems")

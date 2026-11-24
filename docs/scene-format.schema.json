@@ -10,7 +10,8 @@
     "$schema": { "type": "string" },
     "description": { "type": "string", "description": "Free text. Not kept when the app saves." },
     "assemblyVersion": { "const": 1 },
-    "duration": { "type": "number", "minimum": 0.0001, "maximum": 0.25, "default": 0.12, "description": "Simulated time in seconds." },
+    "duration": { "type": "number", "minimum": 0.0001, "maximum": 2.0, "default": 0.12, "description": "Simulated time in seconds." },
+    "gravity": { "type": ["number", "boolean"], "minimum": 0, "maximum": 50, "description": "Downward (−Y) acceleration on every free body, m/s². true means 9.80665. Omit for no gravity." },
     "meshResolution": { "$ref": "#/$defs/resolution", "description": "Assembly mesh for every body without its own refinement. Default standard." },
     "parts": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/part" } },
     "connections": { "type": "array", "maxItems": 12, "items": { "$ref": "#/$defs/connection" } },
@@ -107,6 +108,7 @@
         "velocity": { "$ref": "#/$defs/point", "default": [0, 0], "description": "Initial uniform velocity [vx, vy], m/s, each −150 to 150." },
         "wall": { "type": "number", "default": 0.012, "description": "Enclosure wall thickness, m; 0.005 m to 0.4 × the smaller size." },
         "refinement": { "$ref": "#/$defs/resolution", "description": "This body's mesh level, overriding meshResolution." },
+        "support": { "enum": ["fixed", "clampLeft", "clampRight", "clampBottom", "clampTop", "Fixed support", "Clamp left edge", "Clamp right edge", "Clamp bottom edge", "Clamp top edge"], "description": "fixed: rigid, immovable bench or fixture (width up to 1.0 m). clamp…: that local edge is held. Supported bodies start at rest and cannot fracture." },
         "material": { "$ref": "#/$defs/material" },
         "plasticity": { "$ref": "#/$defs/plasticity" },
         "fracture": {
@@ -114,6 +116,8 @@
           "description": "Illustrative cohesive cracking. Blocks and enclosures with a custom (non-profile) material only.",
           "properties": {
             "strengthFraction": { "type": "number", "minimum": 0.005, "maximum": 0.08, "default": 0.03, "description": "Tensile strength as a fraction of Young's modulus." },
+            "strength": { "type": "number", "minimum": 10000, "maximum": 4000000000, "description": "Cohesive strength in pascals. Replaces strengthFraction (give one, not both); energy is then required and may be up to 1000000 J/m²." },
+            "energySource": { "type": "object", "description": "Citation for an estimated energy: status, citation, url, caution." },
             "energy": { "type": "number", "minimum": 0.5, "maximum": 50, "default": 7, "description": "Fracture energy, J/m²." },
             "meshPattern": { "enum": ["Aligned", "Staggered", "aligned", "staggered"] }
           }
@@ -154,7 +158,8 @@
         "secondAnchor": { "$ref": "#/$defs/point", "default": [-1, 0] },
         "stiffness": { "type": "number", "minimum": 500, "maximum": 250000, "default": 12000, "description": "N/m² (force per unit extension, per metre of out-of-plane depth). Shown as kN/m² in the app." },
         "criticalExtension": { "type": "number", "minimum": 0.0005, "maximum": 0.04, "default": 0.006, "description": "Extension at which a breakable link fails, m." },
-        "span": { "type": "number", "minimum": 0, "maximum": 1.9, "default": 0, "description": "Spread the link along the edge, as a fraction of the half-size." }
+        "span": { "type": "number", "minimum": 0, "maximum": 1.9, "default": 0, "description": "Spread the link along the edge, as a fraction of the half-size." },
+        "preload": { "type": "number", "minimum": -0.05, "maximum": 0.05, "default": 0, "description": "Springs only. Starting stretch in m (positive stretched, negative compressed). Rest length = starting distance − preload, at least 0.5 mm." }
       }
     },
     "gauge": {

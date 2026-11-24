@@ -1,0 +1,11 @@
+{
+  "description": "A shelf-like beam clamped at its left edge sags under its own weight. Beam theory (Timoshenko, uniform load) predicts a static tip deflection of 1.22 mm for these values; the time-averaged tip sag in the app is within about 2% (12 rows of triangles through the thickness). The tip swings between 0 and about twice the static value because gravity is applied suddenly and there is no damping.",
+  "gravity": 9.80665,
+  "duration": 0.3,
+  "parts": [
+    { "name": "Cantilever", "size": [0.15, 0.025], "center": [0, 0], "support": "clampLeft", "refinement": "x4",
+      "material": { "young": 1e7, "density": 1000, "poisson": 0 } }
+  ],
+  "gauges": [ { "body": "Cantilever", "name": "Tip", "location": [0.07, 0] } ],
+  "monitor": "Cantilever"
+}
