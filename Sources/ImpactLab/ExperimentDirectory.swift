@@ -22,10 +22,12 @@ enum ExperimentDirectory {
 
     /// Runs an open or save panel that starts in the remembered folder and remembers the folder of the choice.
     /// Returns the chosen URL, or nil when the dialog was cancelled.
-    @MainActor static func run(_ panel: NSSavePanel, fallback: URL? = nil) -> URL? {
+    @MainActor static func run(_ panel: NSSavePanel, fallback: URL? = nil,
+                               remember: ((URL) -> URL)? = nil) -> URL? {
         panel.directoryURL = start(fallback: fallback?.deletingLastPathComponent())
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        remember(url)
+        // A folder chosen in a folder picker is itself the place to remember; a file's folder otherwise.
+        if let remember { UserDefaults.standard.set(remember(url).path, forKey: key) } else { self.remember(url) }
         return url
     }
 }

@@ -256,6 +256,18 @@ if let index = CommandLine.arguments.firstIndex(of: "--assembly-scaling") {
     exit(EXIT_SUCCESS)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--results-export") {
+    let args = CommandLine.arguments
+    try resultsExportCheck(directory: args.indices.contains(index + 1) ? args[index + 1] : NSTemporaryDirectory() + "impactlab-export")
+    exit(EXIT_SUCCESS)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--smooth-field") {
+    let args = CommandLine.arguments
+    try smoothFieldCheck(snapshot: args.indices.contains(index + 1) ? args[index + 1] : nil)
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--run-cost") {
     try runCostCheck()
     exit(EXIT_SUCCESS)

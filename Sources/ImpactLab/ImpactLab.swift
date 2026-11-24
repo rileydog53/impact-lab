@@ -156,6 +156,9 @@ private extension Preset {
 
 @main enum ImpactLab {
     @MainActor static func main() {
+        // Cocoa treats a bare file path on the command line as "open this document"; this app has no document
+        // handler, so with `--assembly-inspect <file> ...` that suppressed the window. Launch flags are not documents.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
         if #available(macOS 15.0, *) {
             PresentedLaboratory.main()
         } else {

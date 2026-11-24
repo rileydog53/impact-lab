@@ -5,3 +5,5 @@ reports/*
 audit/
 
 .build/
+.build-regression/
+.build-dev/
