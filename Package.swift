@@ -8,5 +8,7 @@ let package = Package(
         .target(name: "ImpactPhysics"),
         .executableTarget(name: "ImpactLab", dependencies: ["ImpactPhysics"]),
         .executableTarget(name: "ImpactCheck", dependencies: ["ImpactPhysics"]),
+        // Measurement harness for tests/regression (reads the solver only through its public API).
+        .executableTarget(name: "ImpactRegression", dependencies: ["ImpactPhysics"]),
     ]
 )
