@@ -106,3 +106,64 @@ func smoothFieldCheck(snapshot: String?) throws {
         print("  wrote \(snapshot): top = smooth (interpolated display), bottom = per-element, same data and colour map, von Mises 0 to \(String(format: "%.0f", limit / 1e6)) MPa")
     }
 }
+
+/// Export gate: writes a real run to .vtu/.pvd, re-reads the text and checks structure and values.
+/// Independent read-back with the real VTK readers is done separately (see docs/smooth-field-visualization.md).
+func resultsExportCheck(directory: String) throws {
+    print("Results export check (.vtu/.pvd and PNG; numerical verification of export code only)")
+    var run = try AssemblyRun(AssemblyScene.metalImpactExample())
+    var replay = AssemblyReplay(run)
+    while run.step() { replay.record(run) }
+    replay.finish(run)
+    require(run.finished && run.simulation.failure == nil, "Run failed")
+    let dir = URL(fileURLWithPath: directory)
+    let pvd = try ResultsExport.write(frames: replay.frames, to: dir, name: "copper-impact", maxFrames: 12)
+    let pvdText = try String(contentsOf: pvd, encoding: .utf8)
+    let files = pvdText.components(separatedBy: "file=\"").dropFirst().map { String($0.prefix { $0 != "\"" }) }
+    require(files.count >= 2 && files.count <= 12, "Unexpected number of time steps \(files.count)")
+    print("  \(pvd.lastPathComponent): \(files.count) time steps")
+    for (i, file) in files.enumerated() {
+        let doc = try XMLDocument(contentsOf: dir.appendingPathComponent(file), options: [])
+        func nodes(_ path: String) -> [XMLNode] { (try? doc.nodes(forXPath: path)) ?? [] }
+        func numbers(_ path: String) -> [Double] {
+            (nodes(path).first?.stringValue ?? "").split(whereSeparator: { $0 == " " || $0 == "\n" }).compactMap { Double($0) }
+        }
+        let piece = nodes("//Piece")[0] as! XMLElement
+        let np = Int(piece.attribute(forName: "NumberOfPoints")!.stringValue!)!
+        let nc = Int(piece.attribute(forName: "NumberOfCells")!.stringValue!)!
+        require(numbers("//Points/DataArray").count == 3 * np, "Point count mismatch in \(file)")
+        let conn = numbers("//Cells/DataArray[@Name='connectivity']")
+        let offsets = numbers("//Cells/DataArray[@Name='offsets']")
+        let types = numbers("//Cells/DataArray[@Name='types']")
+        require(conn.count == 3 * nc && offsets.count == nc && types.count == nc, "Cell array sizes wrong in \(file)")
+        require(types.allSatisfy { $0 == 5 } && offsets.last == Double(3 * nc) && conn.allSatisfy { $0 >= 0 && Int($0) < np },
+                "Bad cell types, offsets or connectivity in \(file)")
+        for array in nodes("//CellData/DataArray") {
+            let name = (array as! XMLElement).attribute(forName: "Name")!.stringValue!
+            require(numbers("//CellData/DataArray[@Name='\(name)']").count == nc, "Cell array \(name) wrong length")
+        }
+        for array in nodes("//PointData/DataArray") {
+            let e = array as! XMLElement
+            let name = e.attribute(forName: "Name")!.stringValue!
+            let comps = Int(e.attribute(forName: "NumberOfComponents")!.stringValue!)!
+            require(numbers("//PointData/DataArray[@Name='\(name)']").count == comps * np, "Point array \(name) wrong length")
+        }
+        if i == files.count - 1 {
+            // Exported cell values must equal the solver's values exactly (Swift prints doubles round-trip exact).
+            let last = replay.frames.last!
+            let expected = last.bodies.flatMap { $0.stress.map(\.equivalent) }
+            require(numbers("//CellData/DataArray[@Name='von_mises_stress_Pa']") == expected, "Exported von Mises differs from solver values")
+            require(numbers("//FieldData/DataArray").first == last.time, "Exported time differs")
+        }
+    }
+    print("  structure, cell type 5, offsets, array lengths, and exact solver values in last frame: ok")
+    let frame = replay.frames.max { a, b in
+        a.bodies.reduce(0.0) { max($0, $1.stress.map(\.equivalent).max() ?? 0) }
+            < b.bodies.reduce(0.0) { max($0, $1.stress.map(\.equivalent).max() ?? 0) }
+    }!
+    let png = FieldSnapshot.png(frame: frame, title: "Copper impact, von Mises stress at t = \(String(format: "%.3g", frame.time * 1000)) ms",
+                                unit: "MPa", unitScale: 1e-6, signed: false) { $0.stress.map(\.equivalent) }
+    require(png != nil && png!.count > 5000 && png!.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]), "PNG snapshot failed")
+    try png!.write(to: dir.appendingPathComponent("copper-impact-von-mises.png"))
+    print("  PNG snapshot with color bar and caption written: ok")
+}

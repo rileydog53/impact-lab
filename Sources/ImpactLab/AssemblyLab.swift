@@ -8,6 +8,7 @@ struct AssemblyLab: View {
     @State private var field = AssemblyField.strain
     @State private var showMesh = false
     @State private var smoothFields = true
+    @State private var exportMessage: String?
     @State private var showInitial = false
     @State private var showVelocity = false
     @State private var range = AssemblyFieldRange.standard
@@ -538,6 +539,18 @@ struct AssemblyLab: View {
                     .help("On: interpolated display of the calculated field (area-weighted averaging of per-element values). Off: raw per-element colors. The calculation is identical either way.")
                 Toggle("Show mesh", isOn: $showMesh).toggleStyle(.checkbox)
                     .help("Draw the actual simulation mesh. Amber outlines indicate thin reference triangles.")
+                Menu("Export", systemImage: "square.and.arrow.up") {
+                    Button("Results for ParaView (.pvd + .vtu)…") {
+                        exportMessage = ResultsExportActions.exportParaView(frames: experiment.frames, suggestedName: experiment.title)
+                    }
+                    Button("Current frame as PNG…") {
+                        exportMessage = ResultsExportActions.savePNG(frame: experiment.frame, field: field, limit: fieldLimit, title: experiment.title)
+                    }
+                }.fixedSize().disabled(experiment.frames.isEmpty)
+                .help("Write the calculated results to files. Values are exactly what the solver recorded.")
+                .alert("Export", isPresented: Binding(get: { exportMessage != nil }, set: { if !$0 { exportMessage = nil } })) {
+                    Button("OK") { exportMessage = nil }
+                } message: { Text(exportMessage ?? "") }
                 if experiment.canEdit {
                     Button("Mesh Report", systemImage: "square.grid.3x3") {
                         showMesh = true
