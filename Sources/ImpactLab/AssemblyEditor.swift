@@ -6,11 +6,11 @@ import SwiftUI
 
 struct AssemblyEditor: View {
     let experiment: AssemblyExperiment
-    @State private var bodySettings = true
+    @State private var bodySettings = !CommandLine.arguments.contains("--open-mesh")
     @State private var materialTarget: MaterialTarget?
     @State private var materialSettings = false
     @State private var connectionList = false
-    @State private var meshSettings = false
+    @State private var meshSettings = CommandLine.arguments.contains("--open-mesh")
     @State private var simulationSettings = false
     @State private var multiSelect = false
     @State private var layoutGap = 0.010

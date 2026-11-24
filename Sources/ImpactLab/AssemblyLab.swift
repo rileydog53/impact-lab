@@ -950,6 +950,23 @@ struct AssemblyLab: View {
             await librarySmoke(report: URL(fileURLWithPath: args[index + 1]))
         } else if let index = args.firstIndex(of: "--workbench-smoke"), args.indices.contains(index + 1) {
             await workbenchSmoke(report: URL(fileURLWithPath: args[index + 1]))
+        } else if let index = args.firstIndex(of: "--geometry-smoke"), args.indices.contains(index + 1) {
+            let checks = GeometrySmoke.run(experiment)
+            try? (checks.joined(separator: "\n") + "\n").write(to: URL(fileURLWithPath: args[index + 1]), atomically: true, encoding: .utf8)
+            exit(checks.contains { $0.hasSuffix("=false") } ? EXIT_FAILURE : EXIT_SUCCESS)
+        } else if let index = args.firstIndex(of: "--geometry-pose"), args.indices.contains(index + 1) {
+            GeometrySmoke.pose(args[index + 1], experiment)
+            showMesh = args.contains("--show-mesh")
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0.title == "Impact Lab" }),
+               let screen = window.screen?.visibleFrame {
+                window.setFrame(screen.insetBy(dx: 8, dy: 8), display: true)
+            }
+            if args.contains("--calculate") {
+                experiment.calculate()
+                for _ in 0..<600 where experiment.solving { try? await Task.sleep(for: .milliseconds(100)) }
+                field = .stress
+            }
         } else if experiment.selectedPart == nil, let id = experiment.scene.monitor {
             experiment.select(id)
         }

@@ -59,6 +59,8 @@ public struct PolygonRegion: Codable, Equatable, Sendable {
     /// Every reason this region cannot be meshed, in plain words. Empty means valid.
     public func validationIssues() -> [String] {
         var issues: [String] = []
+        // Rings with no area are reported after the crossing test, so a bow-tie is called a crossing.
+        var flat = Set<Int>()
         func label(_ r: Int) -> String { r == 0 ? "outer boundary" : "hole \(r)" }
         let rings = rings
         for (r, ring) in rings.enumerated() {
@@ -67,7 +69,7 @@ public struct PolygonRegion: Codable, Equatable, Sendable {
             for i in ring.indices where ring[i] == ring[(i + 1) % ring.count] {
                 issues.append("\(label(r)) repeats point \(i + 1) consecutively.")
             }
-            if abs(Self.signedArea(ring)) <= 1e-18 { issues.append("\(label(r)) encloses no area.") }
+            if abs(Self.signedArea(ring)) <= 1e-18 { flat.insert(r) }
         }
         guard issues.isEmpty else { return issues }
         let scale = max(simdLength(bounds.max - bounds.min), 1e-12)
@@ -101,6 +103,8 @@ public struct PolygonRegion: Codable, Equatable, Sendable {
                 }
             }
         }
+        for r in flat.sorted() where !reported.contains("self\(r)") { issues.append("\(label(r)) encloses no area.") }
+        if !flat.isEmpty { return issues }
         for (h, hole) in holes.enumerated() {
             if !Self.ringContains(outer, hole[0]) { issues.append("hole \(h + 1) is not inside the outer boundary.") }
             for (k, other) in holes.enumerated() where k != h && Self.ringContains(other, hole[0]) {

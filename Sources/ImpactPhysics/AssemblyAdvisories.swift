@@ -119,7 +119,9 @@ extension AssemblyScene {
         }
         if let advice = part.outlineAdvice(resolution: mesh) {
             let h = part.outline!.edgeLength(resolution: mesh)
-            notes.append(String(format: "Mesh: target edge length %.3g mm, about %@ triangles.", h * 1000, advice.estimatedTriangles.formatted()))
+            if part.outlineQuality(resolution: mesh) == nil {
+                notes.append(String(format: "Mesh: target edge length %.3g mm, roughly %@ triangles (estimate).", h * 1000, advice.estimatedTriangles.formatted()))
+            }
             if let thin = advice.thinnestSection {
                 // Rows of near-equilateral triangles across a section of width t: about t / (0.87 h).
                 let rows = thin / (0.866 * h)

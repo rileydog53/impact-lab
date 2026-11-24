@@ -42,7 +42,7 @@ enum OutlinePrimitive: String, CaseIterable {
         case .wedge:
             return PolygonRegion(outer: [Point(-0.040, -0.015), Point(0.040, -0.015), Point(0.040, 0.015)])
         case .hexagon:
-            return PolygonRegion(outer: Shapes.ellipse(width: 0.050, height: 0.050 * 0.866, sides: 6))
+            return PolygonRegion(outer: Shapes.ellipse(width: 0.050, height: 0.050, sides: 6))
         }
     }
 }
