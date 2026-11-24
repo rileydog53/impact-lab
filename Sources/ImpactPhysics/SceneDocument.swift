@@ -306,18 +306,39 @@ enum SceneDocument {
             guard let part = object(raw, path) else { return [:] }
             if let name = part["name"] as? String { path += " \"\(name)\"" }
             keys(part, path, allowed: ["id", "name", "shape", "center", "size", "wall", "angle", "velocity", "material",
-                                       "plasticity", "fracture", "refinement", "notch", "bondedLayer", "support", "description"])
+                                       "plasticity", "fracture", "refinement", "notch", "bondedLayer", "support", "outline", "description"])
             var out: Object = ["id": id]
             if let name = string(part["name"], path + ".name") { out["name"] = name }
             else { fail(path + ".name", "every body needs a name"); out["name"] = "" }
             out["shape"] = part["shape"].map {
                 choice($0, path + ".shape", ["block": "Block", "rectangle": "Block", "enclosure": "Enclosure",
                                              "hollow": "Enclosure", "roundbody": "Round body", "round": "Round body",
-                                             "circle": "Round body", "ellipse": "Round body"]) ?? "Block"
-            } ?? "Block"
+                                             "circle": "Round body", "ellipse": "Round body", "outline": "Outline",
+                                             "polygon": "Outline"]) ?? "Block"
+            } ?? (part["outline"] != nil ? "Outline" : "Block")
             out["center"] = point(part["center"], path + ".center") ?? [0, 0]
-            if part["size"] == nil { fail(path + ".size", "give the body's size [width, height] in metres") }
-            out["size"] = point(part["size"], path + ".size") ?? [0.06, 0.06]
+            var outlineSize: [Double]?
+            if let raw = part["outline"] {
+                let outlinePath = path + ".outline"
+                if let outline = object(raw, outlinePath) {
+                    keys(outline, outlinePath, allowed: ["outer", "holes", "meshSize"])
+                    func ring(_ value: Any?, _ ringPath: String) -> [[Double]] {
+                        (array(value, ringPath) ?? []).enumerated().compactMap { point($1, "\(ringPath)[\($0)]") }
+                    }
+                    if outline["outer"] == nil { fail(outlinePath + ".outer", "give the outer boundary as a list of [x, y] points in metres") }
+                    let outer = ring(outline["outer"], outlinePath + ".outer")
+                    let holes = (array(outline["holes"], outlinePath + ".holes") ?? []).enumerated().map { ring($1, "\(outlinePath).holes[\($0)]") }
+                    var result: Object = ["outer": outer, "holes": holes]
+                    if let size = outline["meshSize"] { result["meshSize"] = number(size, outlinePath + ".meshSize") }
+                    out["outline"] = result
+                    if let xs = outer.map(\.[0]) as [Double]?, let ys = outer.map(\.[1]) as [Double]?,
+                       let x0 = xs.min(), let x1 = xs.max(), let y0 = ys.min(), let y1 = ys.max() {
+                        outlineSize = [x1 - x0, y1 - y0]
+                    }
+                }
+            }
+            if part["size"] == nil && outlineSize == nil { fail(path + ".size", "give the body's size [width, height] in metres") }
+            out["size"] = point(part["size"], path + ".size") ?? outlineSize ?? [0.06, 0.06]
             out["wall"] = number(part["wall"], path + ".wall") ?? 0.012
             out["angle"] = number(part["angle"], path + ".angle") ?? 0
             out["velocity"] = point(part["velocity"], path + ".velocity") ?? [0, 0]
@@ -498,7 +519,7 @@ extension AssemblyScene {
                 result.append("\(path).provenance is incomplete. Use a profile name such as \"aluminum-6061-t6\", or remove provenance for a custom material.")
             }
         }
-        if parts.count > Self.maximumParts { result.append("parts: \(parts.count) bodies; at most \(Self.maximumParts) are supported.") }
+        if parts.count > Self.maximumParts { result.append("parts: \(parts.count) bodies; at most \(Self.maximumParts) are accepted (contact checks every pair, so the editor bounds the count).") }
         if connections.count > Self.maximumConnections {
             result.append("connections: \(connections.count); at most \(Self.maximumConnections) are supported.")
         }
@@ -516,8 +537,9 @@ extension AssemblyScene {
             range(part.size.x, part.widthRange(resolution: mesh), path + ".size[0] (width)", " m")
             range(part.size.y, part.sizeRange(resolution: mesh), path + ".size[1] (height)", " m")
             if let conflict = part.supportConflict { result.append("\(path).support: \(conflict)") }
-            range(part.center.x, -1...1, path + ".center[0]", " m")
-            range(part.center.y, -1...1, path + ".center[1]", " m")
+            range(part.center.x, AssemblyPart.centerRange, path + ".center[0]", " m")
+            range(part.center.y, AssemblyPart.centerRange, path + ".center[1]", " m")
+            for issue in part.outlineIssues { result.append("\(path).outline: \(issue)") }
             range(part.angle, -360...360, path + ".angle", "°")
             range(part.velocity.x, AssemblyPart.velocityRange, path + ".velocity[0]", " m/s")
             range(part.velocity.y, AssemblyPart.velocityRange, path + ".velocity[1]", " m/s")
@@ -530,6 +552,7 @@ extension AssemblyScene {
             }
             if let fracture = part.fracture {
                 if part.shape == .round { result.append("\(path).fracture is not available for round bodies.") }
+                if part.shape == .outline { result.append("\(path).fracture is not available for outline bodies yet (crack paths on generated meshes are not yet verified).") }
                 if part.material.provenance != nil && !fracture.usesAbsoluteStrength {
                     result.append("\(path).fracture: a metal profile needs fracture.strength in Pa and fracture.energy in J/m² (see the profile's sourced estimate); the fraction-of-E model cannot be combined with a metal profile.")
                 }
