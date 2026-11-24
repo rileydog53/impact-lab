@@ -372,8 +372,8 @@ public struct AssemblySimulation: Sendable {
         try scene.validate()
         precondition(refinement > 0 && stepLimit > 0 && stepScale > 0 && notchDepth >= 0)
         self.scene = scene
-        let bodies = scene.parts.enumerated().map { i, part in
-            part.makeBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
+        let bodies = try scene.parts.enumerated().map { i, part in
+            try part.makeBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
         }
         let fractures = zip(bodies, scene.parts).map { body, part in
             part.fracture.map { MaterialFracture(body: body, settings: $0) }
@@ -394,6 +394,9 @@ public struct AssemblySimulation: Sendable {
                 if !support.isFixture { step.clamped = part.clampedNodes(body, support) }
             }
             return step
+        }
+        for (part, step) in zip(scene.parts, steps) where part.shape == .outline {
+            if let support = part.support, !support.isFixture, step.clamped.count < 2 { throw AssemblyError.clampTooFew(part.name) }
         }
         gravity = scene.gravity ?? 0
         initialHeightMoments = bodies.map { body in body.mass.indices.reduce(0) { $0 + body.mass[$1] * body.position[$1].y } }

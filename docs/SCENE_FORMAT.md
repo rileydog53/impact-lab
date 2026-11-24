@@ -30,7 +30,7 @@ SI throughout: **metres, seconds, m/s, pascals (Pa), kg/m³**. Angles are in **d
 
 | Setting | Meaning | Default and limits |
 |---|---|---|
-| `parts` | The bodies (below) | up to 8 |
+| `parts` | The bodies (below) | up to 64; above 8 an advisory note reports the run-time cost |
 | `connections` | Springs and breakable links between bodies | up to 12 |
 | `gauges` | Measurement points inside bodies | up to 8 |
 | `duration` | Simulated time, s | 0.12; 0.0001–2 |
@@ -50,9 +50,10 @@ The timestep is not a setting. The solver chooses the largest stable step from t
 |---|---|---|
 | `name` | Required, unique if other entries refer to it | 1–48 characters |
 | `id` | Optional. A UUID, or readable text like `"striker"` used for references | generated |
-| `shape` | `block`, `enclosure` (hollow box) or `round` (ellipse) | `block` |
-| `size` | Required. `[width, height]`, or the two diameters of a round body, m | each 0.025–0.30 |
-| `center` | `[x, y]`, m | `[0, 0]`; each −1 to 1 |
+| `shape` | `block`, `enclosure` (hollow box), `round` (ellipse) or `outline` (any polygon, see `outline`) | `block`, or `outline` when an `outline` is given |
+| `size` | `[width, height]`, or the two diameters of a round body, m. Required except for outline bodies, whose size defaults to the outline's box (giving it stretches the outline to fit) | each 0.0005–10 m accepted; below 25 mm ÷ n on a ×n mesh or above 0.30 m an advisory note explains the cost, nothing is blocked |
+| `outline` | General body shape: `{ "outer": [[x, y], …], "holes": [[[x, y], …]], "meshSize": 0.003 }`. Points in metres in the body's own frame; the outline's box is centred on `center`. At least 3 points per ring, no self-crossing, holes strictly inside and apart. `meshSize` is the target triangle edge (0.00005–1 m), default 12 mm ÷ n on the ×n mesh. Meshed by the built-in quality mesher (Delaunay refinement); fracture is not available on outline bodies yet | none |
+| `center` | `[x, y]`, m | `[0, 0]`; each −10 to 10 |
 | `angle` | Rotation, degrees | 0; −360 to 360 |
 | `velocity` | Initial uniform velocity `[vx, vy]`, m/s | `[0, 0]`; each −150 to 150 |
 | `wall` | Enclosure wall thickness, m | 0.012; 0.005 to 0.4 × the smaller size |
@@ -124,7 +125,7 @@ Impact Lab rejects these with an explanation instead of silently ignoring them:
 | `fracture` on a metal profile | The crack model is illustrative and calibrated for no real metal. |
 | anything misspelled | Reported with a suggestion, e.g. *`parts[1] "Ball".velocty: unknown setting; did you mean "velocity"?`* |
 
-Values out of range are reported with their location, value and allowed range. For example: *`parts[0] "A".size[0] (width) is 0.01 m; allowed 0.025 m to 0.3 m.`* All problems in a file are listed together. [`scene-examples/invalid-example.json`](scene-examples/invalid-example.json) shows this.
+Values out of range are reported with their location, value and allowed range. For example: *`parts[0] "A".size[0] (width) is 0.0001 m; allowed 0.0005 m to 10 m.`* All problems in a file are listed together. [`scene-examples/invalid-example.json`](scene-examples/invalid-example.json) shows this.
 
 ## Saved files
 

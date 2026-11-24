@@ -32,36 +32,46 @@ func workshopImprovementsCheck() throws {
         return s
     }
 
-    // 1. The minimum follows the mesh and never exceeds the old fixed 25 mm.
+    // Policy approved by Joseph 2026-11-24 (Google Doc section 28, decision 2): the 25–300 mm range and the
+    // 8-body cap became advice. These checks used to require rejection; they now require that the same scenes
+    // are accepted, run with finite energy, and carry an advisory note that names the cause. Only input bounds
+    // (0.5 mm to 10 m, 64 bodies) and the enclosure's own 12.5 mm geometry rule still refuse.
+
+    // 1. The advisory threshold follows the mesh and never exceeds the old fixed 25 mm.
     for r in AssemblyScene.Resolution.allCases {
         let minimum = AssemblyPart.minimumSize(resolution: r)
-        require(abs(minimum - 0.025 / Double(r.rawValue)) < 1e-15 && minimum <= 0.025, "minimum for \(r)")
+        require(abs(minimum - 0.025 / Double(r.rawValue)) < 1e-15 && minimum <= 0.025, "advisory threshold for \(r)")
     }
-    require(AssemblyPart.minimumSize(resolution: .standard) == 0.025, "standard minimum stays 25 mm")
-    require(tryBuild(scene(size: 0.025, mesh: nil)).simulation != nil, "25 mm body on the standard mesh")
-    let tooSmall = tryBuild(scene(size: 0.024, mesh: nil))
-    require(tooSmall.simulation == nil && (tooSmall.message ?? "").contains("smaller than 25 mm"),
-            "24 mm body on the standard mesh is rejected with a specific message: \(tooSmall.message ?? "none")")
-    print("  standard mesh: 25 mm accepted, 24 mm rejected: \"\(tooSmall.message ?? "")\"")
+    require(AssemblyPart.minimumSize(resolution: .standard) == 0.025, "standard advisory threshold stays 25 mm")
+    func smallNote(_ s: AssemblyScene) -> String? { s.advisories(for: s.parts[0]).first { $0.contains("smaller than three elements") } }
+    require(tryBuild(scene(size: 0.025, mesh: nil)).simulation != nil && smallNote(scene(size: 0.025, mesh: nil)) == nil,
+            "25 mm body on the standard mesh: accepted, no size note")
+    let small = scene(size: 0.024, mesh: nil)
+    require(small.issues().isEmpty && runSteps(small, count: 4000), "24 mm body on the standard mesh is accepted and runs")
+    require(smallNote(small) != nil, "24 mm body carries an advisory note")
+    print("  standard mesh: 24 mm accepted with advice: \"\(smallNote(small) ?? "")\"")
 
-    // 2. A finer mesh accepts smaller bodies, and they calculate.
+    // 2. A finer mesh gives smaller bodies full resolution; below it they still run, with the note.
     for (size, mesh) in [(0.0125, AssemblyScene.Resolution.fine), (0.007, .x4)] {
         let s = scene(size: size, mesh: mesh)
-        require(s.issues().isEmpty, "issues for \(size) on \(mesh): \(s.issues())")
+        require(s.issues().isEmpty && smallNote(s) == nil, "\(size) on \(mesh): accepted without note: \(s.issues())")
         require(runSteps(s, count: 4000), "\(size * 1000) mm body on \(mesh.label) runs with finite energy")
         print("  \(String(format: "%.1f", size * 1000)) mm body on \(mesh.label): accepted and runs")
     }
-    let belowFine = tryBuild(scene(size: 0.012, mesh: .fine))
-    require(belowFine.simulation == nil, "12 mm is below the 12.5 mm minimum of the fine mesh")
-    require(!scene(size: 0.012, mesh: .fine).issues().isEmpty, "the scene document check explains the same rule")
-    print("  fine mesh: 12 mm rejected (\(scene(size: 0.012, mesh: .fine).issues().first ?? ""))")
+    for (size, mesh) in [(0.012, AssemblyScene.Resolution.fine), (0.003, .standard), (0.0005, .standard)] {
+        let s = scene(size: size, mesh: mesh)
+        require(s.issues().isEmpty && smallNote(s) != nil && runSteps(s, count: 2000),
+                "\(size * 1000) mm on \(mesh.label): accepted, advised, runs")
+    }
+    let belowInput = scene(size: 0.0004, mesh: nil)
+    require(tryBuild(belowInput).simulation == nil && !belowInput.issues().isEmpty, "below the 0.5 mm input bound: refused and explained")
+    print("  12 mm (fine), 3 mm and 0.5 mm (standard) accepted with advice and run; 0.4 mm refused as an input bound")
 
-    // 3. A per-body mesh override sets that body's minimum; coarsening cannot hide a too-small body.
-    require(tryBuild(scene(size: 0.007, mesh: nil, refinement: .x4)).simulation != nil, "body with its own ×4 mesh accepts 7 mm")
+    // 3. A per-body mesh override removes the note; coarsening brings it back but does not block.
+    require(smallNote(scene(size: 0.007, mesh: nil, refinement: .x4)) == nil, "body with its own ×4 mesh: no note at 7 mm")
     var coarsened = scene(size: 0.007, mesh: .x4)
     coarsened.meshResolution = nil
-    let back = tryBuild(coarsened)
-    require(back.simulation == nil && (back.message ?? "").contains("smaller than"), "coarsening to the standard mesh is refused with a cause")
+    require(tryBuild(coarsened).simulation != nil && smallNote(coarsened) != nil, "coarsening to the standard mesh: accepted with note")
 
     // 3b. Regression for the crash found in --scene-documents: an enclosure smaller than a 5 mm wall allows
     // used to build an invalid wall range (`0.005...0.4×side`) and trap. It must be rejected cleanly instead.
@@ -73,25 +83,30 @@ func workshopImprovementsCheck() throws {
             s.parts = [box, AssemblyPart("Other", center: Point(0.1, 0), size: Point(0.03, 0.03))]
             s.meshResolution = mesh
             let rejected = tryBuild(s).simulation == nil
-            let floor = max(0.0125, AssemblyPart.minimumSize(resolution: mesh))
-            require(rejected == (side < floor), "enclosure \(side) on \(mesh) handled")
+            require(rejected == (side < AssemblyPart.minimumEnclosureSide), "enclosure \(side) on \(mesh) handled")
             require(rejected == !s.issues().isEmpty, "enclosure \(side) on \(mesh) explained exactly when rejected")
         }
     }
-    print("  enclosures below max(12.5 mm, mesh minimum) are rejected cleanly on every mesh (regression: wall-range trap)")
+    print("  enclosures below 12.5 mm (5 mm wall at most 40% of the side) are rejected cleanly on every mesh (regression: wall-range trap)")
 
-    // 4. Arbitrary and implementation limits are unchanged and documented with their cause.
+    // 4. Large bodies and more than 8 bodies are accepted with advice; the remaining bounds are documented.
     var big = scene(size: 0.31, mesh: nil)
-    require(tryBuild(big).simulation == nil, "300 mm maximum unchanged")
-    big.parts[0].size = Point(0.30, 0.30)
-    require(tryBuild(big).simulation != nil, "300 mm accepted")
+    big.parts[1].center = Point(0.3, 0)
+    require(tryBuild(big).simulation != nil && big.advisories(for: big.parts[0]).contains { $0.contains("300 mm") },
+            "310 mm accepted with an advisory note")
+    big.parts[0].size = Point(10.5, 0.1)
+    require(tryBuild(big).simulation == nil && !big.issues().isEmpty, "above the 10 m input bound: refused and explained")
     var many = AssemblyScene()
     for i in 0..<9 { many.parts.append(AssemblyPart("B\(i)", center: Point(Double(i) * 0.05, 0), size: Point(0.03, 0.03))) }
-    require(tryBuild(many).simulation == nil && AssemblyScene.maximumParts == 8, "8-body cap unchanged")
+    require(tryBuild(many).simulation != nil && !many.sceneAdvisories.isEmpty, "9 bodies accepted with an advisory note")
+    require(AssemblyScene.maximumParts == 64 && AssemblyScene.advisoryParts == 8, "64-body input bound, advice above 8")
+    var tooMany = AssemblyScene()
+    for i in 0..<65 { tooMany.parts.append(AssemblyPart("B\(i)", center: Point(Double(i % 13) * 0.05, Double(i / 13) * 0.05), size: Point(0.03, 0.03))) }
+    require(tryBuild(tooMany).simulation == nil && !tooMany.issues().isEmpty, "65 bodies refused and explained")
     let kinds = Set(AssemblyScene.limits.map(\.kind))
-    require(kinds == [.numerical, .workshop, .implementation], "limits are classified: \(kinds)")
+    require(kinds == [.numerical, .implementation], "limits are classified: \(kinds)")
     for limit in AssemblyScene.limits { require(!limit.cause.isEmpty, "\(limit.name) has a cause") }
-    print("  limits unchanged (300 mm, 8 bodies, 12 connections) and documented: \(AssemblyScene.limits.map(\.name).joined(separator: ", "))")
+    print("  310 mm and 9 bodies accepted with advice; 10 m, 64 bodies and 12 connections documented: \(AssemblyScene.limits.map(\.name).joined(separator: ", "))")
 
     // 5. Fracture status tags and reasons.
     var block = AssemblyPart("Block", size: Point(0.06, 0.05))

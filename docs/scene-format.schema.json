@@ -13,7 +13,7 @@
     "duration": { "type": "number", "minimum": 0.0001, "maximum": 2.0, "default": 0.12, "description": "Simulated time in seconds." },
     "gravity": { "type": ["number", "boolean"], "minimum": 0, "maximum": 50, "description": "Downward (−Y) acceleration on every free body, m/s². true means 9.80665. Omit for no gravity." },
     "meshResolution": { "$ref": "#/$defs/resolution", "description": "Assembly mesh for every body without its own refinement. Default standard." },
-    "parts": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/part" } },
+    "parts": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/part" } },
     "connections": { "type": "array", "maxItems": 12, "items": { "$ref": "#/$defs/connection" } },
     "gauges": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/gauge" } },
     "monitor": { "$ref": "#/$defs/bodyReference", "description": "Body tracked in the motion plot. Default: the first body." },
@@ -96,14 +96,20 @@
       }
     },
     "part": {
-      "type": "object", "additionalProperties": false, "required": ["name", "size"],
+      "type": "object", "additionalProperties": false, "required": ["name"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "name": { "type": "string", "minLength": 1, "maxLength": 48 },
         "description": { "type": "string" },
-        "shape": { "enum": ["Block", "Enclosure", "Round body", "block", "rectangle", "enclosure", "hollow", "round", "circle", "ellipse"], "default": "Block" },
-        "center": { "$ref": "#/$defs/point", "default": [0, 0], "description": "Body centre, m, each coordinate −1 to 1." },
-        "size": { "$ref": "#/$defs/point", "description": "Width and height (or the two diameters of a round body), each 0.025–0.30 m." },
+        "shape": { "enum": ["Block", "Enclosure", "Round body", "block", "rectangle", "enclosure", "hollow", "round", "circle", "ellipse", "Outline", "outline", "polygon"], "default": "Block" },
+        "outline": { "type": "object", "additionalProperties": false, "required": ["outer"], "description": "General shape in the body frame, metres; its box is centred on center. Size defaults to the box.",
+          "properties": {
+            "outer": { "type": "array", "minItems": 3, "items": { "$ref": "#/$defs/point" } },
+            "holes": { "type": "array", "items": { "type": "array", "minItems": 3, "items": { "$ref": "#/$defs/point" } } },
+            "meshSize": { "type": "number", "minimum": 0.00005, "maximum": 1.0, "description": "Target triangle edge length, m. Default 0.012 / n on the ×n mesh." }
+          } },
+        "center": { "$ref": "#/$defs/point", "default": [0, 0], "description": "Body centre, m, each coordinate −10 to 10." },
+        "size": { "$ref": "#/$defs/point", "description": "Width and height (or the two diameters of a round body), each 0.0005–10 m; advisory notes below 25 mm ÷ n and above 0.30 m. Required unless an outline is given." },
         "angle": { "type": "number", "minimum": -360, "maximum": 360, "default": 0, "description": "Counter-clockwise rotation, degrees." },
         "velocity": { "$ref": "#/$defs/point", "default": [0, 0], "description": "Initial uniform velocity [vx, vy], m/s, each −150 to 150." },
         "wall": { "type": "number", "default": 0.012, "description": "Enclosure wall thickness, m; 0.005 m to 0.4 × the smaller size." },
