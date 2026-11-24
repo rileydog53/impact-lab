@@ -7,17 +7,34 @@ public struct MaterialFractureSettings: Codable, Equatable, Sendable {
         case staggered = "Staggered"
     }
 
+    /// Legacy range, as a fraction of Young's modulus.
     public static let strengthRange = 0.005...0.08
+    /// Legacy range for energy, used while strength is a fraction of E.
     public static let energyRange = 0.5...50.0
+    /// Absolute cohesive strength in pascals, used when `strength` is set.
+    public static let absoluteStrengthRange = 1e4...4e9
+    /// Fracture energy in J/m² when `strength` is set (metal values are far above the legacy cap).
+    public static let absoluteEnergyRange = 0.5...1e5
+
+    /// Legacy strength as a fraction of E. Ignored whenever `strength` is set.
     public var strengthFraction = 0.030
+    /// Cohesive strength in Pa. nil keeps the legacy fraction-of-E behaviour bit for bit.
+    public var strength: Double?
     public var energy = 7.0
+    /// Where `energy` came from when it is an estimate rather than a typed value.
+    public var energySource: FractureEstimateSource?
     public var meshPattern: MeshPattern?
     public var pattern: MeshPattern { meshPattern ?? .aligned }
 
     public init() {}
 
+    public func resolvedStrength(young: Double) -> Double { strength ?? young * strengthFraction }
+    public var usesAbsoluteStrength: Bool { strength != nil }
+    public var activeEnergyRange: ClosedRange<Double> { usesAbsoluteStrength ? Self.absoluteEnergyRange : Self.energyRange }
+
     var isValid: Bool {
-        Self.strengthRange.contains(strengthFraction) && Self.energyRange.contains(energy)
+        (strength.map { Self.absoluteStrengthRange.contains($0) } ?? Self.strengthRange.contains(strengthFraction))
+            && activeEnergyRange.contains(energy)
     }
 }
 
@@ -105,7 +122,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
             && (shape != .enclosure || (0.005...0.4 * min(size.x, size.y)).contains(wall))
             && material.isValidForAssembly
-            && plasticity.isValid && (fracture.map { shape != .round && material.provenance == nil && $0.isValid } ?? true)
+            && plasticity.isValid && (fracture.map { shape != .round && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
             && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)
             && (bondedLayer.map { shape == .block && $0.isValid && fracture == nil && notch == nil

@@ -172,7 +172,7 @@ package struct MaterialFracture: Sendable {
         let mesh = body.mesh
         young = body.material.young
         density = body.material.density
-        strength = young * settings.strengthFraction
+        strength = settings.resolvedStrength(young: young)
         toughness = settings.energy
         cornerNodes = mesh.elements.flatMap { [$0.a, $0.b, $0.c] }
         var pending: [SIMD2<Int>: Edge] = [:]

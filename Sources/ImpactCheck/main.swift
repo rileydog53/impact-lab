@@ -251,6 +251,21 @@ if let index = CommandLine.arguments.firstIndex(of: "--assembly-scaling") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--materials") {
+    try materialsCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--legacy-replay") {
+    let args = CommandLine.arguments
+    guard args.indices.contains(index + 2), ["record", "check"].contains(args[index + 1]) else {
+        print("Usage: ImpactCheck --legacy-replay record|check BASELINE_FILE")
+        exit(EXIT_FAILURE)
+    }
+    try legacyReplayCheck(mode: args[index + 1], baseline: args[index + 2])
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--assembly-replay") {
     try assemblyReplayCheck()
     exit(EXIT_SUCCESS)

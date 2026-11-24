@@ -103,6 +103,11 @@ func assemblyScalingCheck(_ workload: String, sceneFile: String? = nil) throws {
         }
     }
 
+    let hash = replayFingerprint(replay)
+    print("Replay fingerprint \(String(hash, radix: 16))")
+}
+
+func replayFingerprint(_ replay: AssemblyReplay) -> UInt64 {
     // Roll floating-point bit patterns into a fingerprint in replay order.
     var hash: UInt64 = 14695981039346656037
     func add(_ value: Double) { hash = (hash ^ value.bitPattern) &* 1099511628211 }
@@ -123,7 +128,7 @@ func assemblyScalingCheck(_ workload: String, sceneFile: String? = nil) throws {
         for g in frame.gauges { add(g.strain); add(g.equivalentStress) }
     }
     for e in replay.events { add(e.time) }
-    print("Replay fingerprint \(String(hash, radix: 16))")
+    return hash
 }
 
 private func cpuSeconds(_ usage: rusage) -> Double {

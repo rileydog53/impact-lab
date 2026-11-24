@@ -326,9 +326,22 @@ enum SceneDocument {
                 out["plasticity"] = plasticity ?? ["response": "Elastic", "yieldFraction": 0.016, "hardeningFraction": 0.32]
             }
             if let fracture = object(part["fracture"], path + ".fracture") {
-                keys(fracture, path + ".fracture", allowed: ["strengthFraction", "energy", "meshPattern"])
+                keys(fracture, path + ".fracture", allowed: ["strengthFraction", "strength", "energy", "energySource", "meshPattern"])
                 var result: Object = ["strengthFraction": number(fracture["strengthFraction"], path + ".fracture.strengthFraction") ?? 0.030,
                                       "energy": number(fracture["energy"], path + ".fracture.energy") ?? 7.0]
+                if let strength = fracture["strength"] {
+                    if fracture["strengthFraction"] != nil {
+                        fail(path + ".fracture", "give strength (Pa) or strengthFraction, not both")
+                    }
+                    if fracture["energy"] == nil {
+                        fail(path + ".fracture.energy", "is required with strength: no default is assumed for real-unit fracture energy (J/m²)")
+                    }
+                    result["strength"] = number(strength, path + ".fracture.strength")
+                }
+                if let source = object(fracture["energySource"], path + ".fracture.energySource") {
+                    keys(source, path + ".fracture.energySource", allowed: ["status", "citation", "url", "caution"])
+                    result["energySource"] = source
+                }
                 if let pattern = fracture["meshPattern"] {
                     result["meshPattern"] = choice(pattern, path + ".fracture.meshPattern", ["aligned": "Aligned", "staggered": "Staggered"])
                 }
@@ -497,11 +510,15 @@ extension AssemblyScene {
             }
             if let fracture = part.fracture {
                 if part.shape == .round { result.append("\(path).fracture is not available for round bodies.") }
-                if part.material.provenance != nil {
-                    result.append("\(path).fracture: the illustrative crack model cannot be combined with a metal profile. Use a custom material (young, density, poisson).")
+                if part.material.provenance != nil && !fracture.usesAbsoluteStrength {
+                    result.append("\(path).fracture: a metal profile needs fracture.strength in Pa and fracture.energy in J/m² (see the profile's sourced estimate); the fraction-of-E model cannot be combined with a metal profile.")
                 }
-                range(fracture.strengthFraction, MaterialFractureSettings.strengthRange, path + ".fracture.strengthFraction")
-                range(fracture.energy, MaterialFractureSettings.energyRange, path + ".fracture.energy", " J/m²")
+                if let strength = fracture.strength {
+                    range(strength, MaterialFractureSettings.absoluteStrengthRange, path + ".fracture.strength", " Pa")
+                } else {
+                    range(fracture.strengthFraction, MaterialFractureSettings.strengthRange, path + ".fracture.strengthFraction")
+                }
+                range(fracture.energy, fracture.activeEnergyRange, path + ".fracture.energy", " J/m²")
             }
             if let notch = part.notch {
                 if part.shape != .block { result.append("\(path).notch is available for blocks only.") }

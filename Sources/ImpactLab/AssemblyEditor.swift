@@ -347,7 +347,24 @@ struct AssemblyEditor: View {
                             }
                         }
                     }
-                    if part.material.provenance != nil {
+                    if let profile = MaterialProfile.references.first(where: { $0.id == part.material.provenance?.id }),
+                       part.shape != .round, part.bondedLayer == nil {
+                        VStack(alignment: .leading, spacing: 7) {
+                            if let estimate = profile.defaultFracture {
+                                Toggle("Material fracture (sourced estimate)", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
+                                    experiment.updatePart(part.id) { $0.fracture = enabled ? estimate : nil }
+                                })).toggleStyle(.checkbox)
+                                if part.fracture == nil {
+                                    Text("Off by default. Turning it on uses the handbook estimate for this material, with its citation.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            } else if case let .unavailable(reason) = profile.fractureEstimate {
+                                Text("Fracture toughness is off for this material. \(reason)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let fracture = part.fracture { fractureControls(part, fracture) }
+                        }.disabled(!experiment.canEdit)
+                    } else if part.material.provenance != nil {
                         Text("The selected metal profile supports elastic and J2 response. Bulk fracture is unavailable.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if part.shape == .round {
@@ -358,32 +375,7 @@ struct AssemblyEditor: View {
                             Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
                                 experiment.updatePart(part.id) { $0.fracture = enabled ? MaterialFractureSettings() : nil }
                             })).toggleStyle(.checkbox)
-                            if let fracture = part.fracture {
-                                HStack {
-                                    numeric("Strength / E (%)", value: fracture.strengthFraction,
-                                            range: MaterialFractureSettings.strengthRange, scale: 100) { value in
-                                        experiment.updatePart(part.id) { $0.fracture?.strengthFraction = value }
-                                    }
-                                    numeric("Fracture energy (J/m²)", value: fracture.energy,
-                                            range: MaterialFractureSettings.energyRange, scale: 1) { value in
-                                        experiment.updatePart(part.id) { $0.fracture?.energy = value }
-                                    }
-                                }
-                                if part.shape == .block {
-                                    Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
-                                        experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
-                                    })) {
-                                        ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) {
-                                            Text($0.rawValue).tag($0)
-                                        }
-                                    }
-                                }
-                                let resolution = part.refinement ?? experiment.scene.resolution
-                                Text(resolution.rawValue <= 3
-                                     ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
-                                     : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
+                            if let fracture = part.fracture { fractureControls(part, fracture) }
                         }.disabled(!experiment.canEdit)
                     } else {
                         Text("Bonded layers require elastic material and use permanent bonds.")
@@ -393,6 +385,43 @@ struct AssemblyEditor: View {
                 }.padding(.top, 7)
             }
             gaugeEditor(part)
+        }
+    }
+
+
+    @ViewBuilder
+    private func fractureControls(_ part: AssemblyPart, _ fracture: MaterialFractureSettings) -> some View {
+        let young = part.material.young
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                // Strength is shown and entered in real units (MPa = 10⁶ Pa). Legacy scenes
+                // show their fraction-of-E strength converted; the saved value only changes
+                // when the user types a new strength.
+                numeric("Cohesive strength (MPa)", value: fracture.resolvedStrength(young: young),
+                        range: MaterialFractureSettings.absoluteStrengthRange, scale: 1e-6) { value in
+                    experiment.updatePart(part.id) { $0.fracture?.strength = value }
+                }
+                numeric("Fracture energy (J/m²)", value: fracture.energy,
+                        range: fracture.activeEnergyRange, scale: 1) { value in
+                    experiment.updatePart(part.id) { $0.fracture?.energy = value; $0.fracture?.energySource = nil }
+                }
+            }
+            if let source = fracture.energySource {
+                Text("\(source.status.capitalized): \(source.citation)").font(.caption).foregroundStyle(.secondary)
+                Text(source.caution).font(.caption).foregroundStyle(.orange)
+            }
+            if part.shape == .block {
+                Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
+                    experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
+                })) {
+                    ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+            }
+            let resolution = part.refinement ?? experiment.scene.resolution
+            Text(resolution.rawValue <= 3
+                 ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
+                 : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

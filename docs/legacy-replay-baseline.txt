@@ -1,0 +1,11 @@
+builtin/metalImpactExample steps=2488 frames=162 dt=6.0304886958844598e-08 fingerprint=a902503a208820be plastic=1219.8949027445269 fracture=0
+builtin/enclosureExample steps=65961 frames=164 dt=2.3498904593960001e-06 fingerprint=7fe52880419eb294 plastic=0.98407464063963723 fracture=0.078125
+builtin/bendingFractureExample steps=67918 frames=165 dt=1.6932242261459412e-06 fingerprint=5ce8c4140ad41b96 plastic=0 fracture=0.45571543554357857
+docs/scene-examples/generated-stack.json steps=38062 frames=166 dt=1.5764153224379922e-08 fingerprint=934b12adbb03cdec plastic=1006.8249109683486 fracture=0
+docs/scene-examples/layered-panel.json steps=16791 frames=161 dt=2.3823551430340629e-08 fingerprint=3707b461774f70fd plastic=0 fracture=0
+docs/scene-examples/linked-chain.json steps=16767 frames=164 dt=4.771540501190409e-06 fingerprint=d956e8f525bb166e plastic=0 fracture=0.01
+docs/scene-examples/metal-plate-impact.json steps=60220 frames=162 dt=1.6605850404737738e-08 fingerprint=b6b76e5973c6f87f plastic=2348.6589878145537 fracture=0
+docs/scene-examples/notched-beam-fracture.json steps=39753 frames=168 dt=1.5093477764572747e-06 fingerprint=5ba3e125b109cde6 plastic=0 fracture=0.242586523512764
+docs/showcase/brittle-tile-fracture.json steps=98202 frames=173 dt=8.1465325099074028e-07 fingerprint=151f9bd1f3a26394 plastic=0 fracture=5.4656557299701358
+docs/showcase/cascade-stainless-bar.json steps=231573 frames=165 dt=1.7273183572985837e-08 fingerprint=71ffe37baece308d plastic=11270.254445942212 fracture=0
+docs/showcase/cascade.json steps=214741 frames=165 dt=1.8627154708027222e-08 fingerprint=15bab8bf270a6568 plastic=10328.121701025439 fracture=0
