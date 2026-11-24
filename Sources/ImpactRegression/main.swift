@@ -220,6 +220,16 @@ func barVibration() {
     }
 }
 
+/// Geometry editing verification: the same cantilever built as an outline body, meshed by the general mesher
+/// (Delaunay refinement) instead of the structured grid. Default edge 12 mm ÷ 4 = 3 mm, and a finer 2.25 mm.
+func outlineCantilever() {
+    for (label, edge) in [("outline_cantilever_3mm", Optional<Double>.none), ("outline_cantilever_2p25mm", 0.00225)] {
+        var scene = loadExample(.cantilever_sag)
+        scene.parts[0] = scene.parts[0].reshaped(to: scene.parts[0].region(), meshSize: edge)
+        cantilever(label, scene: scene)
+    }
+}
+
 func threePointBend() {
     print("three-point bend")
     let scene = loadExample(.three_point_bend)
@@ -400,7 +410,7 @@ try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirecto
 
 let all: [(String, () -> Void)] = [
     ("block_on_bench", blockOnBench), ("drop_test", dropTest), ("cantilever_sag", cantileverSag),
-    ("bar_vibration", barVibration), ("three_point_bend", threePointBend), ("hanging_springs", hangingSprings),
+    ("bar_vibration", barVibration), ("outline_cantilever", outlineCantilever), ("three_point_bend", threePointBend), ("hanging_springs", hangingSprings),
     ("stack_on_support", stackOnSupport), ("determinism", determinism), ("usability", usabilityProbes),
 ]
 for (name, body) in all where only == nil || only == name { body() }

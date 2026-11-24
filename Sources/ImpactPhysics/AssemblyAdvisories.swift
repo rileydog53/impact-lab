@@ -16,7 +16,7 @@ extension AssemblyPart {
 
     /// An enclosure needs a 5 mm wall that is at most 40% of its smaller side, so its smaller side is at
     /// least 12.5 mm. This is the enclosure's own geometry rule; an outline body with a hole has no such limit.
-    static let minimumEnclosureSide = 0.0125
+    public static let minimumEnclosureSide = 0.0125
 
     private var lowerSize: Double {
         shape == .enclosure ? max(Self.acceptedSizeRange.lowerBound, Self.minimumEnclosureSide) : Self.acceptedSizeRange.lowerBound
