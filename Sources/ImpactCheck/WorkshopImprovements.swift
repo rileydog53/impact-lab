@@ -99,13 +99,18 @@ func workshopImprovementsCheck() throws {
     block.fracture = MaterialFractureSettings()
     require(block.fractureStatus == .on && block.fractureStatus.tag == "fracture on", "fracture enabled: on")
     var round = AssemblyPart("Round", shape: .round, size: Point(0.05, 0.05))
+    // Bonded-layer blocks can crack and delaminate since the layered target plan, step 3
+    // (approved by Joseph 2026-11-24), so they report off/on like a plain block.
     var bonded = AssemblyPart("Bonded", size: Point(0.06, 0.05))
     bonded.bondedLayer = AssemblyPart.BondedLayer()
+    require(bonded.fractureStatus == .off, "bonded block without fracture: off")
+    bonded.fracture = MaterialFractureSettings()
+    require(bonded.fractureStatus == .on, "bonded block with fracture: on")
     var clamped = AssemblyPart("Clamped", size: Point(0.1, 0.03))
     clamped.support = .clampLeft
     var fixed = AssemblyPart("Fixed", size: Point(0.2, 0.03))
     fixed.support = .fixed
-    for part in [round, bonded, clamped, fixed] {
+    for part in [round, clamped, fixed] {
         guard case let .unavailable(reason) = part.fractureStatus else { require(false, "\(part.name) should be n/a"); continue }
         require(part.fractureStatus.tag == "fracture n/a" && reason.count > 40, "\(part.name) explains why: \(reason)")
         print("  \(part.name): \(part.fractureStatus.tag) — \(reason)")
