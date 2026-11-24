@@ -10,5 +10,8 @@ let package = Package(
         .executableTarget(name: "ImpactCheck", dependencies: ["ImpactPhysics"]),
         // Measurement harness for tests/regression (reads the solver only through its public API).
         .executableTarget(name: "ImpactRegression", dependencies: ["ImpactPhysics"]),
+        // Prototype: solver-independent geometry and mesh generation. Not used by the app or solver.
+        .target(name: "ImpactGeometry"),
+        .executableTarget(name: "MeshCheck", dependencies: ["ImpactGeometry", "ImpactPhysics"]),
     ]
 )
