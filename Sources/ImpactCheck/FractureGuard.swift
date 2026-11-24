@@ -104,12 +104,14 @@ func fractureGuardCheck() throws {
                  matched ? "matched" : "NOT matched", control.simulation.time * 1e3, difference, common))
     require(control.completed, "the fracture-off control must run to the end")
 
-    // 4. Negative control: a deliberately unstable run (three times the stable step) must still be stopped.
+    // 4. Negative control: a deliberately bad run must still be stopped, and by the energy guard.
+    //    The step bound is conservative for this mesh (3× and 4× still run cleanly), so use ten times it.
     var unstable = DropRun(try AssemblySimulation(fractureScene, refinement: fractureScene.resolution.rawValue,
-                                                  stepLimit: .infinity, stepScale: 3))
+                                                  stepLimit: .infinity, stepScale: 10))
     unstable.run()
-    print(String(format: "  Unstable run (3× step): stopped at %.4f ms: %@", unstable.simulation.time * 1e3,
+    print(String(format: "  Unstable run (10× step): stopped at %.4f ms: %@", unstable.simulation.time * 1e3,
                  unstable.simulation.failure ?? "not stopped"))
-    require(!unstable.completed && unstable.simulation.failure != nil, "a run at three times the stable step must be rejected")
+    require(!unstable.completed && unstable.simulation.rejectedEnergy != nil,
+            "a run at ten times the stable step must be rejected by the energy guard")
     print("PASS: fracture energy guard")
 }
