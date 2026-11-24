@@ -14,7 +14,7 @@ public struct MaterialFractureSettings: Codable, Equatable, Sendable {
     /// Absolute cohesive strength in pascals, used when `strength` is set.
     public static let absoluteStrengthRange = 1e4...4e9
     /// Fracture energy in J/m² when `strength` is set (metal values are far above the legacy cap).
-    public static let absoluteEnergyRange = 0.5...1e5
+    public static let absoluteEnergyRange = 0.5...1e6
 
     /// Legacy strength as a fraction of E. Ignored whenever `strength` is set.
     public var strengthFraction = 0.030

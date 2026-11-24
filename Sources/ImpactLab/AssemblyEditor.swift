@@ -407,8 +407,10 @@ struct AssemblyEditor: View {
                 }
             }
             if let source = fracture.energySource {
-                Text("\(source.status.capitalized): \(source.citation)").font(.caption).foregroundStyle(.secondary)
-                Text(source.caution).font(.caption).foregroundStyle(.orange)
+                DisclosureGroup("Source") {
+                    Text(source.citation).font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.font(.caption)
             }
             if part.shape == .block {
                 Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in

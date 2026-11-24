@@ -32,13 +32,15 @@ func materialsCheck() throws {
     for profile in MaterialProfile.references {
         switch profile.fractureEstimate {
         case let .available(strength, energy, source):
-            require(profile.id == "aluminum-6061-t6" && source.status == "estimated" && source.url.hasPrefix("https://")
-                    && !source.citation.isEmpty && !source.caution.isEmpty, "Estimate carries status, citation, caution")
-            let expected = 29e6 * 29e6 * (1 - 0.33 * 0.33) / 68.9e9
-            require(abs(energy - expected) < 1e-9 * expected, "G = K²(1−ν²)/E")
+            require(profile.id != "copper-c11000-annealed" && source.status == "estimated" && source.url.hasPrefix("https://")
+                    && !source.citation.isEmpty, "Estimate carries status and citation")
+            if profile.id == "aluminum-6061-t6" {
+                let expected = 29e6 * 29e6 * (1 - 0.33 * 0.33) / 68.9e9
+                require(abs(energy - expected) < 1e-9 * expected, "G = K²(1−ν²)/E")
+            }
+            require(energy > 0.5 && energy <= MaterialFractureSettings.absoluteEnergyRange.upperBound, "Energy inside range")
             print(String(format: "%@: estimated strength %.0f MPa, fracture energy %.0f J/m² (%@)", profile.name, strength / 1e6, energy, source.citation))
-            print("  caution: \(source.caution)")
-        case let .unavailable(reason):
+                    case let .unavailable(reason):
             require(profile.defaultFracture == nil && !reason.isEmpty, "Unavailable estimate has a reason and no settings")
             print("\(profile.name): fracture toughness off. \(reason)")
         }
@@ -53,6 +55,15 @@ func materialsCheck() throws {
     let fractured = try AssemblyRun(scene)
     require(fractured.simulation.initialIssue == nil, fractured.simulation.initialIssue ?? "")
     print(String(format: "6061 with estimate: dt %.4g s vs %.4g s without fracture (%.1fx smaller)", fractured.simulation.dt, plainDt, plainDt / fractured.simulation.dt))
+    for profile in [MaterialProfile.structuralSteel, MaterialProfile.stainless304] {
+        var metal = AssemblyScene.metalImpactExample()
+        profile.apply(to: &metal.parts[0], elasticOnly: true)
+        metal.parts[0].fracture = profile.defaultFracture
+        require(metal.issues().isEmpty, "\(profile.name) with estimate valid: \(metal.issues())")
+        let run = try AssemblyRun(metal)
+        require(run.simulation.initialIssue == nil, run.simulation.initialIssue ?? "")
+        print(String(format: "%@ with estimate: dt %.4g s", profile.name, run.simulation.dt))
+    }
     var legacyProfile = scene
     legacyProfile.parts[0].fracture = MaterialFractureSettings()
     require(!legacyProfile.issues().isEmpty, "Fraction-of-E fracture on a metal profile is still rejected")
@@ -81,4 +92,14 @@ func materialsCheck() throws {
     let thermal = errors(#"{"parts": [{"name": "A", "size": [0.05, 0.05], "temperature": 300}]}"#)
     require(!thermal.isEmpty, "Scene temperature is still rejected: no thermal physics")
     print("State schema: temperature reserved (not computed, rejected in scenes); damage declared monotone 0…1")
+
+    // 7. Run summary text.
+    let summaryScene = AssemblyScene.metalImpactExample()
+    var summaryRun = try AssemblyRun(summaryScene)
+    var summaryReplay = AssemblyReplay(summaryRun)
+    while summaryRun.step(recording: &summaryReplay) {}
+    summaryReplay.finish(summaryRun)
+    let summary = summaryReplay.textSummary(scene: summaryScene, frameIndex: summaryReplay.frames.count / 3)
+    require(summary.contains("Shown frame") && summary.contains("Final") && summary.contains("% of run"), "Summary has shown and final state")
+    print(summary)
 }

@@ -59,7 +59,7 @@ The timestep is not a setting. The solver chooses the largest stable step from t
 | `material` | See below | soft elastic |
 | `plasticity` | Custom-material plasticity, see below | elastic |
 | `fracture` | Illustrative cracking: `{ "strengthFraction": 0.03, "energy": 7 }` (energy in J/m²; optional `meshPattern` `aligned` or `staggered`) | off |
-| `fracture` (real units) | `{ "strength": 3.1e8, "energy": 10877 }`: strength in pascals, energy in J/m² up to 100000, both required. Allowed on library metal profiles. Optional `energySource` `{status, citation, url, caution}` records where an estimated energy came from. Files that use `strengthFraction` behave exactly as before. | off |
+| `fracture` (real units) | `{ "strength": 3.1e8, "energy": 10877 }`: strength in pascals, energy in J/m² up to 1000000, both required. Allowed on library metal profiles. Optional `energySource` `{status, citation, url, caution}` records where an estimated energy came from. Files that use `strengthFraction` behave exactly as before. | off |
 | `notch` | V-notch on a block's local bottom edge: `{ "depthFraction": 0.2, "widthFraction": 0.2, "centerFraction": 0 }` | none |
 | `bondedLayer` | Permanently bonded second (and `third`) material along the block: `{ "interfaceFraction": 0.5, "material": …, "third": { "interfaceFraction": 0.75, "material": … } }` | none |
 

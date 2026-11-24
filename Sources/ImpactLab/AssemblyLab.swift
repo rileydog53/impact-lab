@@ -389,6 +389,14 @@ struct AssemblyLab: View {
                     Button("\(event.label) · \(replayTime(event.time))") { experiment.seek(to: event.time) }
                 }
             }.fixedSize().disabled(experiment.replay?.events.isEmpty != false)
+            Button("Copy Summary", systemImage: "doc.on.clipboard") {
+                guard let replay = experiment.replay else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(replay.textSummary(scene: experiment.scene, frameIndex: experiment.frameIndex), forType: .string)
+            }
+            .labelStyle(.iconOnly)
+            .help("Copy a text summary of this run at the frame shown, to paste into chat")
+            .disabled(experiment.replay == nil)
         }
         .controlSize(.small)
         .disabled(experiment.solving)

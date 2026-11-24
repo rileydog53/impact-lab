@@ -31,23 +31,32 @@ extension MaterialProfile {
         toughness * toughness * (1 - material.poisson * material.poisson) / material.young
     }
 
+    /// Sourcing rule (Joseph, 24 Nov 2026): literature first, Wikipedia acceptable; two sources that
+    /// roughly agree are used; if they conflict find a third, then average the two closest values.
+    /// The citation stays in the data and the editor's collapsed "Source" details.
     public var fractureEstimate: FractureEstimate {
+        func estimate(_ strength: Double, _ toughness: Double, _ citation: String, _ url: String) -> FractureEstimate {
+            .available(strength: strength, energy: Self.energyRelease(toughness: toughness, material: material),
+                       source: FractureEstimateSource(citation: citation, url: url,
+                                                      caution: "Handbook estimate; real toughness varies with heat, orientation and thickness."))
+        }
         switch id {
         case "aluminum-6061-t6":
-            // K_IC 29 MPa√m (TL, ASM-derived datasheet; 22–35 range for wrought 6xxx), typical UTS 310 MPa.
-            let energy = Self.energyRelease(toughness: 29e6, material: material)
-            return .available(strength: 310e6, energy: energy, source: FractureEstimateSource(
-                citation: "6061-T6 typical ultimate tensile strength 310 MPa and plane-strain K_IC 29 MPa√m (TL), aerospacemetals.com Aluminum 6061-T6/T651 datasheet (ASM-derived); G = K²(1−ν²)/E.",
-                url: "https://www.aerospacemetals.com/wp-content/uploads/2023/06/Aluminum-6061-T6-6061-T651.pdf",
-                caution: "A handbook estimate, not a measurement of your part: real K_IC varies about 22–35 MPa√m with orientation and heat, and this crack model is simplified."))
+            // K_IC 29 MPa√m (TL; ASM-derived datasheet; 22–35 typical wrought 6xxx), UTS 310 MPa typical.
+            return estimate(310e6, 29e6, "6061-T6 typical UTS 310 MPa and K_IC 29 MPa√m (TL), aerospacemetals.com 6061-T6/T651 datasheet (ASM-derived); G = K²(1−ν²)/E.",
+                            "https://www.aerospacemetals.com/wp-content/uploads/2023/06/Aluminum-6061-T6-6061-T651.pdf")
         case "structural-steel-a36":
-            return .unavailable(reason: "No sourced fracture toughness found for A36. Its toughness is mostly beyond the valid plane-strain K_IC range, so no value is assumed.")
+            // Mild steel K_IC 140 MPa√m in two tables that agree (MIT OCW 1020 steel; eFunda mild steel). UTS 400–550 MPa (ASTM A36), midpoint.
+            return estimate(475e6, 140e6, "Mild steel K_IC 140 MPa√m (MIT OCW materials table, 1020 steel; eFunda mild steel; used for A36) and A36 UTS 400–550 MPa (ASTM A36, midpoint 475); G = K²(1−ν²)/E.",
+                            "https://www.efunda.com/formulae/solid_mechanics/fracture_mechanics/fm_lefm_Kc_Matl.cfm")
         case "stainless-304-annealed":
-            return .unavailable(reason: "No sourced room-temperature K_IC found for annealed 304 (only cryogenic or irradiated data), so no value is assumed.")
+            // Sources conflict: 50 (MIT table), 200 (chemeurope 18Cr-8Ni), ~250 (J_IC ≈ 300 kJ/m² converted, ASTM STP 1985). Two closest: 200 and 250 → 225.
+            return estimate(600e6, 225e6, "304 K_IC about 225 MPa√m: average of the two closest of three values (200 MPa√m chemeurope 18Cr-8Ni; ≈250 MPa√m from J ≈ 300 kJ/m², ASTM STP 1985; the outlier 50 MPa√m in an MIT table was dropped). UTS 600 MPa mean at 25 °C (ORNL); G = K²(1−ν²)/E.",
+                            "https://www.chemeurope.com/en/encyclopedia/Fracture_toughness.html")
         case "copper-c11000-annealed":
-            return .unavailable(reason: "No sourced fracture toughness found for annealed C11000 copper, so no value is assumed.")
+            return .unavailable(reason: "Only copper-alloy values were found (94 MPa√m in one table, 73 for dispersion-strengthened copper), none for annealed C11000, and they disagree.")
         default:
-            return .unavailable(reason: "No sourced fracture toughness for this material, so no value is assumed.")
+            return .unavailable(reason: "No sourced fracture toughness for this material.")
         }
     }
 
