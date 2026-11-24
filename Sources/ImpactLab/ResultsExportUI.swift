@@ -5,7 +5,7 @@ import SwiftUI
 /// File exports of calculated results. These write what the solver recorded; the PNG is the smooth
 /// display of the chosen field and says so in its caption.
 @MainActor enum ResultsExportActions {
-    static func exportParaView(frames: [AssemblyReplayFrame], suggestedName: String) -> String {
+    static func exportParaView(frames: [AssemblyReplayFrame], suggestedName: String) -> String? {
         guard !frames.isEmpty else { return "Nothing to export yet. Run the experiment first." }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -13,7 +13,7 @@ import SwiftUI
         panel.canCreateDirectories = true
         panel.prompt = "Export Here"
         panel.message = "Choose a folder. A .pvd file and one .vtu file per time step are written; open the .pvd in ParaView."
-        guard panel.runModal() == .OK, let base = panel.url else { return "Export cancelled." }
+        guard let base = ExperimentDirectory.run(panel, remember: { $0 }) else { return nil }
         let cleaned = String(suggestedName.map { "/:\\".contains($0) ? "-" : $0 })
         let name = cleaned.isEmpty ? "impactlab-results" : cleaned
         do {
@@ -23,7 +23,7 @@ import SwiftUI
         } catch { return "Export failed: \(error.localizedDescription)" }
     }
 
-    static func savePNG(frame: AssemblyReplayFrame?, field: AssemblyField, limit: Double, title: String) -> String {
+    static func savePNG(frame: AssemblyReplayFrame?, field: AssemblyField, limit: Double, title: String) -> String? {
         guard let frame, field != .separation else { return "Pick a frame and a per-element field first." }
         let (unit, scale): (String, Double) = {
             switch field {
@@ -39,7 +39,7 @@ import SwiftUI
         let panel = NSSavePanel()
         panel.nameFieldStringValue = String("\(title) \(field.rawValue).png".map { "/:".contains($0) ? "-" : $0 })
         panel.allowedContentTypes = [.png]
-        guard panel.runModal() == .OK, let url = panel.url else { return "Save cancelled." }
+        guard let url = ExperimentDirectory.run(panel) else { return nil }
         do { try data.write(to: url); return "Saved \(url.lastPathComponent)." }
         catch { return "Save failed: \(error.localizedDescription)" }
     }

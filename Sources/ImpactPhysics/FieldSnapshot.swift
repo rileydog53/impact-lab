@@ -56,9 +56,13 @@ public enum FieldSnapshot {
         }
         func label(_ v: Double) -> String { String(format: "%.3g %@", v * unitScale, unit) }
         text(label(signed ? -limit : 0), x: margin, y: barY - 22, size: 16)
-        text(label(limit), x: margin + barW - 70, y: barY - 22, size: 16)
+        let endLabel = label(limit)
+        let endWidth = CTLineGetTypographicBounds(CTLineCreateWithAttributedString(CFAttributedStringCreate(
+            nil, endLabel as CFString,
+            [kCTFontAttributeName: CTFontCreateWithName("Helvetica" as CFString, 16, nil)] as CFDictionary)), nil, nil, nil)
+        text(endLabel, x: margin + barW - endWidth, y: barY - 22, size: 16)
         if signed { text("0", x: margin + barW / 2 - 4, y: barY - 22, size: 16) }
-        text("Interpolated display of solver output (area-weighted nodal averaging); peaks may read lower than raw element values.",
+        text("Interpolated display of solver output (superconvergent patch recovery); peaks may read lower than raw element values.",
              x: margin, y: margin - 18, size: 13)
         guard let image = ctx.makeImage() else { return nil }
         let data = NSMutableData()

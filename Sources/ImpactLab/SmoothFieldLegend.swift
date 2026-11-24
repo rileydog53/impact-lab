@@ -27,6 +27,6 @@ struct SmoothFieldLegend: View {
         .font(.caption.monospacedDigit())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Smooth color scale \(field.display(low, limit: limit)) to \(field.display(limit, limit: limit))")
-        .help("Interpolated display of solver output (area-weighted averaging). Values beyond the scale use the end colors.")
+        .help("Interpolated display of solver output (superconvergent patch recovery of per-element values). Values beyond the scale use the end colors.")
     }
 }

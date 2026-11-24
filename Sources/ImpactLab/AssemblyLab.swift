@@ -536,7 +536,7 @@ struct AssemblyLab: View {
                     }.fixedSize()
                 }
                 Toggle("Smooth", isOn: $smoothFields).toggleStyle(.checkbox)
-                    .help("On: interpolated display of the calculated field (area-weighted averaging of per-element values). Off: raw per-element colors. The calculation is identical either way.")
+                    .help("On: interpolated display of the calculated field (superconvergent patch recovery of per-element values). Off: raw per-element colors. The calculation is identical either way.")
                 Toggle("Show mesh", isOn: $showMesh).toggleStyle(.checkbox)
                     .help("Draw the actual simulation mesh. Amber outlines indicate thin reference triangles.")
                 Menu("Export", systemImage: "square.and.arrow.up") {
@@ -605,6 +605,12 @@ struct AssemblyLab: View {
             if smoothFields { SmoothFieldLegend(field: field, limit: fieldLimit) }
             else { AssemblyFieldLegend(field: field, limit: fieldLimit) }
             Text(field.provenance + (smoothFields ? ", interpolated display" : "")).foregroundStyle(.secondary)
+            if field != .separation, frame.bodies.contains(where: { field.values($0).isEmpty }) {
+                Text(field == .plastic ? "Elastic bodies have no plastic strain, so they keep their own color."
+                                       : "Bodies with no \(field.rawValue.lowercased()) data keep their own color.")
+                    .foregroundStyle(.secondary)
+                    .help("A body that stays elastic records zero plastic strain, so the plastic-strain scale does not apply to it.")
+            }
             Button("Field definition", systemImage: "info.circle") { definition = true }
                 .labelStyle(.iconOnly).help(field.definition)
                 .popover(isPresented: $definition) {

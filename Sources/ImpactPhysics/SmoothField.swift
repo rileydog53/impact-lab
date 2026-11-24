@@ -7,10 +7,16 @@ import simd
 // future method can be adapted to this shape. The recovered result is an INTERPOLATED DISPLAY of
 // the solver output, not new physics.
 //
-// Method (adopted, not invented): area-weighted nodal averaging, the simplest "recovery"
-// post-processing used by FEM viewers (e.g. ParaView's Cell Data to Point Data, Gmsh, Abaqus
-// "averaged" contours). Zienkiewicz-Zhu superconvergent patch recovery (SPR, 1992) is the published
-// higher-accuracy upgrade and is a candidate for later; it is not implemented here.
+// Method (adopted, not invented): Zienkiewicz-Zhu superconvergent patch recovery (SPR; Zienkiewicz
+// and Zhu, Int. J. Numer. Meth. Eng. 33, 1331-1364, 1992). For each node, the per-element values of
+// the elements around it are fitted with a least-squares plane (sampled at the element centroids)
+// and the plane is evaluated at the node. This removes the diamond/star patterns that plain
+// area-weighted nodal averaging (the "cell data to point data" of ParaView, Gmsh, Abaqus averaged
+// contours) leaves around mesh vertices on coarse meshes. Two safeguards keep it honest: a node whose
+// patch cannot fix a plane (fewer than 3 elements, or nearly collinear centroids) falls back to
+// area-weighted averaging, and every recovered corner is clamped to the range of the element values
+// in its patch, so the display never exceeds the solver's own range (no invented peaks, no negative
+// plastic strain). Area-weighted averaging is kept as `areaWeightedCorners()` for comparison.
 
 public struct ScalarFieldOnTriangles: Sendable {
     public var points: [Point]
@@ -30,10 +36,62 @@ public struct ScalarFieldOnTriangles: Sendable {
         self.groups = groups
     }
 
-    /// Corner values for every triangle after area-weighted averaging. A corner value is a convex
-    /// combination of neighbouring triangle values, so the display never exceeds the solver's
-    /// own range and a uniform field is reproduced exactly.
+    /// Corner values for every triangle by superconvergent patch recovery (see the file header).
+    /// A uniform field and any linear field are reproduced exactly in the interior, and a corner never
+    /// leaves the range of its patch's element values.
     public func recoveredCorners() -> [SIMD3<Double>] {
+        struct Key: Hashable { var node: Int; var group: Int }
+        var patches: [Key: [Int]] = [:]
+        for (i, t) in triangles.enumerated() {
+            for n in [t.x, t.y, t.z] { patches[Key(node: n, group: groups?[i] ?? 0), default: []].append(i) }
+        }
+        let fallback = areaWeightedCorners()
+        var recovered: [Key: Double] = [:]
+        for (key, members) in patches {
+            guard members.count >= 3 else { continue }
+            let origin = points[key.node]
+            var scale = 0.0
+            var centroids: [(x: Double, y: Double, v: Double)] = []
+            for i in members {
+                let t = triangles[i]
+                let c = (points[t.x] + points[t.y] + points[t.z]) / 3 - origin
+                centroids.append((c.x, c.y, values[i]))
+                scale = max(scale, hypot(c.x, c.y))
+            }
+            guard scale > 0 else { continue }
+            // Normal equations for v = a + b x + c y with x, y scaled to about unit size.
+            var m = [[Double]](repeating: [Double](repeating: 0, count: 3), count: 3), r = [Double](repeating: 0, count: 3)
+            for c in centroids {
+                let p = [1, c.x / scale, c.y / scale]
+                for a in 0..<3 { r[a] += p[a] * c.v; for b in 0..<3 { m[a][b] += p[a] * p[b] } }
+            }
+            let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+            // Conditioning: det of the normalised moment matrix is about n^3 times a spread factor; tiny means collinear.
+            let n = Double(centroids.count)
+            guard det > 1e-3 * n * n * n else { continue }
+            // Value at the node (x = y = 0) is the constant term: Cramer's rule on the first unknown.
+            let numer = r[0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (r[1] * m[2][2] - m[1][2] * r[2])
+                + m[0][2] * (r[1] * m[2][1] - m[1][1] * r[2])
+            let value = numer / det
+            guard value.isFinite else { continue }
+            let low = centroids.map(\.v).min()!, high = centroids.map(\.v).max()!
+            recovered[key] = min(high, max(low, value))
+        }
+        return triangles.enumerated().map { i, t in
+            func corner(_ n: Int, _ slot: Int) -> Double {
+                recovered[Key(node: n, group: groups?[i] ?? 0)] ?? fallback[i][slot]
+            }
+            return SIMD3(corner(t.x, 0), corner(t.y, 1), corner(t.z, 2))
+        }
+    }
+
+    /// Corner values for every triangle after area-weighted averaging. A corner value is a convex
+    /// combination of neighbouring triangle values, so it never exceeds the solver's own range and a
+    /// uniform field is reproduced exactly.
+    public func areaWeightedCorners() -> [SIMD3<Double>] {
         struct Key: Hashable { var node: Int; var group: Int }
         var sum: [Key: Double] = [:], weight: [Key: Double] = [:]
         var areas = [Double](repeating: 0, count: triangles.count)

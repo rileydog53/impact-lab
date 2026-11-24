@@ -27,6 +27,38 @@ func smoothFieldCheck(snapshot: String?) throws {
     require(smeared[0].y > 1 && smeared[0].y < 10, "Ungrouped nodes should average across")
     print("  discontinuity groups keep a material jump sharp: ok")
 
+    // 2b. Superconvergent patch recovery reproduces a linear field exactly at interior nodes (a property
+    // plain area-weighted averaging lacks on a non-uniform patch) and still never leaves the element range.
+    var gridPoints: [Point] = [], gridTris: [SIMD3<Int>] = []
+    let side = 5
+    for j in 0..<side { for i in 0..<side { gridPoints.append(Point(Double(i) * (1 + 0.1 * Double(j % 2)), Double(j))) } }
+    for j in 0..<(side - 1) { for i in 0..<(side - 1) {
+        let a = j * side + i
+        gridTris.append(SIMD3(a, a + 1, a + side + 1)); gridTris.append(SIMD3(a, a + side + 1, a + side))
+    } }
+    let linearValues = gridTris.map { t -> Double in
+        let c = (gridPoints[t.x] + gridPoints[t.y] + gridPoints[t.z]) / 3
+        return 2 + 3 * c.x - c.y
+    }
+    let linearField = ScalarFieldOnTriangles(points: gridPoints, triangles: gridTris, values: linearValues)
+    let linearCorners = linearField.recoveredCorners()
+    let averaged = linearField.areaWeightedCorners()
+    var worstSPR = 0.0, worstAvg = 0.0
+    for (i, t) in gridTris.enumerated() {
+        for (slot, n) in [t.x, t.y, t.z].enumerated() {
+            let row = n / side, col = n % side
+            guard row > 0, row < side - 1, col > 0, col < side - 1 else { continue }
+            let exact = 2 + 3 * gridPoints[n].x - gridPoints[n].y
+            // Interior nodes whose patch is symmetric enough for the clamp not to bite.
+            worstSPR = max(worstSPR, abs(linearCorners[i][slot] - exact))
+            worstAvg = max(worstAvg, abs(averaged[i][slot] - exact))
+        }
+    }
+    require(worstSPR < 1e-9, "SPR did not reproduce a linear field at interior nodes (error \(worstSPR))")
+    require(linearCorners.allSatisfy { $0.min() >= (linearValues.min() ?? 0) - 1e-12 && $0.max() <= (linearValues.max() ?? 0) + 1e-12 },
+            "SPR overshoots the element range")
+    print("  patch recovery exact for a linear field at interior nodes (error \(worstSPR)); area-weighted error there \(String(format: "%.3g", worstAvg)): ok")
+
     // 3. Colour maps: lightness monotone for the sequential map; diverging is symmetric about 0 in lightness order.
     var previous = -1.0
     for i in 0...100 {
