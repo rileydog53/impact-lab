@@ -229,6 +229,7 @@ struct AssemblyCanvas: View {
     let experiment: AssemblyExperiment
     let field: AssemblyField
     var showMesh: Bool
+    var smooth = false
     var showInitial = false
     var showVelocity = false
     var limit = 1.0
@@ -667,6 +668,22 @@ struct AssemblyCanvas: View {
         let nodes = positions.map(projection.screen)
         let values = experiment.frame.map { field.values($0.bodies[i]) } ?? []
         let color = assemblyColor(i)
+        let displayScale = context.environment.displayScale
+        if smooth, !values.isEmpty,
+           let raster = FieldRaster.render(screen: nodes,
+                                           triangles: body.mesh.elements.map { SIMD3($0.a, $0.b, $0.c) },
+                                           corners: body.scalarField(elementValues: values, at: positions).recoveredCorners(),
+                                           limit: limit, signed: field.signed, scale: displayScale) {
+            context.draw(Image(decorative: raster.image, scale: displayScale), in: raster.rect)
+            if showMesh {
+                var mesh = Path()
+                for triangle in body.mesh.elements {
+                    mesh.move(to: nodes[triangle.a]); mesh.addLine(to: nodes[triangle.b])
+                    mesh.addLine(to: nodes[triangle.c]); mesh.closeSubpath()
+                }
+                context.stroke(mesh, with: .color(assemblyInk.opacity(0.25)), lineWidth: 0.45)
+            }
+        } else {
         var buckets = Array(repeating: Path(), count: 13)
         for (index, triangle) in body.mesh.elements.enumerated() {
             let value = values.isEmpty ? 0 : values[index]
@@ -679,6 +696,7 @@ struct AssemblyCanvas: View {
         for (i, path) in buckets.enumerated() where !path.isEmpty {
             context.fill(path, with: .color(values.isEmpty ? color.opacity(0.20) : field.shade(i - 6)))
             if showMesh { context.stroke(path, with: .color(assemblyInk.opacity(0.17)), lineWidth: 0.45) }
+        }
         }
         if showMesh, experiment.canEdit, preview == nil {
             let thin = experiment.meshQuality[i].thinTriangles
