@@ -171,7 +171,7 @@ struct ReplayMeasurements: View {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "Impact Lab Measurements.csv"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = ExperimentDirectory.run(panel) else { return }
         let fields = signals
         func quoted(_ text: String) -> String { "\"" + text.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         let subject = switch group {

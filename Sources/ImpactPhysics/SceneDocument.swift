@@ -512,8 +512,9 @@ extension AssemblyScene {
         for (i, part) in parts.enumerated() {
             let path = "parts[\(i)] \"\(part.name)\""
             if part.name.isEmpty || part.name.count > 48 { result.append("\(path).name must be 1–48 characters.") }
-            range(part.size.x, part.widthRange, path + ".size[0] (width)", " m")
-            range(part.size.y, AssemblyPart.sizeRange, path + ".size[1] (height)", " m")
+            let mesh = part.refinement ?? resolution
+            range(part.size.x, part.widthRange(resolution: mesh), path + ".size[0] (width)", " m")
+            range(part.size.y, part.sizeRange(resolution: mesh), path + ".size[1] (height)", " m")
             if let conflict = part.supportConflict { result.append("\(path).support: \(conflict)") }
             range(part.center.x, -1...1, path + ".center[0]", " m")
             range(part.center.y, -1...1, path + ".center[1]", " m")

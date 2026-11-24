@@ -850,8 +850,7 @@ struct AssemblyLab: View {
         experiment.pause()
         let dialog = NSOpenPanel()
         dialog.allowedContentTypes = [.json]
-        dialog.directoryURL = experiment.fileURL?.deletingLastPathComponent()
-        guard dialog.runModal() == .OK, let url = dialog.url else { return }
+        guard let url = ExperimentDirectory.run(dialog, fallback: experiment.fileURL) else { return }
         do {
             replacement = Replacement(scene: try AssemblyScene.open(url), title: AssemblyExperiment.fileTitle(url), url: url)
             applyPendingReplacement()
@@ -864,8 +863,7 @@ struct AssemblyLab: View {
         let dialog = NSSavePanel()
         dialog.allowedContentTypes = [.json]
         dialog.nameFieldStringValue = "\(experiment.title) export.json"
-        dialog.directoryURL = experiment.fileURL?.deletingLastPathComponent()
-        guard dialog.runModal() == .OK, let url = dialog.url else { return }
+        guard let url = ExperimentDirectory.run(dialog, fallback: experiment.fileURL) else { return }
         do { try experiment.scene.save(to: url) } catch { experiment.error = error.localizedDescription }
     }
 
@@ -888,8 +886,7 @@ struct AssemblyLab: View {
             let dialog = NSSavePanel()
             dialog.allowedContentTypes = [.json]
             dialog.nameFieldStringValue = "\(experiment.title).impact-assembly.json"
-            dialog.directoryURL = experiment.fileURL?.deletingLastPathComponent()
-            guard dialog.runModal() == .OK, let destination = dialog.url else { return false }
+            guard let destination = ExperimentDirectory.run(dialog, fallback: experiment.fileURL) else { return false }
             url = destination
         }
         do {

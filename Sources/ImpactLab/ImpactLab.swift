@@ -447,7 +447,7 @@ struct LabView: View {
         experiment.pause()
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = ExperimentDirectory.run(panel) else { return }
         do { try experiment.open(url) }
         catch { experiment.fileError = error.localizedDescription }
     }
@@ -457,7 +457,7 @@ struct LabView: View {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = experiment.preset.rawValue + ".impact.json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = ExperimentDirectory.run(panel) else { return }
         do { try experiment.save(to: url) }
         catch { experiment.fileError = error.localizedDescription }
     }

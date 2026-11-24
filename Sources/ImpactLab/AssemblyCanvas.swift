@@ -447,8 +447,10 @@ struct AssemblyCanvas: View {
             case .resize:
                 let delta = rotated(projection.worldDelta(translation), by: -part.angle)
                 let size = part.size + 2 * delta
-                part.size = Point(min(part.widthRange.upperBound, max(part.widthRange.lowerBound, size.x)),
-                                  min(AssemblyPart.sizeRange.upperBound, max(AssemblyPart.sizeRange.lowerBound, size.y)))
+                let mesh = part.refinement ?? experiment.scene.resolution
+                let widths = part.widthRange(resolution: mesh), heights = part.sizeRange(resolution: mesh)
+                part.size = Point(min(widths.upperBound, max(widths.lowerBound, size.x)),
+                                  min(heights.upperBound, max(heights.lowerBound, size.y)))
                 experiment.fitWall(of: &part)
             }
             experiment.previewParts = [part.id: part]
@@ -724,6 +726,13 @@ struct AssemblyCanvas: View {
         if !interior { labelPosition.y += topLabel ? -14 : 14 }
         let label = Text(part.name).font(.caption.weight(.semibold)).foregroundStyle(color)
         context.draw(label, at: labelPosition)
+        if selected {
+            // The selected body also says whether material fracture is on, in the same place as its name.
+            let status = part.fractureStatus
+            let tag = Text(status.tag).font(.caption2.weight(.semibold))
+                .foregroundStyle(status == .on ? assemblyAmber : assemblyInk.opacity(0.75))
+            context.draw(tag, at: CGPoint(x: labelPosition.x, y: labelPosition.y + (topLabel ? -12 : 12)))
+        }
     }
 
     /// Hatching marks a held edge, or the whole outline of a fixed support, in the usual engineering style.
