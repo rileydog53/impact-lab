@@ -113,13 +113,16 @@ enum SceneDocument {
 
     /// Settings people often expect but the solver cannot represent.
     static let unsupported: [String: String] = {
-        let constraint = "fixed or clamped constraints are not supported by the solver; every body is free. Model a support as a separate deformable body, or join bodies with a connection"
+        let constraint = "use support: \"fixed\" (a rigid, immovable bench or fixture) or \"clampLeft\", \"clampRight\", \"clampBottom\", \"clampTop\" (one edge held); pinned points and partial constraints are not supported"
         var map: [String: String] = [:]
-        for key in ["fixed", "anchored", "pinned", "clamped", "constraint", "constraints", "boundaryCondition", "boundaryConditions", "support", "static"] {
+        for key in ["fixed", "anchored", "pinned", "clamped", "constraint", "constraints", "boundaryCondition", "boundaryConditions", "static"] {
             map[key] = constraint
         }
-        for key in ["gravity", "bodyForce", "acceleration", "load", "loads", "force", "pressure"] {
-            map[key] = "applied loads, body forces and gravity are not supported; motion comes from initial velocities, contact and connections"
+        for key in ["bodyForce", "acceleration", "load", "loads", "force", "pressure"] {
+            map[key] = "applied loads and body forces other than gravity are not supported; set the scene's gravity in m/s² (downward), or use initial velocities, contact and connections"
+        }
+        for key in ["restLength", "pretension", "prestress"] {
+            map[key] = "use preload: the starting stretch in metres (positive stretched, negative compressed), springs only"
         }
         for key in ["friction", "frictionCoefficient", "restitution"] {
             map[key] = "contact is frictionless penalty contact; friction and restitution coefficients are not settable"
@@ -248,7 +251,7 @@ enum SceneDocument {
 
         mutating func scene(_ scene: Object) -> Object {
             keys(scene, "scene", allowed: ["$schema", "description", "assemblyVersion", "parts", "connections", "duration", "monitor",
-                                        "relativeTo", "gauges", "meshResolution", "bodyOrder", "groups"])
+                                        "relativeTo", "gauges", "meshResolution", "bodyOrder", "groups", "gravity"])
             var out: Object = [:]
             if let version = scene["assemblyVersion"] {
                 if number(version, "assemblyVersion") != 1 { fail("assemblyVersion", "only version 1 is supported") }
@@ -272,6 +275,10 @@ enum SceneDocument {
             out["parts"] = parts.enumerated().map { index, raw in part(raw, index: index, id: partIDs[index]) }
             out["connections"] = (array(scene["connections"], "connections") ?? []).enumerated().map { connection($1, "connections[\($0)]") }
             out["duration"] = number(scene["duration"], "duration") ?? 0.12
+            if let gravity = scene["gravity"] {
+                if let flag = gravity as? Bool { out["gravity"] = flag ? AssemblyScene.standardGravity : nil }
+                else { out["gravity"] = number(gravity, "gravity") }
+            }
             if let monitor = scene["monitor"] { out["monitor"] = reference(monitor, "monitor") }
             if let relative = scene["relativeTo"] { out["relativeTo"] = reference(relative, "relativeTo") }
             if let gauges = array(scene["gauges"], "gauges") {
@@ -299,7 +306,7 @@ enum SceneDocument {
             guard let part = object(raw, path) else { return [:] }
             if let name = part["name"] as? String { path += " \"\(name)\"" }
             keys(part, path, allowed: ["id", "name", "shape", "center", "size", "wall", "angle", "velocity", "material",
-                                       "plasticity", "fracture", "refinement", "notch", "bondedLayer", "description"])
+                                       "plasticity", "fracture", "refinement", "notch", "bondedLayer", "support", "description"])
             var out: Object = ["id": id]
             if let name = string(part["name"], path + ".name") { out["name"] = name }
             else { fail(path + ".name", "every body needs a name"); out["name"] = "" }
@@ -348,6 +355,12 @@ enum SceneDocument {
                 out["fracture"] = result
             }
             if let refinement = part["refinement"] { out["refinement"] = resolution(refinement, path + ".refinement") }
+            if let support = part["support"] {
+                out["support"] = choice(support, path + ".support", ["fixed": "Fixed support", "fixedsupport": "Fixed support",
+                    "bench": "Fixed support", "ground": "Fixed support", "clampleft": "Clamp left edge", "clampleftedge": "Clamp left edge",
+                    "clampright": "Clamp right edge", "clamprightedge": "Clamp right edge", "clampbottom": "Clamp bottom edge",
+                    "clampbottomedge": "Clamp bottom edge", "clamptop": "Clamp top edge", "clamptopedge": "Clamp top edge"])
+            }
             if let notch = object(part["notch"], path + ".notch") {
                 keys(notch, path + ".notch", allowed: ["centerFraction", "widthFraction", "depthFraction"])
                 out["notch"] = ["centerFraction": number(notch["centerFraction"], path + ".notch.centerFraction") ?? 0,
@@ -435,7 +448,7 @@ enum SceneDocument {
 
         mutating func connection(_ raw: Any, _ path: String) -> Object {
             guard let link = object(raw, path) else { return [:] }
-            keys(link, path, allowed: ["id", "first", "second", "firstAnchor", "secondAnchor", "kind", "stiffness", "criticalExtension", "span"])
+            keys(link, path, allowed: ["id", "first", "second", "firstAnchor", "secondAnchor", "kind", "stiffness", "criticalExtension", "span", "preload"])
             if link["first"] == nil || link["second"] == nil { fail(path, "needs first and second body names") }
             var out: Object = ["id": id(link["id"], path + ".id")]
             out["first"] = reference(link["first"], path + ".first") ?? UUID().uuidString
@@ -446,6 +459,7 @@ enum SceneDocument {
             out["stiffness"] = number(link["stiffness"], path + ".stiffness") ?? 12_000.0
             out["criticalExtension"] = number(link["criticalExtension"], path + ".criticalExtension") ?? 0.006
             out["span"] = number(link["span"], path + ".span") ?? 0
+            if let preload = link["preload"] { out["preload"] = number(preload, path + ".preload") }
             return out
         }
 
@@ -489,19 +503,24 @@ extension AssemblyScene {
             result.append("connections: \(connections.count); at most \(Self.maximumConnections) are supported.")
         }
         range(duration, Self.durationRange, "duration", " s")
+        if let gravity { range(gravity, Self.gravityRange, "gravity", " m/s²") }
+        if !parts.isEmpty && parts.allSatisfy({ $0.support?.isFixture == true }) {
+            result.append("parts: every body is a fixed support, so nothing can move. Leave at least one body free.")
+        }
         let ids = Set(parts.map(\.id))
         if ids.count != parts.count { result.append("parts: two bodies share the same id.") }
         for (i, part) in parts.enumerated() {
             let path = "parts[\(i)] \"\(part.name)\""
             if part.name.isEmpty || part.name.count > 48 { result.append("\(path).name must be 1–48 characters.") }
-            range(part.size.x, 0.025...0.30, path + ".size[0] (width)", " m")
-            range(part.size.y, 0.025...0.30, path + ".size[1] (height)", " m")
+            range(part.size.x, part.widthRange, path + ".size[0] (width)", " m")
+            range(part.size.y, AssemblyPart.sizeRange, path + ".size[1] (height)", " m")
+            if let conflict = part.supportConflict { result.append("\(path).support: \(conflict)") }
             range(part.center.x, -1...1, path + ".center[0]", " m")
             range(part.center.y, -1...1, path + ".center[1]", " m")
             range(part.angle, -360...360, path + ".angle", "°")
             range(part.velocity.x, AssemblyPart.velocityRange, path + ".velocity[0]", " m/s")
             range(part.velocity.y, AssemblyPart.velocityRange, path + ".velocity[1]", " m/s")
-            if part.shape == .enclosure { range(part.wall, 0.005...(0.4 * min(part.size.x, part.size.y)), path + ".wall", " m") }
+            if part.shape == .enclosure { range(part.wall, 0.005...max(0.005, 0.4 * min(part.size.x, part.size.y)), path + ".wall", " m") }
             material(part.material, path + ".material")
             range(part.plasticity.yieldFraction, ImpactPlasticity.yieldRange, path + ".plasticity.yieldFraction")
             range(part.plasticity.hardeningFraction, ImpactPlasticity.hardeningRange, path + ".plasticity.hardeningFraction")
@@ -553,6 +572,12 @@ extension AssemblyScene {
             range(link.stiffness, 500...250_000, path + ".stiffness", " N/m per m")
             range(link.criticalExtension, 0.0005...0.04, path + ".criticalExtension", " m")
             range(link.span, 0...1.9, path + ".span")
+            if let preload = link.preload {
+                range(preload, AssemblyConnection.preloadRange, path + ".preload", " m")
+                if preload != 0 && link.kind != .spring {
+                    result.append("\(path).preload is available for springs only; a breakable link always starts unloaded.")
+                }
+            }
             for (label, anchor) in [("firstAnchor", link.firstAnchor), ("secondAnchor", link.secondAnchor)] {
                 if !(-1...1).contains(anchor.x) || !(-1...1).contains(anchor.y) {
                     result.append("\(path).\(label) must use fractions of the half-size between −1 and 1.")

@@ -1,0 +1,16 @@
+{
+  "description": "Three-point bend: a bar rests on two fixed rollers 260 mm apart under gravity, and a small weight is lowered onto its midspan at 0.2 m/s. Self-weight sag alone is about 1.09 mm by beam theory (checked to within about 1%); the weight adds a central load. Elastic only, no fracture.",
+  "gravity": 9.80665,
+  "duration": 0.3,
+  "parts": [
+    { "name": "Bar", "size": [0.3, 0.025], "center": [0, 0], "refinement": "x4",
+      "material": { "young": 1e7, "density": 1000, "poisson": 0 } },
+    { "name": "Left roller", "shape": "round", "size": [0.025, 0.025], "center": [-0.13, -0.02501], "support": "fixed",
+      "material": { "young": 1e7, "density": 2000, "poisson": 0.2 } },
+    { "name": "Right roller", "shape": "round", "size": [0.025, 0.025], "center": [0.13, -0.02501], "support": "fixed",
+      "material": { "young": 1e7, "density": 2000, "poisson": 0.2 } },
+    { "name": "Weight", "size": [0.03, 0.03], "center": [0, 0.0285], "velocity": [0, -0.2],
+      "material": { "young": 1e7, "density": 3000, "poisson": 0.25 } }
+  ],
+  "monitor": "Bar"
+}

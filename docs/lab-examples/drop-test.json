@@ -1,0 +1,12 @@
+{
+  "description": "Drop test: a soft round body released from rest 40 mm above a fixed bench falls under gravity, lands and rebounds. Check before impact: the fall matches y0 - g t^2 / 2 and kinetic energy at landing equals m·g·h. The rebound height depends on contact penalty and mesh; treat it as illustrative.",
+  "gravity": 9.80665,
+  "duration": 0.2,
+  "parts": [
+    { "name": "Lab bench", "size": [0.3, 0.03], "center": [0, -0.015], "support": "fixed",
+      "material": { "young": 1e7, "density": 2500, "poisson": 0.2 } },
+    { "name": "Rubber ball", "shape": "round", "size": [0.04, 0.04], "center": [0, 0.06],
+      "material": { "young": 2e6, "density": 1100, "poisson": 0.3 } }
+  ],
+  "monitor": "Rubber ball"
+}

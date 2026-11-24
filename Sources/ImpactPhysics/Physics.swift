@@ -244,6 +244,10 @@ struct BodyStep: Sendable {
     var nextStrain: [Double]
     var history: ElementHistory?
     var trialPiola: [ElementPiola] = []
+    /// A rigid, immovable body: no element calculation, positions and velocities never change.
+    var fixture = false
+    /// Nodes held at their reference position (a clamped edge). Empty for a free body.
+    var clamped: [Int] = []
 
     init(_ body: Body, j2: J2Model? = nil, recordsTraction: Bool = false) {
         self.body = body
@@ -260,6 +264,8 @@ struct BodyStep: Sendable {
     }
 
     mutating func drift(_ dt: Double) -> Bool {
+        if fixture { return true }
+        defer { for i in clamped { nextPosition[i] = body.position[i] } }
         for i in body.mass.indices {
             let acceleration = (internalForce[i] + appliedForce[i]) / body.mass[i]
             let position = body.position[i] + dt * (body.velocity[i] + 0.5 * dt * acceleration)
@@ -270,7 +276,9 @@ struct BodyStep: Sendable {
     }
 
     mutating func assemble(timing: inout ElementKernelTiming?) -> ElementEnergy? {
-        Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain,
+        // The fixture never deforms, so its internal force and strain stay zero.
+        if fixture { return ElementEnergy() }
+        return Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain,
                             history: &history, piola: &trialPiola, timing: &timing)
     }
 
@@ -316,13 +324,21 @@ struct BodyStep: Sendable {
     }
 
     mutating func kick(_ dt: Double) -> Bool {
+        if fixture { return true }
         for i in body.mass.indices {
             let force = internalForce[i] + appliedForce[i] + nextInternal[i] + nextApplied[i]
             let velocity = body.velocity[i] + (0.5 * dt / body.mass[i]) * force
             guard velocity.x.isFinite && velocity.y.isFinite else { return false }
             nextVelocity[i] = velocity
         }
+        for i in clamped { nextVelocity[i] = .zero }
         return true
+    }
+
+    /// Force the support exerts on the body (N per metre of depth): it balances every other force on the held nodes.
+    var supportReaction: Point {
+        let held = fixture ? Array(body.mass.indices) : clamped
+        return held.reduce(.zero) { $0 - internalForce[$1] - appliedForce[$1] }
     }
 
     mutating func guideTransversePositions() {

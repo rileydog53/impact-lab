@@ -256,6 +256,21 @@ if let index = CommandLine.arguments.firstIndex(of: "--assembly-scaling") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--run-cost") {
+    try runCostCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--lab-examples") {
+    try labExamplesCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--supports-gravity") {
+    try supportsGravityCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--materials") {
     try materialsCheck()
     exit(EXIT_SUCCESS)

@@ -124,7 +124,9 @@ public struct AssemblyLinkReading: Sendable {
 public struct AssemblyEnergy: Sendable {
     public internal(set) var kinetic, elastic, contact, connection, hardening, plastic, fracture: Double
     public internal(set) var cohesive = 0.0
-    public var total: Double { kinetic + elastic + contact + connection + hardening + plastic + fracture + cohesive }
+    /// Gravitational potential energy relative to the starting positions (J per metre of depth).
+    public internal(set) var gravitational = 0.0
+    public var total: Double { kinetic + elastic + contact + connection + hardening + plastic + fracture + cohesive + gravitational }
 }
 
 public struct FragmentContactReading: Sendable {
@@ -171,6 +173,8 @@ public struct AssemblySimulation: Sendable {
 
     public let scene: AssemblyScene
     public let dt: Double
+    /// What sets `dt`, for the run-cost display. Has no effect on the calculation.
+    public let timestep: TimestepDiagnosis
     public let initialIssue: String?
     public private(set) var time = 0.0
     public private(set) var failure: String?
@@ -199,11 +203,25 @@ public struct AssemblySimulation: Sendable {
     private var preparationLanes: [[Int]] = []
     private var preparationEnergies: [ElementEnergy?] = []
 
+    /// Element-weight on each of the two CPU lanes the run would use. Parallel FEM
+    /// is used only when the lighter lane carries at least `parallelThreshold`.
+    public var laneLoads: (heavier: Int, lighter: Int) {
+        let weights = steps.map { $0.fixture ? 0 : $0.strain.count * ($0.history == nil ? 1 : 2) }
+        var loads = [0, 0]
+        for i in steps.indices.sorted(by: { (weights[$0], -$0) > (weights[$1], -$1) }) {
+            loads[loads[0] <= loads[1] ? 0 : 1] += weights[i]
+        }
+        return (loads.max()!, loads.min()!)
+    }
+    public static let parallelThreshold = 5_000
+    /// Element-weight updated every step: elements, doubled for plastic bodies, fixtures excluded.
+    public var elementWeight: Int { laneLoads.heavier + laneLoads.lighter }
+
     package mutating func configureParallelFEM(_ enabled: Bool) {
         preparationLanes = []
         preparationEnergies = []
         guard enabled, ProcessInfo.processInfo.activeProcessorCount > 1, steps.count > 1 else { return }
-        let weights = steps.map { $0.strain.count * ($0.history == nil ? 1 : 2) }
+        let weights = steps.map { $0.fixture ? 0 : $0.strain.count * ($0.history == nil ? 1 : 2) }
         var lanes: [[Int]] = [[], []]
         var loads = [0, 0]
         for i in steps.indices.sorted(by: { (weights[$0], -$0) > (weights[$1], -$1) }) {
@@ -213,7 +231,7 @@ public struct AssemblySimulation: Sendable {
         }
         // Dispatch has a cost at every timestep. Require work on both lanes
         // in the range tested by the fine metal and multi-body benchmarks.
-        guard loads.min()! >= 5_000 else { return }
+        guard loads.min()! >= Self.parallelThreshold else { return }
         preparationLanes = lanes
         preparationEnergies = Array(repeating: nil, count: steps.count)
     }
@@ -246,6 +264,10 @@ public struct AssemblySimulation: Sendable {
     private var normalLoads: [SIMD2<Int>: Double] = [:]
     private var energy: AssemblyEnergy
     public let initialEnergy: Double
+    /// Downward acceleration (m/s²) applied to every free body, or 0.
+    public let gravity: Double
+    /// Σ m·y of each body at the start, the zero of gravitational potential.
+    private let initialHeightMoments: [Double]
 
     var recordedNormalLoads: [SIMD2<Int>: Double] { normalLoads }
     var recordedContactPositions: [SIMD2<Int>: ContactLocation] = [:]
@@ -353,9 +375,16 @@ public struct AssemblySimulation: Sendable {
         let surfaces = bodies.map(ContactSurface.init)
         self.surfaces = surfaces
         steps = zip(bodies, scene.parts).map { body, part in
-            BodyStep(body, j2: part.plasticity.response == .elastoplastic ? part.plasticity.model(for: body.material) : nil,
-                     recordsTraction: part.fracture != nil)
+            var step = BodyStep(body, j2: part.plasticity.response == .elastoplastic ? part.plasticity.model(for: body.material) : nil,
+                                recordsTraction: part.fracture != nil)
+            if let support = part.support {
+                step.fixture = support.isFixture
+                if !support.isFixture { step.clamped = part.clampedNodes(body, support) }
+            }
+            return step
         }
+        gravity = scene.gravity ?? 0
+        initialHeightMoments = bodies.map { body in body.mass.indices.reduce(0) { $0 + body.mass[$1] * body.position[$1].y } }
 
         var pairs: [Pair] = []
         var allowance = Array(repeating: 0.0, count: bodies.count)
@@ -425,33 +454,79 @@ public struct AssemblySimulation: Sendable {
                 let end = right.point(in: bodies[b].position, mesh: bodies[b].mesh)
                 let length = simd_distance(start, end)
                 if length < 0.0005 && issue == nil { issue = .coincidentAnchors(index) }
+                let preload = connection.preload ?? 0
+                if length - preload < 0.0005 && issue == nil { issue = .preloadTooLarge(index) }
                 let stiffness = connection.stiffness / Double(count)
                 let law = connection.kind == .cohesive ? CohesiveLaw(
                     strength: stiffness * 0.25 * connection.criticalExtension, finalOpening: connection.criticalExtension) : nil
                 left.budget(2 * stiffness, mesh: bodies[a].mesh, into: &springs[a])
                 right.budget(2 * stiffness, mesh: bodies[b].mesh, into: &springs[b])
                 links.append(AssemblyLink(connection: index, firstBody: a, secondBody: b, first: left, second: right,
-                                          restLength: length, stiffness: stiffness, law: law))
+                                          restLength: preload == 0 ? length : length - preload, stiffness: stiffness, law: law))
                 linkReadings.append(AssemblyLinkReading(connection: index, start: start, end: end,
-                                                         extensionLength: 0, force: 0, damage: 0,
-                                                         storedEnergy: 0, fractureDissipation: 0))
+                                                         extensionLength: preload, force: stiffness * preload, damage: 0,
+                                                         storedEnergy: 0.5 * stiffness * preload * preload, fractureDissipation: 0))
             }
         }
         self.links = links
         maxima = Array(repeating: 0, count: links.count)
         initialIssue = issue?.localizedDescription
-        let frequency = bodies.indices.map { i in
+        let squared = bodies.indices.map { i in
+            // A fixture is never integrated, so it places no limit on the timestep.
+            if scene.parts[i].support?.isFixture == true { return 0.0 }
             if let fracture = fractures[i] {
                 let ownContact = 8 * (surfaces[i].stiffness.max() ?? 0)
                 return fracture.squaredFrequencyBound(body: bodies[i], contactAllowance: allowance[i] + ownContact,
                                                       springs: springs[i])
             }
             return Simulation.squaredFrequency(of: bodies[i], contact: surfaces[i], allowance: allowance[i], springs: springs[i])
-        }.max() ?? 1e8
+        }
+        let frequency = squared.max() ?? 1e8
         dt = min(stepLimit, stepScale * 0.8 / frequency.squareRoot())
-        initialEnergy = bodies.reduce(0) { $0 + Self.kinetic($1) }
-        energy = AssemblyEnergy(kinetic: initialEnergy, elastic: 0, contact: 0, connection: 0, hardening: 0, plastic: 0, fracture: 0)
+        // Reporting only: which stiffness sets the step. The stages repeat the bound
+        // with terms added one at a time; dt itself comes from the line above.
+        timestep = TimestepDiagnosis(scene: scene, bodies: bodies, squared: squared, dt: dt, stepScale: stepScale,
+            stages: bodies.indices.map { i in
+                guard scene.parts[i].support?.isFixture != true else { return (0, 0, 0) }
+                let material = Simulation.squaredFrequency(of: bodies[i], contact: nil, allowance: 0, springs: [])
+                let ownContact = fractures[i] == nil ? 0 : 8 * (surfaces[i].stiffness.max() ?? 0)
+                let contact = Simulation.squaredFrequency(of: bodies[i], contact: surfaces[i], allowance: allowance[i] + ownContact, springs: [])
+                let linked = Simulation.squaredFrequency(of: bodies[i], contact: surfaces[i], allowance: allowance[i] + ownContact, springs: springs[i])
+                return (material, contact, linked)
+            })
+        let kinetic = bodies.reduce(0) { $0 + Self.kinetic($1) }
+        let stored = linkReadings.reduce(0) { $0 + $1.storedEnergy }
+        initialEnergy = kinetic + stored
+        energy = AssemblyEnergy(kinetic: kinetic, elastic: 0, contact: 0, connection: stored, hardening: 0, plastic: 0, fracture: 0)
+        // Start the velocity-Verlet sequence with the loads already present at t = 0
+        // (gravity and spring preload), so the first half kick is not missing them.
+        if gravity > 0 || stored > 0 {
+            for i in steps.indices where !steps[i].fixture {
+                steps[i].appliedForce = gravityForces(i)
+            }
+            for link in links {
+                let a = link.firstBody, b = link.secondBody
+                let start = link.first.point(in: bodies[a].position, mesh: bodies[a].mesh)
+                let end = link.second.point(in: bodies[b].position, mesh: bodies[b].mesh)
+                let length = simd_distance(start, end)
+                let sample = link.sample(extension: length - link.restLength, previous: 0)
+                guard sample.force != 0, length > 1e-10 else { continue }
+                let force = sample.force / length * (end - start)
+                link.first.apply(force, mesh: bodies[a].mesh, to: &steps[a].appliedForce)
+                link.second.apply(-force, mesh: bodies[b].mesh, to: &steps[b].appliedForce)
+            }
+        }
     }
+
+    private func gravityForces(_ i: Int) -> [Point] {
+        let mass = steps[i].body.mass
+        guard gravity > 0, !steps[i].fixture else { return Array(repeating: .zero, count: mass.count) }
+        return mass.map { Point(0, -$0 * gravity) }
+    }
+
+    /// Force each support exerts on its body, N per metre of depth; zero for free bodies.
+    public func supportReaction(_ index: Int) -> Point { steps[index].supportReaction }
+    public func isSupported(_ index: Int) -> Bool { steps[index].fixture || !steps[index].clamped.isEmpty }
 
     private static func kinetic(_ body: Body) -> Double {
         body.mass.indices.reduce(0) { $0 + 0.5 * body.mass[$1] * simd_length_squared(body.velocity[$1]) }
@@ -815,6 +890,18 @@ public struct AssemblySimulation: Sendable {
             if load > 0 {
                 active.append(SIMD2(0, 1))
                 nextNormal[SIMD2(0, 1)] = load
+            }
+        }
+
+        if gravity > 0 {
+            for i in steps.indices where !steps[i].fixture {
+                let mass = steps[i].body.mass
+                var moment = 0.0
+                for j in mass.indices {
+                    steps[i].nextApplied[j].y -= mass[j] * gravity
+                    moment += mass[j] * steps[i].nextPosition[j].y
+                }
+                trial.gravitational += gravity * (moment - initialHeightMoments[i])
             }
         }
 

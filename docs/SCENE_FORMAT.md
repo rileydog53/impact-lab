@@ -33,7 +33,8 @@ SI throughout: **metres, seconds, m/s, pascals (Pa), kg/m³**. Angles are in **d
 | `parts` | The bodies (below) | up to 8 |
 | `connections` | Springs and breakable links between bodies | up to 12 |
 | `gauges` | Measurement points inside bodies | up to 8 |
-| `duration` | Simulated time, s | 0.12; 0.0001–0.25 |
+| `duration` | Simulated time, s | 0.12; 0.0001–2 |
+| `gravity` | Downward acceleration (−Y) on every free body, m/s². `true` means 9.80665 | off; 0–50 |
 | `meshResolution` | Mesh for bodies without their own `refinement`: `standard` (≈9 mm), `fine` (4.5), `extraFine` (3), `x4`–`x7` (2.25–1.29 mm), or 1–7 | `standard` |
 | `monitor` | Body shown in the motion plot | first body |
 | `relativeTo` | Plot motion relative to this body | none |
@@ -61,6 +62,7 @@ The timestep is not a setting. The solver chooses the largest stable step from t
 | `fracture` | Illustrative cracking: `{ "strengthFraction": 0.03, "energy": 7 }` (energy in J/m²; optional `meshPattern` `aligned` or `staggered`) | off |
 | `fracture` (real units) | `{ "strength": 3.1e8, "energy": 10877 }`: strength in pascals, energy in J/m² up to 1000000, both required. Allowed on library metal profiles. Optional `energySource` `{status, citation, url, caution}` records where an estimated energy came from. Files that use `strengthFraction` behave exactly as before. | off |
 | `notch` | V-notch on a block's local bottom edge: `{ "depthFraction": 0.2, "widthFraction": 0.2, "centerFraction": 0 }` | none |
+| `support` | `fixed` (rigid bench, floor, roller or fixture: never moves or deforms, ignores gravity, its material sets only contact stiffness) or `clampLeft`, `clampRight`, `clampBottom`, `clampTop` (that local edge is held, the rest deforms). Supported bodies start at rest and cannot use fracture; fixed supports are elastic and may be up to 1.0 m wide. | free |
 | `bondedLayer` | Permanently bonded second (and `third`) material along the block: `{ "interfaceFraction": 0.5, "material": …, "third": { "interfaceFraction": 0.75, "material": … } }` | none |
 
 Bodies must start at least slightly apart. If two bodies overlap or touch, the scene still opens so you can fix it in the workshop, but **Calculate** explains the problem and stays disabled until you do.
@@ -100,6 +102,7 @@ Custom profiles you save in the app's Material Library live in the app's own lib
 ```
 
 - **Connections.** Anchors are in fractions of each body's half-size. The defaults are the right edge of `first` (`[1, 0]`) and the left edge of `second` (`[-1, 0]`). `stiffness` is in N/m² (shown as kN/m² in the app), from 500 to 250,000. A `breakable` link fails at `criticalExtension` (0.0005–0.04 m). `span` (0–1.9) spreads the link along the edge.
+- **Preload.** `"preload": 0.004` starts a spring stretched by 4 mm (it pulls the bodies together from the first instant); a negative value starts it compressed. The rest length becomes the starting distance minus the preload and must stay above 0.5 mm. Springs only; breakable links always start unloaded. Range −0.05 to 0.05 m.
 - **Gauges.** A gauge location is in the body's own unrotated frame: metres from its centre, or half-size fractions with `usesBodyFractions: true`. It must lie inside material.
 
 Bodies are referred to by `name` (or `id`) everywhere: in `connections`, `gauges`, `monitor`, `relativeTo`, `groups` and `bodyOrder`.
@@ -110,8 +113,9 @@ Impact Lab rejects these with an explanation instead of silently ignoring them:
 
 | If you write… | Why it is rejected |
 |---|---|
-| `fixed`, `pinned`, `clamped`, `constraints`, `support` … | No fixed or clamped constraints exist. Every body is free. Model a support as a separate deformable body (heavier or larger to hold still), or join bodies with a connection. |
-| `gravity`, `force`, `load`, `pressure` … | No applied loads or body forces. Motion comes from initial velocities, contact and connections. |
+| `fixed`, `pinned`, `clamped`, `constraints` … | Use `support` instead (see Body settings). Pinned points and partial constraints are not available. |
+| `force`, `load`, `pressure`, `bodyForce` … | No applied loads or body forces other than `gravity`. Motion comes from initial velocities, gravity, contact and connections. |
+| `restLength`, `pretension` | Use a spring's `preload`. |
 | `friction`, `restitution` | Contact is frictionless penalty contact. Rebound is computed, not prescribed. |
 | `angularVelocity`, `spin` | Bodies start with one uniform velocity, without rotation. |
 | `temperature`, `strainRate` | No thermal or rate-dependent material behavior. |
@@ -127,6 +131,8 @@ Values out of range are reported with their location, value and allowed range. F
 **Save** and **Export** write the complete form. That form lists every setting, gives bodies UUID ids, and expands profiles into their constants, provenance and hardening table. It opens back unchanged, bit for bit, and is still ordinary JSON, so scripts can read and modify it. Hand-written short forms and saved complete forms can be mixed freely.
 
 ## Examples
+
+Lab examples with supports, gravity and preload are in [`lab-examples/`](lab-examples/): `block-on-bench.json`, `drop-test.json`, `cantilever-sag.json`, `three-point-bend.json` and `hanging-springs.json`. Each file's `description` says what to check. `ImpactCheck --lab-examples` runs them all, and `ImpactCheck --supports-gravity` compares gravity, supports and preload against closed-form results.
 
 | File | What it shows | Physical behavior to look for |
 |---|---|---|
