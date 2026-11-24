@@ -34,9 +34,10 @@ public struct BodyOutline: Codable, Equatable, Sendable {
     /// millions of triangles; above 1 m it is coarser than any body the editor makes.
     public static let meshSizeRange = 0.00005...1.0
 
-    /// Edge length that matches the cost of the legacy structured mesh at the same resolution. The legacy
-    /// ≈9 mm cell is a square cut into two right triangles whose long edge is ≈12.7 mm; a generated mesh
-    /// with 12 mm edges has a similar triangle count and time step (GENERAL_GEOMETRY.md section 9).
+    /// Default edge length at the standard mesh. The legacy ≈9 mm cell is a square cut into two right
+    /// triangles whose long edge is ≈12.7 mm, so 12 mm keeps edges no longer than the legacy mesh. Measured on
+    /// the cantilever (GENERAL_GEOMETRY.md section 13) it costs about 1.8× the time steps of the structured
+    /// block and is somewhat more accurate; the run-cost estimate reports the difference.
     public static let standardEdge = 0.012
 
     public func edgeLength(resolution: AssemblyScene.Resolution) -> Double {

@@ -1,6 +1,6 @@
 # General geometry editing: design and mesh prototype
 
-Status, 2026-11-24: design proposal plus a bounded prototype on branch `claude/project-thread-184oy5`. Nothing here is approved, and nothing is wired into the app or the production solver. The architecture reassessment (Google Doc section 26) is separate; this design is meant to stay useful whichever numerical methods are chosen there.
+Status, 2026-11-24: design proposal plus a bounded prototype on branch `claude/project-thread-184oy5`, then **approved by Joseph on 2026-11-24** (all five decisions in section 11, Google Doc section 28) and implemented in the app on branch `claude/project-thread-y1sktx` (sections 13 and 14). The solver's physics and time stepping are unchanged. The architecture reassessment (Google Doc section 26) is separate; this design is meant to stay useful whichever numerical methods are chosen there.
 
 ## 1. Problem
 
@@ -113,15 +113,19 @@ Example meshes (mesher output, not simulation results): `docs/geometry/*.svg`.
 
 Built here: the Ruppert/Shewchuk mesher, exact grid predicates, quality metrics, advisory notes, outline validation and the MeshCheck gates. Reason for building rather than adopting the mesher: the only permissive option with quality refinement is Spade (Rust), and the method is small and well documented, so a dependency-free Swift version (about 1,100 lines for the whole geometry module) keeps the build unchanged and the licence clean, behind an interface (`MeshRequest` → `TriangleMesh`) that Spade, CDT or Triangle could replace later. Its weakness is that it has not yet been cross-checked against an independent mesher.
 
-## 11. Decisions for Joseph (none taken)
+## 11. Decisions (approved by Joseph, 2026-11-24, Google Doc section 28)
+
+All five were approved as written:
 
 1. Adopt the outline model (section 2) as the direction for geometry editing.
 2. Replace the 25–300 mm size range and the 8-body limit with cost estimates and advisory notes.
 3. Allow installing Triangle or Gmsh as separate reference programs for cross-checks (part of D8 in section 26.11).
 4. Adopt Clipper2 (BSL-1.0) for Cut and Join.
-5. Order of work relative to section 25.5 (fracture verification) and the architecture decisions.
+5. Order of work relative to section 25.5 (fracture verification) and the architecture decisions. Approved order: geometry editing first, then in-app fracture checks.
 
 ## 12. Not done, and limits of the prototype
+
+(Prototype list, kept for the record; the first item is now done, see 13.)
 
 - No app or solver integration, no UI, no scene-file field (all need approval).
 - Straight edges only: no arcs, no size grading or local refinement, no region materials, no named edge sets.
@@ -129,3 +133,32 @@ Built here: the Ruppert/Shewchuk mesher, exact grid predicates, quality metrics,
 - Fracture on generated meshes untested.
 - The cost ratio in section 9 comes from one bar; defaults need a wider measurement.
 - Timings are from one run on the M4 Air while other work was running.
+
+## 13. Implementation in the app (2026-11-24)
+
+What a person can do now (Workshop, **Add Body** and **Arrange** menus, inspector, canvas):
+
+- **Insert outline primitives**: plate, disc, L-bracket, plate with hole, wedge, hexagon. Each is an ordinary editable outline.
+- **Draw Outline…**: click points on the canvas (grid snap applies); Return or Finish closes it, Delete removes the last point, Esc cancels. A self-crossing or degenerate outline is refused with the reason shown in the banner.
+- **Edit Points on Canvas**: drag a point, drag an edge's midpoint circle to insert a point, option-click to delete one; an invalid change is previewed in red and refused. The inspector's points table takes exact values in mm.
+- **Cut** and **Join** (select two bodies; the primary selection is the one that is kept): Cut removes the second body's material from the first, Join merges two touching or overlapping bodies. A cut that splits a body makes one body per piece. Implemented with Clipper2 2.0.1 (Angus Johnson, Boost Software License 1.0, vendored unmodified in `Sources/CClipper2/vendor` with its licence and a C bridge; attribution in `Sources/CClipper2/README.md` and in Workshop Limits).
+- **Convert to Outline** for blocks (including V-notches), enclosures and round bodies (48-gon). Bonded-layer blocks are refused with a reason, because region materials are not in the outline model yet.
+- **Mesh size** per outline body (default 12 mm ÷ n on the ×n mesh), with the generated triangle count, minimum angle and notes in the inspector.
+- **Advice, not limits** (decision 2): bodies 0.5 mm to 10 m and up to 64 bodies are accepted. Advisory notes explain small bodies (below 25 mm ÷ n), large ones (above 300 mm), more than 8 bodies (contact pairs), thin sections with fewer than about 8 triangle rows, re-entrant and sharp corners. None blocks a run. The remaining bounds are input sanity and memory (about 750,000 triangles per body), listed in Workshop Limits with their causes.
+- Scene files: new `outline` field and `shape: "outline"` (docs/SCENE_FORMAT.md, schema). Files without `outline` are read exactly as before.
+
+How it plugs in: `AssemblyPart.makeBody` asks the ImpactGeometry mesher for an outline body's triangles (`BodyOutline.swift`, cached, deterministic) and hands the solver an ordinary `Mesh`. Blocks, enclosures and round bodies keep their structured meshes, so every earlier scene replays bit for bit. Nothing in the force calculation, contact or time stepping changed.
+
+Not done yet: fracture on outline bodies (switched off with an explanation until crack paths on generated meshes are verified, which is the next approved step), arcs and corner rounding, region materials and named edge sets, local mesh grading, a cross-check against Triangle or Gmsh as separate programs (decision 3 allows it; neither is installed yet).
+
+Cost finding (measured, cantilever below): at the default edge length an outline body took 1.8× the time steps and 2.6× the wall time of the structured block of the same size, because its smallest triangles are smaller. The run-cost estimate tracks this (27 s estimated vs 37 s measured, the same 0.74 ratio as for the block). The default is therefore not cost-matched, contrary to the hypothesis in section 9; a coarser default would be cheaper but less accurate. Left as is for Joseph to judge in use.
+
+## 14. Verification of the implementation (numerical verification, not physical validation)
+
+| Check | Result |
+|---|---|
+| Outline cantilever (the `cantilever-sag` lab example, 150 × 25 mm, E 10 MPa, self-weight, clamped) built as an outline body, `tests/regression/run.py` | Static tip sag vs Timoshenko 1.2180 mm: structured block 1.1920 mm (−2.1%), outline 3 mm edge 1.2020 mm (−1.3%), outline 2.25 mm 1.2092 mm (−0.7%). First period vs Timoshenko-corrected 56.48 ms: block 56.25 ms (−0.4%), outline 56.46 ms (−0.04%), 56.62 ms (+0.25%). The outline results converge toward the reference and agree with the block within 1.5%. Momentum balance 1e-14. Tolerances 5% (references) and 3% (block agreement), set before the runs. |
+| Mesher gates, `swift run -c release MeshCheck` | Pass: quality on 11 shapes, invalid outlines explained, determinism, patch tests, bar-on-wall contact 31.63 ms vs 31.62 ms 1D theory. |
+| App model, `ImpactLab --geometry-smoke REPORT` | 21 checks pass: primitives mesh and run, drawing and bow-tie refusal, point move keeps other points fixed in the world, exact cut area (to 2e-9 m²), notch, join, separate-body refusal, split into pieces, convert and undo, mesh size refinement, oversize mesh refused, advisories, 10 bodies accepted. |
+| Editor rules, `ImpactCheck --workshop-improvements` | Rewritten for decision 2: the scenes that used to be rejected (24 mm, 12 mm on fine, 3 mm, 0.5 mm, 310 mm, 9 bodies) are now accepted, run with finite energy and carry an advisory note; 0.4 mm, 10.5 m and 65 bodies are refused with an explanation; the enclosure's own 12.5 mm rule and its crash regression are unchanged. |
+| Screens | Window-only screenshots of drawing, point editing, the cut plate's mesh, the inspector advisories and a 50 ms run (stress concentrates at the hole and notch) were inspected. |
