@@ -228,10 +228,12 @@ struct AssemblyStudyView: View {
                 ForEach(study.cases, id: \.label) { item in
                     let pair = item.contacts[index]
                     let onset = pair.firstTime.map { String(format: "%.3f ms", $0 * 1000) } ?? "—"
-                    Text("\(item.label) · First contact \(onset) · Peak \(pair.peak, specifier: "%.4g") N/m · Impulse \(pair.impulse, specifier: "%.4g") N·s/m")
+                    Text("\(item.label) · First contact \(onset) · Impulse \(pair.impulse, specifier: "%.4g") N·s/m · \(pulseSummary(pair.pulses))")
                         .font(.caption.monospacedDigit())
+                    Text("\(item.label) · Raw step peak \(pair.peak, specifier: "%.4g") N/m (numerical diagnostic, depends on penalty and mesh) · Overlap \(item.peakPenetration * 100, specifier: "%.3f")% of edge, \(item.peakPenetrationDepth * 1e6, specifier: "%.3g") µm")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
-                Text("The load sums positive normal contributions. Its integral is a scalar contact measure.")
+                Text(pulseNote(study, index))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let index = signal.fractureIndex {
@@ -287,8 +289,33 @@ struct AssemblyStudyView: View {
         dialog.allowedContentTypes = [.commaSeparatedText]
         dialog.nameFieldStringValue = "Impact Lab Study.csv"
         guard dialog.runModal() == .OK, let url = dialog.url else { return }
-        do { try study.exportCSV(to: url) }
-        catch { self.error = error.localizedDescription }
+        do {
+            try study.exportCSV(to: url)
+            let pulses = url.deletingPathExtension().lastPathComponent + " pulses.csv"
+            try study.exportPulseCSV(to: url.deletingLastPathComponent().appendingPathComponent(pulses))
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func pulseSummary(_ report: ContactPulseReport?) -> String {
+        guard let report, let first = report.pulses.first else { return "No contact pulses" }
+        let window = report.settings.windows.count > 1 ? report.settings.windows[1] : report.settings.windows.first ?? 0
+        let windowed = first.windowPeaks.count > 1 ? first.windowPeaks[1] : first.windowPeaks.first ?? 0
+        return String(format: "%d pulse%@ · first pulse %.4g N·s/m over %.3g ms, mean %.4g N/m, %@ average peak %.4g N/m",
+                      report.pulses.count, report.pulses.count == 1 ? "" : "s", first.impulse, first.duration * 1000,
+                      first.meanForce, timeText(window), windowed)
+    }
+
+    private func pulseNote(_ study: AssemblyStudy, _ index: Int) -> String {
+        let s = study.pulseSettings[index]
+        return "The load sums positive normal contributions; its integral is the scalar contact impulse. "
+            + "Pulses: loaded spans closer than \(timeText(s.mergeGap)) are merged, and touches under "
+            + String(format: "%.0f%%", s.minorFraction * 100) + " of the largest pulse are counted as minor. "
+            + "Averaging windows \(s.windows.map(timeText).joined(separator: ", ")) are common to every case, "
+            + "chosen from an element wave-transit time of \(timeText(study.transitTimes[index])) (an empirical guideline)."
+    }
+
+    private func timeText(_ seconds: Double) -> String {
+        seconds < 1e-3 ? String(format: "%.3g µs", seconds * 1e6) : String(format: "%.3g ms", seconds * 1e3)
     }
 }
 

@@ -662,7 +662,8 @@ struct AssemblyLab: View {
                     metric("Fracture", e.fracture, "J/m")
                     metric("Stored cohesive", e.cohesive, "J/m")
                     metric("Max link load", maxForce, "N/m")
-                    metric("Peak overlap", (frame?.peakRelativePenetration ?? 0) * 100, "%")
+                    metric("Peak overlap", overlapText(relative: frame?.peakRelativePenetration ?? 0,
+                                                       depth: frame?.peakPenetrationDepth ?? 0))
                 }
                 GridRow {
                     metric("Momentum X", (frame?.momentum ?? s.momentum).x, "N·s/m")
@@ -695,6 +696,12 @@ struct AssemblyLab: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Overlap as a share of the local edge and as an absolute depth.
+    private func overlapText(relative: Double, depth: Double) -> String {
+        let absolute = depth < 1e-3 ? String(format: "%.3g µm", depth * 1e6) : String(format: "%.3g mm", depth * 1e3)
+        return String(format: "%.3f%% · ", relative * 100) + absolute
     }
 
     private func metric(_ name: String, _ value: Double, _ unit: String) -> some View {
