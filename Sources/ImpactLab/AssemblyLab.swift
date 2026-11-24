@@ -7,6 +7,7 @@ struct AssemblyLab: View {
     @State private var experiment = AssemblyExperiment()
     @State private var field = AssemblyField.strain
     @State private var showMesh = false
+    @State private var smoothFields = true
     @State private var showInitial = false
     @State private var showVelocity = false
     @State private var range = AssemblyFieldRange.standard
@@ -44,7 +45,7 @@ struct AssemblyLab: View {
             header
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 10) {
-                    AssemblyCanvas(experiment: experiment, field: field, showMesh: showMesh,
+                    AssemblyCanvas(experiment: experiment, field: field, showMesh: showMesh, smooth: smoothFields,
                                    showInitial: showInitial, showVelocity: showVelocity, limit: fieldLimit)
                         .frame(minHeight: experiment.frame == nil ? 230 : 170, maxHeight: .infinity)
                     indicators
@@ -533,6 +534,8 @@ struct AssemblyLab: View {
                             .help("Arrows indicate center-of-mass velocity direction. Length uses a compressed display scale.")
                     }.fixedSize()
                 }
+                Toggle("Smooth", isOn: $smoothFields).toggleStyle(.checkbox)
+                    .help("On: interpolated display of the calculated field (area-weighted averaging of per-element values). Off: raw per-element colors. The calculation is identical either way.")
                 Toggle("Show mesh", isOn: $showMesh).toggleStyle(.checkbox)
                     .help("Draw the actual simulation mesh. Amber outlines indicate thin reference triangles.")
                 if experiment.canEdit {
@@ -586,8 +589,9 @@ struct AssemblyLab: View {
 
     @ViewBuilder private func playbackIndicator(_ frame: AssemblyReplayFrame) -> some View {
         HStack(spacing: 9) {
-            AssemblyFieldLegend(field: field, limit: fieldLimit)
-            Text(field.provenance).foregroundStyle(.secondary)
+            if smoothFields { SmoothFieldLegend(field: field, limit: fieldLimit) }
+            else { AssemblyFieldLegend(field: field, limit: fieldLimit) }
+            Text(field.provenance + (smoothFields ? ", interpolated display" : "")).foregroundStyle(.secondary)
             Button("Field definition", systemImage: "info.circle") { definition = true }
                 .labelStyle(.iconOnly).help(field.definition)
                 .popover(isPresented: $definition) {
