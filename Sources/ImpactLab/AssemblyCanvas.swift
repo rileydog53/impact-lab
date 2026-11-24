@@ -222,6 +222,8 @@ struct AssemblyCanvas: View {
         case body(AssemblyPart, Handle)
         case move([AssemblyPart], anchor: AssemblyPart)
         case placement
+        /// Dragging one end of the selected connection across its body.
+        case linkAnchor(AssemblyConnection, second: Bool)
     }
 
     let experiment: AssemblyExperiment
@@ -233,6 +235,8 @@ struct AssemblyCanvas: View {
     @State private var camera = AssemblyCamera()
     @State private var drag: Drag?
     @State private var dragStart = CGPoint.zero
+    /// The connection as it would be after the anchor drag in progress.
+    @State private var anchorPreview: AssemblyConnection?
 
     var body: some View {
         GeometryReader { geometry in
@@ -275,6 +279,9 @@ struct AssemblyCanvas: View {
                 }
             }
             drawConnections(context, projection: projection, preview: preview)
+            if experiment.canEdit, let link = anchorPreview ?? selectedConnection {
+                drawAnchorHandles(link, in: context, projection: projection)
+            }
             drawGauges(context, projection: projection, preview: preview)
             if experiment.canEdit {
                 for part in experiment.scene.parts where part.velocity != .zero {
@@ -329,7 +336,7 @@ struct AssemblyCanvas: View {
         }
         .accessibilityLabel("Assembly workspace")
         .accessibilityHint(experiment.frame == nil
-            ? "Scroll or pinch to zoom. Drag the background to pan. Drag a body to move it. Shift-click adds to the selection."
+            ? "Scroll or pinch to zoom. Drag the background to pan. Drag a body to move it. Shift-click adds to the selection. Select a connection, then drag its white end circles to move its anchors."
             : "Scroll or pinch to zoom. Drag to pan. Click a triangle to inspect its recorded field value.")
         .overlay {
             AssemblyCanvasInput { event, location in
@@ -394,6 +401,14 @@ struct AssemblyCanvas: View {
         let world = projection.world(location)
         if experiment.placingGauge || experiment.linkPlacement != nil {
             drag = .placement
+        } else if experiment.canEdit, let link = selectedConnection,
+                  let end = [false, true].first(where: { second in
+                      guard let point = anchorPoint(link, second: second) else { return false }
+                      let screen = projection.screen(point)
+                      return hypot(screen.x - location.x, screen.y - location.y) <= 10
+                  }) {
+            drag = .linkAnchor(link, second: end)
+            anchorPreview = link
         } else if additive, let id = part(at: world) {
             experiment.select(id, adding: true)
         } else if experiment.canEdit, experiment.selectedParts.count == 1,
@@ -418,6 +433,8 @@ struct AssemblyCanvas: View {
             camera.center = start.center - projection.worldDelta(translation)
         case .move(let originals, let anchor) where experiment.canEdit:
             experiment.previewMove(originals, anchor: anchor, delta: projection.worldDelta(translation))
+        case .linkAnchor(let original, let second) where experiment.canEdit:
+            anchorPreview = moved(original, second: second, to: projection.world(location))
         case .body(let original, let handle) where experiment.canEdit:
             var part = original
             switch handle {
@@ -430,7 +447,8 @@ struct AssemblyCanvas: View {
             case .resize:
                 let delta = rotated(projection.worldDelta(translation), by: -part.angle)
                 let size = part.size + 2 * delta
-                part.size = Point(min(0.30, max(0.025, size.x)), min(0.30, max(0.025, size.y)))
+                part.size = Point(min(part.widthRange.upperBound, max(part.widthRange.lowerBound, size.x)),
+                                  min(AssemblyPart.sizeRange.upperBound, max(AssemblyPart.sizeRange.lowerBound, size.y)))
                 experiment.fitWall(of: &part)
             }
             experiment.previewParts = [part.id: part]
@@ -456,6 +474,12 @@ struct AssemblyCanvas: View {
             } else {
                 experiment.select(anchor.id)
             }
+        case .linkAnchor(let original, let second) where distance >= 2 && experiment.canEdit:
+            let next = moved(original, second: second, to: projection.world(location))
+            experiment.updateConnection(original.id, action: "Move Link Anchor") {
+                $0.firstAnchor = next.firstAnchor
+                $0.secondAnchor = next.secondAnchor
+            }
         case .body(_, let handle) where distance >= 2 && experiment.canEdit:
             updateDrag(at: location, projection: projection)
             experiment.commitPreview(handle == .rotate ? "Rotate Body" : "Resize Body")
@@ -470,7 +494,51 @@ struct AssemblyCanvas: View {
 
     private func cancelDrag() {
         drag = nil
+        anchorPreview = nil
         experiment.previewParts.removeAll()
+    }
+
+    private var selectedConnection: AssemblyConnection? {
+        experiment.scene.connections.first { $0.id == experiment.selectedConnection }
+    }
+
+    /// World position of a connection end, from its local fractions of the body half-size.
+    private func anchorPoint(_ link: AssemblyConnection, second: Bool) -> Point? {
+        guard let part = experiment.scene.parts.first(where: { $0.id == (second ? link.second : link.first) }) else { return nil }
+        let fractions = second ? link.secondAnchor : link.firstAnchor
+        return part.center + rotated(fractions * part.size / 2, by: part.angle)
+    }
+
+    /// The connection with one end moved to a world point, kept on its own body's local frame
+    /// and within the same limits the numeric fields enforce (±100% of the half-size, band inside the body).
+    private func moved(_ link: AssemblyConnection, second: Bool, to world: Point) -> AssemblyConnection {
+        guard let part = experiment.scene.parts.first(where: { $0.id == (second ? link.second : link.first) }) else { return link }
+        let local = rotated(world - part.center, by: -part.angle) / (part.size / 2)
+        var gridded = local
+        if experiment.gridStep > 0 {
+            // Snap in millimetres along the body's own axes.
+            let step = Point(repeating: experiment.gridStep) / (part.size / 2)
+            gridded = (local / step).rounded(.toNearestOrAwayFromZero) * step
+        }
+        let yLimit = max(0, 1 - link.span / 2)
+        let fractions = Point(min(1, max(-1, gridded.x)), min(yLimit, max(-yLimit, gridded.y)))
+        var next = link
+        if second { next.secondAnchor = fractions } else { next.firstAnchor = fractions }
+        return next
+    }
+
+    private func drawAnchorHandles(_ link: AssemblyConnection, in context: GraphicsContext, projection: AssemblyProjection) {
+        guard let a = anchorPoint(link, second: false), let b = anchorPoint(link, second: true) else { return }
+        let start = projection.screen(a), end = projection.screen(b)
+        if anchorPreview != nil {
+            context.stroke(Path { p in p.move(to: start); p.addLine(to: end) }, with: .color(.white),
+                           style: StrokeStyle(lineWidth: 1.5, dash: [2, 3]))
+        }
+        for point in [start, end] {
+            let ring = Path(ellipseIn: CGRect(x: point.x - 7, y: point.y - 7, width: 14, height: 14))
+            context.fill(ring, with: .color(assemblyPanel))
+            context.stroke(ring, with: .color(.white), lineWidth: 2)
+        }
     }
 
     private func drawAnchor(_ anchor: WorkshopLinkPlacement.Anchor, in context: GraphicsContext, projection: AssemblyProjection) {
@@ -626,6 +694,7 @@ struct AssemblyCanvas: View {
         let active = experiment.frame?.contacts.contains { $0.force > 0 && ($0.pair.x == i || $0.pair.y == i) } ?? false
         let selected = experiment.selectedParts.contains(part.id)
         context.stroke(outline, with: .color(active ? .white : color), lineWidth: selected ? 2.3 : 1.3)
+        if let support = part.support { drawSupport(support, part: preview ?? part, context: context, projection: projection) }
         for line in body.mesh.interfaceLines {
             guard let first = line.first else { continue }
             let bond = Path { path in
@@ -655,6 +724,44 @@ struct AssemblyCanvas: View {
         if !interior { labelPosition.y += topLabel ? -14 : 14 }
         let label = Text(part.name).font(.caption.weight(.semibold)).foregroundStyle(color)
         context.draw(label, at: labelPosition)
+    }
+
+    /// Hatching marks a held edge, or the whole outline of a fixed support, in the usual engineering style.
+    private func drawSupport(_ support: AssemblyPart.Support, part: AssemblyPart, context: GraphicsContext, projection: AssemblyProjection) {
+        let h = part.size / 2
+        let edges: [(Point, Point)] = switch support {
+        case .fixed where part.shape == .round: []
+        case .fixed: [(Point(-h.x, -h.y), Point(h.x, -h.y))]
+        case .clampLeft: [(Point(-h.x, -h.y), Point(-h.x, h.y))]
+        case .clampRight: [(Point(h.x, h.y), Point(h.x, -h.y))]
+        case .clampBottom: [(Point(h.x, -h.y), Point(-h.x, -h.y))]
+        case .clampTop: [(Point(-h.x, h.y), Point(h.x, h.y))]
+        }
+        for (a, b) in edges {
+            let start = projection.screen(part.center + rotated(a, by: part.angle))
+            let end = projection.screen(part.center + rotated(b, by: part.angle))
+            let length = hypot(end.x - start.x, end.y - start.y)
+            guard length > 1 else { continue }
+            // Outward normal on the screen (screen y points down).
+            let ux = (end.x - start.x) / length, uy = (end.y - start.y) / length
+            let nx = -uy, ny = ux
+            let ticks = Path { path in
+                path.move(to: start)
+                path.addLine(to: end)
+                var d = 0.0
+                while d <= length {
+                    let base = CGPoint(x: start.x + ux * d, y: start.y + uy * d)
+                    path.move(to: base)
+                    path.addLine(to: CGPoint(x: base.x + 7 * nx - 5 * ux, y: base.y + 7 * ny - 5 * uy))
+                    d += 9
+                }
+            }
+            context.stroke(ticks, with: .color(assemblyInk.opacity(0.8)), lineWidth: 1.2)
+        }
+        if support == .fixed {
+            let label = Text("fixed").font(.caption2).foregroundStyle(assemblyInk.opacity(0.7))
+            context.draw(label, at: projection.screen(part.center))
+        }
     }
 
     private func drawConnections(_ context: GraphicsContext, projection: AssemblyProjection, preview: [UUID: AssemblyPart]) {

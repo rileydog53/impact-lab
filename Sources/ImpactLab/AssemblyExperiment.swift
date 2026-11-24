@@ -8,6 +8,7 @@ struct AssemblyComparison {
     let tracksFracture: Bool
     let replay: AssemblyReplay?
     let scene: AssemblyScene
+    var label = ""
 }
 
 @MainActor @Observable final class AssemblyExperiment {
@@ -49,6 +50,11 @@ struct AssemblyComparison {
     var linkPlacement: WorkshopLinkPlacement?
     var gridStep = 0.0
     private(set) var reference: AssemblyComparison?
+    /// Completed runs this session, newest last, kept so an earlier result can be compared after editing.
+    private(set) var history: [AssemblyComparison] = []
+    static let historyLimit = 6
+    private var runNumber = 0
+    @ObservationIgnored private var runEstimate: RunCostEstimate?
     private(set) var cameraRevision = 0
 
     init() {
@@ -78,6 +84,8 @@ struct AssemblyComparison {
     var undoAction: String? { undoEdits.last?.action }
     var redoAction: String? { redoEdits.last?.action }
     var finished: Bool { run.finished }
+    /// Pre-run cost of the remaining calculation, from this Mac's measured speed when known.
+    var estimate: RunCostEstimate { RunCostEstimate(simulation, rate: RuntimeWarnings.measuredRate) }
     var selectedIndex: Int? { scene.parts.firstIndex { $0.id == selectedPart } }
     var displayIndices: [Int] {
         let indices = Dictionary(uniqueKeysWithValues: scene.parts.indices.map { (scene.parts[$0].id, $0) })
@@ -285,7 +293,7 @@ struct AssemblyComparison {
     @discardableResult func insert(_ geometry: WorkshopGeometry) -> UUID? {
         guard scene.parts.count < AssemblyScene.maximumParts else { return nil }
         var part = geometry.makePart(number: scene.parts.count + 1)
-        part.center = insertionPoint(for: part.size)
+        part.center = geometry == .bench ? benchPoint(for: part.size) : insertionPoint(for: part.size)
         edit("Add Body") { $0.parts.append(part) }
         guard scene.parts.contains(where: { $0.id == part.id }) else { return nil }
         select(part.id)
@@ -323,8 +331,8 @@ struct AssemblyComparison {
         return new.id
     }
 
-    func updateConnection(_ id: UUID, _ change: (inout AssemblyConnection) -> Void) {
-        edit("Edit Connection") { scene in
+    func updateConnection(_ id: UUID, action: String = "Edit Connection", _ change: (inout AssemblyConnection) -> Void) {
+        edit(action) { scene in
             guard let index = scene.connections.firstIndex(where: { $0.id == id }) else { return }
             change(&scene.connections[index])
             let c = scene.connections[index]
@@ -340,7 +348,31 @@ struct AssemblyComparison {
 
     func pin() {
         pause()
-        reference = current
+        reference = labelled(current)
+    }
+
+    private func labelled(_ comparison: AssemblyComparison) -> AssemblyComparison {
+        var result = comparison
+        if let match = history.last(where: { $0.scene == comparison.scene && $0.samples.count == comparison.samples.count }) {
+            result.label = match.label
+        } else if result.label.isEmpty {
+            result.label = "Unsaved run"
+        }
+        return result
+    }
+
+    /// Keeps the finished run as the comparison reference and returns to editing a copy of
+    /// its starting setup. The original result stays intact in the reference and in the run history.
+    func editCopy() {
+        guard !solving, !canEdit, samples.count > 1 else { return }
+        pin()
+        reset()
+    }
+
+    func useAsReference(_ index: Int) {
+        guard history.indices.contains(index) else { return }
+        pause()
+        reference = history[index]
     }
 
     func pause() {
@@ -359,6 +391,7 @@ struct AssemblyComparison {
         let carriedElapsed = computation?.elapsed ?? 0
         let id = UUID()
         solveID = id
+        runEstimate = estimate
         solving = true
         cancelling = false
         let (updates, continuation) = AsyncStream.makeStream(of: AssemblyComputation.self, bufferingPolicy: .bufferingNewest(1))
@@ -422,6 +455,18 @@ struct AssemblyComparison {
             computation = final
             solving = false
             cancelling = false
+            if final.state == .completed {
+                // Calibrate future estimates from what this run actually cost.
+                if let start = runEstimate, final.elapsed > 0.5, start.steps > 0 {
+                    let perStep = Double(max(1, start.parallel ? start.lanes.heavier : start.elementWeight))
+                    RuntimeWarnings.record(rate: Double(final.work.steps) * perStep / final.elapsed)
+                }
+                runNumber += 1
+                var entry = current
+                entry.label = "Run \(runNumber)"
+                history.append(entry)
+                if history.count > Self.historyLimit { history.removeFirst() }
+            }
         }
     }
 

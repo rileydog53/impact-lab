@@ -82,11 +82,22 @@ struct AssemblyComputationStatus: View {
                 }
                 Text("\(run.work.steps.formatted()) steps · \(run.elapsed, specifier: "%.2f") s elapsed · CPU \(cpu(run)) · RAM \(memory(run.process.resident))")
                     .foregroundStyle(.secondary)
+                if experiment.solving, let remaining = remaining(run) {
+                    Text("About \(RunCostEstimate.duration(remaining).replacingOccurrences(of: "about ", with: "")) remaining at the measured speed (updates as the run goes; contact or cracking can change it). \(experiment.simulation.timestep.cause == .material ? "" : "Step set by \(experiment.simulation.timestep.cause.rawValue).")")
+                        .foregroundStyle(remaining > RuntimeWarnings.thresholds.long ? assemblyAmber : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .monospacedDigit()
             .font(.caption)
             .controlSize(.small)
         }
+    }
+
+    /// Remaining wall time from the simulated time reached so far in this calculation.
+    private func remaining(_ run: AssemblyComputation) -> Double? {
+        guard run.elapsed > 1, run.time > 0 else { return nil }
+        return (run.duration - run.time) * run.elapsed / run.time
     }
 
     private func cpu(_ run: AssemblyComputation) -> String {
@@ -114,6 +125,7 @@ struct AssemblyComputationStatus: View {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
                 GridRow { Text("Triangles"); Text(run.elements.formatted()) }
                 GridRow { Text("Numerical timestep"); Text(replayTime(run.dt)) }
+                GridRow { Text("Step set by"); Text("\(experiment.simulation.timestep.cause.rawValue) · \(experiment.simulation.timestep.bodyName)") }
                 GridRow {
                     Text("Wall time per accepted step")
                     if run.work.steps > 0 {
@@ -136,5 +148,36 @@ struct AssemblyComputationStatus: View {
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption).padding(14).frame(width: 365)
+    }
+}
+
+/// Joseph's approved defaults (Google Doc section 23): show an estimate above 30 s,
+/// ask for confirmation above 2 minutes, give an explicit long-run warning above 10 minutes.
+enum RuntimeWarnings {
+    static let showKey = "runtimeWarnings.showEstimateSeconds"
+    static let confirmKey = "runtimeWarnings.confirmSeconds"
+    static let longKey = "runtimeWarnings.longRunSeconds"
+    static let rateKey = "runtimeWarnings.measuredRate"
+    static let defaultShow = 30.0
+    static let defaultConfirm = 120.0
+    static let defaultLong = 600.0
+
+    static var thresholds: (show: Double, confirm: Double, long: Double) {
+        let d = UserDefaults.standard
+        return (d.object(forKey: showKey) as? Double ?? defaultShow,
+                d.object(forKey: confirmKey) as? Double ?? defaultConfirm,
+                d.object(forKey: longKey) as? Double ?? defaultLong)
+    }
+
+    /// Element-weight updates per second measured on this Mac, smoothed over completed runs.
+    static var measuredRate: Double? {
+        let value = UserDefaults.standard.double(forKey: rateKey)
+        return value > 0 ? value : nil
+    }
+
+    static func record(rate: Double) {
+        guard rate.isFinite, rate > 1e5, rate < 1e10 else { return }
+        let next = measuredRate.map { 0.5 * $0 + 0.5 * rate } ?? rate
+        UserDefaults.standard.set(next, forKey: rateKey)
     }
 }
