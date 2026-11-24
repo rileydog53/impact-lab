@@ -63,6 +63,23 @@ func workshopImprovementsCheck() throws {
     let back = tryBuild(coarsened)
     require(back.simulation == nil && (back.message ?? "").contains("smaller than"), "coarsening to the standard mesh is refused with a cause")
 
+    // 3b. Regression for the crash found in --scene-documents: an enclosure smaller than a 5 mm wall allows
+    // used to build an invalid wall range (`0.005...0.4×side`) and trap. It must be rejected cleanly instead.
+    for mesh in AssemblyScene.Resolution.allCases {
+        for side in [0.004, 0.0083, 0.0124, 0.0126] {
+            var s = AssemblyScene()
+            var box = AssemblyPart("Box", shape: .enclosure, size: Point(side, side))
+            box.wall = 0.005
+            s.parts = [box, AssemblyPart("Other", center: Point(0.1, 0), size: Point(0.03, 0.03))]
+            s.meshResolution = mesh
+            let rejected = tryBuild(s).simulation == nil
+            let floor = max(0.0125, AssemblyPart.minimumSize(resolution: mesh))
+            require(rejected == (side < floor), "enclosure \(side) on \(mesh) handled")
+            require(rejected == !s.issues().isEmpty, "enclosure \(side) on \(mesh) explained exactly when rejected")
+        }
+    }
+    print("  enclosures below max(12.5 mm, mesh minimum) are rejected cleanly on every mesh (regression: wall-range trap)")
+
     // 4. Arbitrary and implementation limits are unchanged and documented with their cause.
     var big = scene(size: 0.31, mesh: nil)
     require(tryBuild(big).simulation == nil, "300 mm maximum unchanged")

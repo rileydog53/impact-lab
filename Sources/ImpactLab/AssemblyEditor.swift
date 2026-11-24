@@ -296,7 +296,7 @@ struct AssemblyEditor: View {
                         bodyNumber("Rotation (°)", part, \.angle, -360...360)
                             .help("Counterclockwise angle from the assembly X axis")
                         if part.shape == .enclosure {
-                            bodyNumber("Wall thickness (mm)", part, \.wall, 0.005...0.4 * min(part.size.x, part.size.y), scale: 1000)
+                            bodyNumber("Wall thickness (mm)", part, \.wall, 0.005...max(0.005, 0.4 * min(part.size.x, part.size.y)), scale: 1000)
                         }
                     }
                 }.padding(.top, 5)

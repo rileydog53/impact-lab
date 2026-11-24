@@ -159,7 +159,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && (-1...1).contains(center.x) && (-1...1).contains(center.y)
             && (-360...360).contains(angle)
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
-            && (shape != .enclosure || (0.005...0.4 * min(size.x, size.y)).contains(wall))
+            && (shape != .enclosure || (0.4 * min(size.x, size.y) >= 0.005 && (0.005...0.4 * min(size.x, size.y)).contains(wall)))
             && material.isValidForAssembly
             && plasticity.isValid && (fracture.map { shape != .round && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
             && !name.isEmpty && name.count <= 48
@@ -381,7 +381,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
         // Name the cause when a body is too small only for the mesh it is on, not for the finest mesh.
         for part in parts {
             let mesh = part.refinement ?? resolution
-            let limit = AssemblyPart.minimumSize(resolution: mesh)
+            let limit = part.sizeRange(resolution: mesh).lowerBound
             if min(part.size.x, part.size.y) < limit - 1e-12, part.isValid(resolution: .x7) {
                 throw AssemblyError.bodyTooSmall(part.name, minimum: limit * 1000, mesh: mesh.label)
             }

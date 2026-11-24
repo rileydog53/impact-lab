@@ -15,12 +15,21 @@ extension AssemblyPart {
         baseMinimumSize / Double(resolution.rawValue)
     }
 
+    /// An enclosure also needs a 5 mm wall (two element layers) that is at most 40% of its smaller side,
+    /// so its smaller side is at least 12.5 mm whatever the mesh.
+    static let minimumEnclosureSide = 0.0125
+
+    private func lowerSize(_ resolution: AssemblyScene.Resolution) -> Double {
+        let mesh = Self.minimumSize(resolution: resolution)
+        return shape == .enclosure ? max(mesh, Self.minimumEnclosureSide) : mesh
+    }
+
     public func sizeRange(resolution: AssemblyScene.Resolution) -> ClosedRange<Double> {
-        Self.minimumSize(resolution: resolution)...Self.maximumSize
+        lowerSize(resolution)...Self.maximumSize
     }
 
     public func widthRange(resolution: AssemblyScene.Resolution) -> ClosedRange<Double> {
-        Self.minimumSize(resolution: resolution)...(support == .fixed ? Self.fixtureWidthRange.upperBound : Self.maximumSize)
+        lowerSize(resolution)...(support == .fixed ? Self.fixtureWidthRange.upperBound : Self.maximumSize)
     }
 
     // MARK: Fracture status
