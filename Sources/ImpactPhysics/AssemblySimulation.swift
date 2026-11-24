@@ -178,6 +178,9 @@ public struct AssemblySimulation: Sendable {
     public let initialIssue: String?
     public private(set) var time = 0.0
     public private(set) var failure: String?
+    /// Largest gravitational work released so far on accepted steps (J/m): how far the potential
+    /// energy has dropped below its starting value. Part of the energy scale in `EnergyAcceptance`.
+    public private(set) var peakGravitationalRelease = 0.0
     package private(set) var rejectedEnergy: AssemblyEnergy?
     package private(set) var rejectedPenetration: Double?
     package private(set) var rejectedContactDomains: SIMD4<Int>?
@@ -970,7 +973,8 @@ public struct AssemblySimulation: Sendable {
                     trial.kinetic += 0.5 * step.body.mass[i] * simd_length_squared(step.nextVelocity[i])
                 }
             }
-            guard abs(trial.total - initialEnergy) <= max(1e-9, 0.02 * initialEnergy) else {
+            guard EnergyAcceptance.accepts(residual: trial.total - initialEnergy, initialEnergy: initialEnergy,
+                                           gravitationalRelease: peakGravitationalRelease) else {
                 rejectedEnergy = trial
                 rejectedPenetration = penetration
                 rejectedContactDomains = deepest
@@ -982,6 +986,7 @@ public struct AssemblySimulation: Sendable {
         for i in steps.indices { steps[i].accept() }
         fractures = nextFractures
         maxima = nextMaxima
+        peakGravitationalRelease = max(peakGravitationalRelease, -trial.gravitational)
         time += dt
         if !fragmentLoads.isEmpty || !openFragmentContacts.isEmpty { recordFragmentLoads(fragmentLoads) }
         energy = trial

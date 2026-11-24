@@ -283,6 +283,11 @@ if CommandLine.arguments.dropFirst().contains("--supports-gravity") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--fracture-guard") {
+    try fractureGuardCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--workshop-improvements") {
     try workshopImprovementsCheck()
     exit(EXIT_SUCCESS)
