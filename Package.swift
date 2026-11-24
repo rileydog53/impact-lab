@@ -8,5 +8,8 @@ let package = Package(
         .target(name: "ImpactPhysics"),
         .executableTarget(name: "ImpactLab", dependencies: ["ImpactPhysics"]),
         .executableTarget(name: "ImpactCheck", dependencies: ["ImpactPhysics"]),
+        // Prototype: solver-independent geometry and mesh generation. Not used by the app or solver.
+        .target(name: "ImpactGeometry"),
+        .executableTarget(name: "MeshCheck", dependencies: ["ImpactGeometry", "ImpactPhysics"]),
     ]
 )
