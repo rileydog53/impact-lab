@@ -151,6 +151,40 @@ extension AssemblyPart {
     }
 }
 
+extension AssemblyScene {
+    /// Replaces a body after its geometry changed (outline edit, Cut, Join, Convert) and moves the gauges and
+    /// connection anchors attached to it so they keep their positions in the world. Fractional anchors are
+    /// limited to the new body's box.
+    public mutating func replace(_ old: AssemblyPart, with new: AssemblyPart) {
+        guard let index = parts.firstIndex(where: { $0.id == old.id }) else { return }
+        parts[index] = new
+        func toWorld(_ p: Point, _ part: AssemblyPart) -> Point {
+            let r = part.angle * .pi / 180
+            return part.center + Point(cos(r) * p.x - sin(r) * p.y, sin(r) * p.x + cos(r) * p.y)
+        }
+        func toLocal(_ w: Point, _ part: AssemblyPart) -> Point {
+            let r = -part.angle * .pi / 180, d = w - part.center
+            return Point(cos(r) * d.x - sin(r) * d.y, sin(r) * d.x + cos(r) * d.y)
+        }
+        func fraction(_ f: Point) -> Point {
+            let local = toLocal(toWorld(0.5 * f * old.size, old), new)
+            let g = 2 * local / new.size
+            return Point(min(1, max(-1, g.x)), min(1, max(-1, g.y)))
+        }
+        if var gauges {
+            for i in gauges.indices where gauges[i].body == old.id {
+                if gauges[i].usesBodyFractions == true { gauges[i].location = fraction(gauges[i].location) }
+                else { gauges[i].location = toLocal(toWorld(gauges[i].location, old), new) }
+            }
+            self.gauges = gauges
+        }
+        for i in connections.indices {
+            if connections[i].first == old.id { connections[i].firstAnchor = fraction(connections[i].firstAnchor) }
+            if connections[i].second == old.id { connections[i].secondAnchor = fraction(connections[i].secondAnchor) }
+        }
+    }
+}
+
 /// Generated meshes keyed by region and edge length. The mesher is deterministic (same input, same mesh bit
 /// for bit, verified in MeshCheck), so a cached mesh is identical to a fresh one.
 final class OutlineMeshCache: @unchecked Sendable {

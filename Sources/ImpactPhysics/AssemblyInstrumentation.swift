@@ -21,7 +21,7 @@ public struct AssemblyGauge: Codable, Equatable, Identifiable, Sendable {
             && (usesBodyFractions != true || max(abs(location.x), abs(location.y)) <= 1)
     }
 
-    func materialLocation(in part: AssemblyPart) -> Point {
+    public func materialLocation(in part: AssemblyPart) -> Point {
         usesBodyFractions == true ? 0.5 * part.size * location : location
     }
 }

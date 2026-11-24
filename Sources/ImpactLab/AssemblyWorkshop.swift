@@ -327,6 +327,6 @@ struct WorkshopMeshQuality {
     }
 
     private func validCenter(_ center: Point) -> Bool {
-        (-1...1).contains(center.x) && (-1...1).contains(center.y)
+        AssemblyPart.centerRange.contains(center.x) && AssemblyPart.centerRange.contains(center.y)
     }
 }

@@ -12,7 +12,7 @@ let package = Package(
         // polygon booleans (through CClipper2).
         .target(name: "ImpactGeometry", dependencies: ["CClipper2"]),
         .target(name: "ImpactPhysics", dependencies: ["ImpactGeometry"]),
-        .executableTarget(name: "ImpactLab", dependencies: ["ImpactPhysics"]),
+        .executableTarget(name: "ImpactLab", dependencies: ["ImpactPhysics", "ImpactGeometry"]),
         .executableTarget(name: "ImpactCheck", dependencies: ["ImpactPhysics"]),
         // Measurement harness for tests/regression (reads the solver only through its public API).
         .executableTarget(name: "ImpactRegression", dependencies: ["ImpactPhysics"]),

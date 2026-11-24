@@ -49,6 +49,10 @@ struct AssemblyComparison {
     var placingGauge = false
     var linkPlacement: WorkshopLinkPlacement?
     var gridStep = 0.0
+    /// Points (world, metres) of an outline being drawn on the canvas, or nil when not drawing.
+    var outlineDraft: [Point]?
+    /// The outline body whose points are being edited on the canvas.
+    var editingOutline: UUID?
     private(set) var reference: AssemblyComparison?
     /// Completed runs this session, newest last, kept so an earlier result can be compared after editing.
     private(set) var history: [AssemblyComparison] = []
@@ -158,6 +162,7 @@ struct AssemblyComparison {
         placingGauge = false
         linkPlacement = nil
         previewParts.removeAll()
+        if let editing = editingOutline, scene.parts.first(where: { $0.id == editing })?.shape != .outline { editingOutline = nil }
         if meshChanged { meshQuality = WorkshopMeshQuality.measure(next.simulation) }
         run = next
         selectedParts.formIntersection(scene.parts.map(\.id))
@@ -282,8 +287,9 @@ struct AssemblyComparison {
     }
 
     @discardableResult func add(_ shape: AssemblyPart.Shape) -> UUID? {
+        if shape == .outline { return insertOutline(.plate) }
         let geometry: WorkshopGeometry = switch shape {
-        case .block: .block
+        case .block, .outline: .block
         case .enclosure: .enclosure
         case .round: .round
         }
@@ -316,6 +322,14 @@ struct AssemblyComparison {
     func fitWall(of part: inout AssemblyPart) {
         if part.shape == .enclosure {
             part.wall = min(part.wall, 0.4 * min(part.size.x, part.size.y))
+        }
+        // Keep the stored outline the same size as the body, so the saved file shows the true geometry.
+        if part.shape == .outline, let outline = part.outline {
+            let (low, high) = outline.bounds
+            let tolerance = 1e-12 * max(part.size.x, part.size.y)
+            let stale = abs(high.x - low.x - part.size.x) > tolerance || abs(high.y - low.y - part.size.y) > tolerance
+                || abs(low.x + high.x) > tolerance || abs(low.y + high.y) > tolerance
+            if stale { part.outline = outline.fitted(to: part.size) }
         }
     }
 
