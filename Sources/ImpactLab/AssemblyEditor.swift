@@ -1,19 +1,21 @@
 import AppKit
+import ImpactGeometry
 import ImpactPhysics
 import simd
 import SwiftUI
 
 struct AssemblyEditor: View {
     let experiment: AssemblyExperiment
-    @State private var bodySettings = true
+    @State private var bodySettings = !CommandLine.arguments.contains("--open-mesh")
     @State private var materialTarget: MaterialTarget?
     @State private var materialSettings = false
     @State private var connectionList = false
-    @State private var meshSettings = false
+    @State private var meshSettings = CommandLine.arguments.contains("--open-mesh")
     @State private var simulationSettings = false
     @State private var multiSelect = false
     @State private var layoutGap = 0.010
     @State private var showWorkshopLimits = false
+    @State private var outlinePoints = false
     @AppStorage(RuntimeWarnings.showKey) private var showEstimateAbove = RuntimeWarnings.defaultShow
     @AppStorage(RuntimeWarnings.confirmKey) private var confirmAbove = RuntimeWarnings.defaultConfirm
     @AppStorage(RuntimeWarnings.longKey) private var warnAbove = RuntimeWarnings.defaultLong
@@ -118,13 +120,21 @@ struct AssemblyEditor: View {
                 Text("Components").font(.headline)
                 Spacer()
                 Menu("Add Body", systemImage: "plus") {
-                    ForEach(WorkshopGeometry.allCases, id: \.self) { geometry in
-                        Button(geometry.rawValue, systemImage: geometry.icon) { experiment.insert(geometry) }
+                    Button("Draw Outline…", systemImage: "pencil.and.outline") { experiment.beginOutlineDrawing() }
+                    Section("Outline shapes (editable points, general mesh)") {
+                        ForEach(OutlinePrimitive.allCases, id: \.self) { primitive in
+                            Button(primitive.rawValue, systemImage: primitive.icon) { experiment.insertOutline(primitive) }
+                        }
+                    }
+                    Section("Structured shapes") {
+                        ForEach(WorkshopGeometry.allCases, id: \.self) { geometry in
+                            Button(geometry.rawValue, systemImage: geometry.icon) { experiment.insert(geometry) }
+                        }
                     }
                 }
                 .menuStyle(.borderlessButton).fixedSize()
                 .disabled(!experiment.canEdit || experiment.scene.parts.count >= AssemblyScene.maximumParts)
-                .help("Insert deformable geometry. The assembly supports up to \(AssemblyScene.maximumParts) bodies.")
+                .help("Draw any outline, insert an editable outline shape, or insert one of the structured shapes. More than \(AssemblyScene.advisoryParts) bodies is allowed; the run-cost estimate shows what it costs.")
             }
             ForEach(experiment.displayIndices, id: \.self) { index in
                 let part = experiment.scene.parts[index]
@@ -132,6 +142,7 @@ struct AssemblyEditor: View {
                 case .enclosure: "square.dashed"
                 case .round: "circle.fill"
                 case .block: part.bondedLayer == nil ? "square.fill" : "square.3.layers.3d"
+                case .outline: "pentagon"
                 }
                 row(part.name + (part.support == nil ? "" : part.support == .fixed ? " · fixed" : " · clamped")
                     + (part.refinement == nil ? "" : " · own mesh"), tag: part.fractureStatus, icon: icon, color: assemblyColor(index),
@@ -149,6 +160,10 @@ struct AssemblyEditor: View {
                 }
                 .help(group.members.map(name).joined(separator: ", "))
             }
+            ForEach(experiment.scene.sceneAdvisories, id: \.self) { advisory in
+                Label(advisory, systemImage: "info.circle").font(.caption).foregroundStyle(assemblyAmber)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 if !experiment.scene.parts.isEmpty {
                     Toggle("Multi-select", isOn: $multiSelect).toggleStyle(.checkbox)
@@ -159,6 +174,17 @@ struct AssemblyEditor: View {
                             .keyboardShortcut("d", modifiers: .command)
                             .disabled(experiment.selectedParts.count + experiment.scene.parts.count > AssemblyScene.maximumParts)
                         Button("Delete Selection", role: .destructive) { experiment.removeSelection() }
+                        Divider()
+                        if let pair = experiment.booleanPair {
+                            Button("Cut \(pair.tool.name) out of \(pair.target.name)") {
+                                experiment.cut(target: pair.target.id, tool: pair.tool.id)
+                            }
+                            Button("Join \(pair.tool.name) into \(pair.target.name)") {
+                                experiment.join(target: pair.target.id, with: pair.tool.id)
+                            }
+                        } else {
+                            Button("Cut or Join (select two bodies)") {}.disabled(true)
+                        }
                         Divider()
                         Button("Group Selection") { experiment.groupSelection() }
                             .disabled(experiment.selectedParts.count < 2)
@@ -172,7 +198,7 @@ struct AssemblyEditor: View {
                     }
                     .fixedSize()
                     .disabled(!experiment.canEdit || experiment.selectedParts.isEmpty)
-                    .help("Duplicate, group, delete, or reorder selected bodies. Copies carry internal links.")
+                    .help("Duplicate, group, delete, or reorder selected bodies. Copies carry internal links. With two bodies selected, Cut removes the second body's material from the first (highlighted) one, and Join merges them; both results are outline bodies.")
                 }
                 Button("Workshop Limits", systemImage: "info.circle") { showWorkshopLimits.toggle() }
                     .labelStyle(.iconOnly)
@@ -188,7 +214,7 @@ struct AssemblyEditor: View {
             Text("Bodies may translate and rotate. A body can be a fixed support (a rigid bench, floor or roller that never moves) or have one edge clamped. A deformable support is an ordinary free block that can move and deform under load. Pinned points, rigid joints and partial constraints are unavailable.")
             Text("Gravity can be switched on in Simulation settings; it pulls every free body downward (−Y). No other applied loads, pressures or friction exist; contact is frictionless.")
             Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies, bonded blocks and supported bodies cannot fracture; each body's list entry says \"fracture on\", \"fracture off\" or \"fracture n/a\", and hovering explains why.")
-            Text("Round bodies use an elliptical mesh. Imported outlines, arbitrary cracks, and nested groups are unavailable.")
+            Text("Outline bodies can have any polygon shape with holes: draw one, insert an outline shape, convert a structured body, or Cut and Join two bodies (polygon operations by Clipper2, Angus Johnson, Boost licence). They are meshed by a quality triangle mesher (Ruppert/Shewchuk refinement). Round bodies use an elliptical mesh. Outline bodies cannot fracture yet. Curved edges, imported outlines, arbitrary cracks, and nested groups are unavailable.")
             Text("Limits and their causes").font(.subheadline.weight(.semibold))
             ForEach(AssemblyScene.limits, id: \.name) { limit in
                 VStack(alignment: .leading, spacing: 1) {
@@ -255,14 +281,14 @@ struct AssemblyEditor: View {
     }
 
     private func sizeHelp(_ part: AssemblyPart, mesh: AssemblyScene.Resolution) -> String {
-        let minimum = String(format: "%.3g", AssemblyPart.minimumSize(resolution: mesh) * 1000)
-        var text = "Sizes \(minimum)–300 mm"
-        if part.support == .fixed {
-            text += " (a fixed support may be up to 1,000 mm wide because it is never calculated as a deforming body)"
+        let resolved = String(format: "%.3g", AssemblyPart.minimumSize(resolution: mesh) * 1000)
+        var text = "Any size from 0.5 mm to 10 m is accepted; size is advice, not a limit."
+        if part.shape == .outline {
+            text += " Width and height stretch the outline to fit. The mesh follows the outline's target edge length (Mesh below)."
+        } else {
+            text += " Below \(resolved) mm (three elements of the \(mesh.label) mesh) the elements shrink to fit, which shortens the time step; the run-cost estimate shows the time."
         }
-        text += ". Minimum (numerical): a body must span about three elements of the \(mesh.label) mesh, so a finer mesh allows a smaller body and the standard mesh needs 25 mm."
-        text += " Maximum (workshop limit, not physical): keeps triangle counts and run times manageable. Typed values outside the range are set to the nearest limit."
-        if part.shape == .enclosure { text += " Walls are at least 5 mm (two element layers) and at most 40% of the smaller side." }
+        if part.shape == .enclosure { text += " Walls are at least 5 mm and at most 40% of the smaller side." }
         return text
     }
 
@@ -285,8 +311,8 @@ struct AssemblyEditor: View {
             DisclosureGroup("Geometry", isExpanded: $bodySettings) {
                 Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                     GridRow {
-                        bodyNumber("Center X (mm)", part, \.center.x, -1...1, scale: 1000)
-                        bodyNumber("Center Y (mm)", part, \.center.y, -1...1, scale: 1000)
+                        bodyNumber("Center X (mm)", part, \.center.x, AssemblyPart.centerRange, scale: 1000)
+                        bodyNumber("Center Y (mm)", part, \.center.y, AssemblyPart.centerRange, scale: 1000)
                     }
                     GridRow {
                         bodyNumber(part.shape == .round ? "Local X diameter (mm)" : "Local width (mm)", part, \.size.x, part.widthRange(resolution: mesh), scale: 1000)
@@ -307,6 +333,7 @@ struct AssemblyEditor: View {
                 } else if part.shape == .block {
                     Text("V-notch is unavailable on a bonded-layer block.").font(.caption).foregroundStyle(.secondary)
                 }
+                outlineEditor(part)
             }
             Text("Initial motion").font(.subheadline.weight(.semibold)).padding(.top, 4)
             HStack(spacing: 6) {
@@ -339,7 +366,8 @@ struct AssemblyEditor: View {
                      : "Overrides the assembly mesh. This body keeps \(part.refinement!.label) even when the assembly mesh changes. Reset all overrides in Simulation settings.")
                     .font(.caption).foregroundStyle(part.refinement == nil ? Color.secondary : assemblyAmber)
                     .fixedSize(horizontal: false, vertical: true)
-                if let advisory = experiment.scene.bendingAdvisory(for: part) {
+                if part.shape == .outline { outlineMeshControls(part) }
+                ForEach(experiment.scene.advisories(for: part), id: \.self) { advisory in
                     Label(advisory, systemImage: "info.circle").font(.caption).foregroundStyle(assemblyAmber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -403,7 +431,10 @@ struct AssemblyEditor: View {
                             }
                         }
                     }
-                    if let profile = MaterialProfile.references.first(where: { $0.id == part.material.provenance?.id }),
+                    if part.shape == .outline, let reason = part.fractureUnavailableReason {
+                        Text("Material fracture is unavailable: \(reason)")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else if let profile = MaterialProfile.references.first(where: { $0.id == part.material.provenance?.id }),
                        part.shape != .round, part.fractureUnavailableReason == nil || part.fracture != nil {
                         VStack(alignment: .leading, spacing: 7) {
                             if let estimate = profile.defaultFracture {
@@ -499,6 +530,115 @@ struct AssemblyEditor: View {
             return profile.rawValue
         }
         return part.plasticity.response.rawValue
+    }
+
+    // MARK: Outline geometry
+
+    @ViewBuilder private func outlineEditor(_ part: AssemblyPart) -> some View {
+        if part.shape == .outline, let outline = part.outline {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Outline · \(outline.outer.count) points\(outline.holes.isEmpty ? "" : " · \(outline.holes.count) hole\(outline.holes.count == 1 ? "" : "s")")")
+                    .font(.subheadline.weight(.semibold))
+                HStack {
+                    if experiment.editingOutline == part.id {
+                        Button("Done Editing Points", systemImage: "checkmark") { experiment.endPointEditing() }
+                    } else {
+                        Button("Edit Points on Canvas", systemImage: "point.topleft.down.to.point.bottomright.curvepath") {
+                            experiment.beginPointEditing(part.id)
+                        }
+                    }
+                }
+                .controlSize(.small)
+                Text("Drag points on the canvas, add a point from an edge's small circle, Option-click to delete. Cut and Join (Arrange menu, two bodies selected) make notches, holes and combined shapes. Coordinates are in mm in the body's own frame, measured from its centre.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("Points (mm)", isExpanded: $outlinePoints) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(outline.region.rings.enumerated()), id: \.offset) { r, ring in
+                            Text(r == 0 ? "Outer boundary" : "Hole \(r)").font(.caption.weight(.semibold)).padding(.top, 3)
+                            ForEach(ring.indices, id: \.self) { i in
+                                HStack(spacing: 4) {
+                                    Text("\(i + 1)").font(.caption.monospacedDigit()).frame(width: 22, alignment: .trailing)
+                                    pointField("x", ring[i].x) { value in movePoint(part, ring: r, index: i, x: value) }
+                                    pointField("y", ring[i].y) { value in movePoint(part, ring: r, index: i, y: value) }
+                                    Button("Delete point", systemImage: "minus.circle") { deletePoint(part, ring: r, index: i) }
+                                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                                        .disabled(!experiment.canEdit || ring.count <= 3)
+                                }
+                            }
+                            if r > 0 {
+                                Button("Remove Hole \(r)", systemImage: "trash") {
+                                    var region = outline.region
+                                    region.holes.remove(at: r - 1)
+                                    experiment.reshape(part.id, to: region, action: "Remove Hole")
+                                }.controlSize(.small).disabled(!experiment.canEdit)
+                            }
+                        }
+                    }
+                }.font(.caption)
+            }
+            .disabled(!experiment.canEdit)
+            .padding(.top, 4)
+        } else if part.shape != .outline {
+            VStack(alignment: .leading, spacing: 4) {
+                Button("Convert to Outline", systemImage: "pentagon") { experiment.convertToOutline(part.id) }
+                    .controlSize(.small)
+                    .disabled(!experiment.canEdit || part.bondedLayer != nil)
+                Text(part.bondedLayer != nil
+                     ? "Bonded-layer blocks cannot become outlines yet (region materials are not part of the outline model)."
+                     : "Turns this body into an editable outline with the same shape. The mesh is regenerated, so results will differ slightly from the structured mesh; pin a result first to compare.\(part.fracture != nil ? " Material fracture is switched off, because outline bodies cannot fracture yet." : "")")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    @ViewBuilder private func outlineMeshControls(_ part: AssemblyPart) -> some View {
+        let mesh = part.refinement ?? experiment.scene.resolution
+        if let outline = part.outline {
+            Toggle("Set this body's mesh size", isOn: Binding(get: { outline.meshSize != nil }, set: { custom in
+                experiment.setMeshSize(part.id, custom ? outline.edgeLength(resolution: mesh) : nil)
+            })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
+            if let size = outline.meshSize {
+                numeric("Target triangle edge (mm)", value: size, range: BodyOutline.meshSizeRange, scale: 1000) { value in
+                    experiment.setMeshSize(part.id, value)
+                }
+            } else {
+                Text(String(format: "Target edge %.3g mm, from the body mesh (12 mm ÷ n on the ×n mesh, about the same cost as a structured body).", outline.edgeLength(resolution: mesh) * 1000))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let (quality, notes) = part.outlineQuality(resolution: mesh) {
+                Text(String(format: "Generated mesh: %d triangles · smallest angle %.1f° · smallest altitude %.3g mm (sets the time step)",
+                            quality.triangles, quality.minimumAngle, quality.smallestAltitude * 1000))
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(notes, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            }
+        }
+    }
+
+    private func pointField(_ label: String, _ value: Double, set: @escaping (Double) -> Void) -> some View {
+        TextField(label, value: Binding(get: { value * 1000 }, set: { newValue in
+            if newValue.isFinite { set(newValue / 1000) }
+        }), format: .number.precision(.fractionLength(0...3)))
+        .labelsHidden().textFieldStyle(.roundedBorder).monospacedDigit().frame(width: 78)
+        .help("\(label) in mm, body frame. Press Return to apply.")
+    }
+
+    private func movePoint(_ part: AssemblyPart, ring: Int, index: Int, x: Double? = nil, y: Double? = nil) {
+        guard var region = part.outline?.region else { return }
+        var points = region.rings[ring]
+        if let x { points[index].x = x }
+        if let y { points[index].y = y }
+        if ring == 0 { region.outer = points } else { region.holes[ring - 1] = points }
+        experiment.reshape(part.id, to: region, action: "Move Outline Point")
+    }
+
+    private func deletePoint(_ part: AssemblyPart, ring: Int, index: Int) {
+        guard var region = part.outline?.region else { return }
+        var points = region.rings[ring]
+        guard points.count > 3 else { return }
+        points.remove(at: index)
+        if ring == 0 { region.outer = points } else { region.holes[ring - 1] = points }
+        experiment.reshape(part.id, to: region, action: "Delete Outline Point")
     }
 
     private func notchEditor(_ part: AssemblyPart) -> some View {

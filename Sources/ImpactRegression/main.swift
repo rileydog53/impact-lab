@@ -220,6 +220,16 @@ func barVibration() {
     }
 }
 
+/// Geometry editing verification: the same cantilever built as an outline body, meshed by the general mesher
+/// (Delaunay refinement) instead of the structured grid. Default edge 12 mm ÷ 4 = 3 mm, and a finer 2.25 mm.
+func outlineCantilever() {
+    for (label, edge) in [("outline_cantilever_3mm", Optional<Double>.none), ("outline_cantilever_2p25mm", 0.00225)] {
+        var scene = loadExample(.cantilever_sag)
+        scene.parts[0] = scene.parts[0].reshaped(to: scene.parts[0].region(), meshSize: edge)
+        cantilever(label, scene: scene)
+    }
+}
+
 func threePointBend() {
     print("three-point bend")
     let scene = loadExample(.three_point_bend)
@@ -360,7 +370,10 @@ func usabilityProbes() {
     probeJSON("truncated file", "rejected with a readable message", #"{ "duration": 0.05, "parts": [ { "name": "B""#)
     probeJSON("not JSON", "rejected with a readable message", "hello")
     probeJSON("empty object", "rejected or accepted with a clear reason", "{}")
-    probeJSON("body too small", "rejected naming the field", #"{ "parts": [ { "name": "B", "size": [0.001, 0.05] } ] }"#)
+    // Sizes are advice since 2026-11-24 (Joseph, Google Doc section 28): 1 mm is accepted, below 0.5 mm is an input error.
+    probeJSON("small body (1 mm)", "accepted; advice shown in the app", #"{ "parts": [ { "name": "B", "size": [0.001, 0.05] } ] }"#)
+    probeJSON("body below input bound (0.1 mm)", "rejected naming the field", #"{ "parts": [ { "name": "B", "size": [0.0001, 0.05] } ] }"#)
+    probeJSON("self-crossing outline", "rejected with the reason", #"{ "parts": [ { "name": "B", "outline": { "outer": [[0, 0], [0.03, 0.03], [0.03, 0], [0, 0.03]] } } ] }"#)
     probeJSON("gravity beyond range", "rejected naming the field", #"{ "gravity": 100, "parts": [ \#(block) ] }"#)
     probeJSON("negative gravity", "rejected naming the field", #"{ "gravity": -9.8, "parts": [ \#(block) ] }"#)
     probeJSON("unknown top-level key", "rejected or warned", #"{ "gravty": 9.8, "parts": [ \#(block) ] }"#)
@@ -455,7 +468,7 @@ try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirecto
 
 let all: [(String, () -> Void)] = [
     ("block_on_bench", blockOnBench), ("drop_test", dropTest), ("cantilever_sag", cantileverSag),
-    ("bar_vibration", barVibration), ("three_point_bend", threePointBend), ("hanging_springs", hangingSprings),
+    ("bar_vibration", barVibration), ("outline_cantilever", outlineCantilever), ("three_point_bend", threePointBend), ("hanging_springs", hangingSprings),
     ("stack_on_support", stackOnSupport), ("determinism", determinism),
     ("layered_two_region", layeredTwoRegion), ("layered_bond_pull", layeredBondPull), ("usability", usabilityProbes),
 ]

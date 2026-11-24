@@ -121,6 +121,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         case block = "Block"
         case enclosure = "Enclosure"
         case round = "Round body"
+        /// Any polygon outline with holes, meshed by the general mesher (see `BodyOutline`).
+        case outline = "Outline"
     }
 
     /// A kinematic boundary condition. Supported nodes never move.
@@ -136,12 +138,18 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     }
 
     public static let velocityRange = -150.0...150.0
-    /// Size range at the standard mesh, which is also the range every earlier scene was saved under.
-    /// A finer mesh lowers the minimum (see `minimumSize(resolution:)`); it never raises it.
+    /// The range every scene before 2026-11-24 was saved under (25 to 300 mm). Kept as a reference for the
+    /// advisory notes; it no longer limits anything (Joseph's decision 2, Google Doc section 28).
     public static let sizeRange = 0.025...0.30
-    public static let maximumSize = 0.30
-    /// A fixed support is rigid and skips the element calculation, so it may be as wide as a bench.
-    public static let fixtureWidthRange = 0.025...1.0
+    /// Input bounds on a body's width and height. Not physics: they only keep values finite and the scene
+    /// inside the range where millimetre display and double-precision contact tolerances stay meaningful.
+    /// What a size costs to run is reported by the run-cost estimate and the advisory notes instead.
+    public static let acceptedSizeRange = 0.0005...10.0
+    public static let maximumSize = acceptedSizeRange.upperBound
+    /// Legacy name kept for callers; a fixed support has the same accepted range as any body now.
+    public static let fixtureWidthRange = acceptedSizeRange
+    /// Body centre coordinates, in metres. An input bound, not physics.
+    public static let centerRange = -10.0...10.0
 
     public var id = UUID()
     public var name: String
@@ -159,6 +167,9 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public var bondedLayer: BondedLayer?
     /// nil keeps every node free, exactly as in scenes saved before supports existed.
     public var support: Support?
+    /// The body's geometry when `shape` is `.outline`: outer boundary and holes in the body frame. Its bounding
+    /// box is stretched to `size` and centred on `center`. nil for the legacy shapes.
+    public var outline: BodyOutline?
 
     public init(_ name: String, shape: Shape = .block, center: Point = .zero,
                 size: Point = Point(0.06, 0.06)) {
@@ -180,7 +191,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
                 return "A fixed support is rigid, so plasticity has no effect; set the response to Elastic."
             }
         } else if shape == .round {
-            return "Round bodies have no straight edge to clamp; use a block or enclosure."
+            return "Round bodies have no straight edge to clamp; use a block, enclosure or outline."
         }
         return nil
     }
@@ -191,29 +202,32 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     func isValid(resolution: AssemblyScene.Resolution) -> Bool {
         widthRange(resolution: resolution).contains(size.x) && sizeRange(resolution: resolution).contains(size.y)
             && supportConflict == nil
-            && (-1...1).contains(center.x) && (-1...1).contains(center.y)
+            && Self.centerRange.contains(center.x) && Self.centerRange.contains(center.y)
             && (-360...360).contains(angle)
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
             && (shape != .enclosure || (0.4 * min(size.x, size.y) >= 0.005 && (0.005...0.4 * min(size.x, size.y)).contains(wall)))
             && material.isValidForAssembly
-            && plasticity.isValid && (fracture.map { shape != .round && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
+            && plasticity.isValid && (fracture.map { shape != .round && shape != .outline && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
+            && outlineIssues.isEmpty
             && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)
             && (bondedLayer.map { shape == .block && $0.isValid && notch == nil
                 && (fracture != nil || !$0.hasFractureSettings) } ?? true)
     }
 
-    func makeBody(refinement: Int, notchDepth: Double = 0) -> Body {
-        makeLayeredBody(refinement: refinement, notchDepth: notchDepth).body
+    func makeBody(refinement: Int, notchDepth: Double = 0) throws -> Body {
+        try makeLayeredBody(refinement: refinement, notchDepth: notchDepth).body
     }
 
     /// The body plus, for a bonded-layer block, each element's layer (0 = this body's own material,
     /// 1 = second layer, 2 = third layer). Crack insertion never renumbers elements, so the list stays valid.
-    func makeLayeredBody(refinement: Int, notchDepth: Double = 0) -> (body: Body, layers: [Int]?) {
+    func makeLayeredBody(refinement: Int, notchDepth: Double = 0) throws -> (body: Body, layers: [Int]?) {
         let mesh: Mesh
         var elementMaterials: [Material]?
         var layers: [Int]?
         switch shape {
+        case .outline:
+            mesh = try outlineMesh(resolution: AssemblyScene.Resolution(rawValue: refinement) ?? .standard)
         case .block:
             let columns = max(3, Int((size.x / 0.009).rounded()))
             let nx = columns * refinement
@@ -408,7 +422,12 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     public var bodyOrder: [UUID]?
     public var groups: [AssemblyGroup]?
 
-    public static let maximumParts = 8
+    /// An implementation bound, not physics (Joseph's decision 2 replaced the earlier 8-body cap with advice).
+    /// Contact checks every pair of bodies, so cost grows with the square of the count; the run-cost
+    /// estimate and an advisory note say so well before this bound.
+    public static let maximumParts = 64
+    /// The earlier cap, kept for the advisory note that mentions it.
+    public static let advisoryParts = 8
     public static let maximumConnections = 12
 
     public init() {}
@@ -441,13 +460,8 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
         let groups = groups ?? []
         let members = groups.flatMap(\.members)
         let order = bodyOrder ?? []
-        // Name the cause when a body is too small only for the mesh it is on, not for the finest mesh.
-        for part in parts {
-            let mesh = part.refinement ?? resolution
-            let limit = part.sizeRange(resolution: mesh).lowerBound
-            if min(part.size.x, part.size.y) < limit - 1e-12, part.isValid(resolution: .x7) {
-                throw AssemblyError.bodyTooSmall(part.name, minimum: limit * 1000, mesh: mesh.label)
-            }
+        for part in parts where part.shape == .outline || part.outline != nil {
+            if let issue = part.outlineIssues.first { throw AssemblyError.outline(part.name, issue) }
         }
         guard assemblyVersion == 1, parts.count <= Self.maximumParts, connections.count <= Self.maximumConnections,
               ids.count == parts.count, Set(connections.map(\.id)).count == connections.count,
@@ -483,6 +497,8 @@ enum AssemblyError: LocalizedError {
     case gaugeOutsideMaterial(String)
     case preloadTooLarge(Int)
     case bodyTooSmall(String, minimum: Double, mesh: String)
+    case outline(String, String)
+    case clampTooFew(String)
 
     var errorDescription: String? {
         switch self {
@@ -491,6 +507,8 @@ enum AssemblyError: LocalizedError {
         case .coincidentAnchors(let index): "Connection \(index + 1) needs at least 0.5 mm between its start anchors."
         case .gaugeOutsideMaterial(let name): "\(name) must be inside its body's reference material."
         case .bodyTooSmall(let name, let minimum, let mesh): "\(name) is smaller than \(String(format: "%g", minimum)) mm, the smallest body the \(mesh) mesh can resolve. Make it larger or choose a finer mesh."
+        case .outline(let name, let reason): "\(name): the outline cannot be meshed, because \(reason)"
+        case .clampTooFew(let name): "\(name): the clamped edge touches fewer than two mesh nodes. An outline is clamped along the side of its bounding box; give it a straight edge there, or use a fixed support."
         case .preloadTooLarge(let index): "Connection \(index + 1): the preload compression is longer than the spring itself. The rest length must stay above 0.5 mm."
         }
     }

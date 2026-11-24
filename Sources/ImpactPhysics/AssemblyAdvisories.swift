@@ -6,30 +6,29 @@ extension AssemblyPart {
     /// The smallest body the standard mesh accepts, in metres. Every earlier scene satisfies it.
     public static let baseMinimumSize = 0.025
 
-    /// The smallest body dimension for a mesh. The requirement is numerical: a body must span about three
-    /// nominal elements, as a 25 mm body does at the standard mesh (about 9 mm elements). The nominal element
-    /// is r times smaller on a ×r mesh, so the minimum is r times smaller. It never exceeds 25 mm, so every
-    /// scene saved under the old fixed minimum stays valid. Very small bodies on fine meshes have tiny
-    /// elements and long run times; the run-cost warning reports that, and nothing here blocks it.
+    /// The body size that spans about three nominal elements of a mesh (25 mm at the standard ≈9 mm mesh,
+    /// 25 mm ÷ n on a ×n mesh). Advisory only since 2026-11-24 (Joseph's decision 2): a smaller block or round
+    /// body still gets at least three cells across, so its elements are simply smaller, its time step shorter
+    /// and its run longer. `sizeAdvisory` says so; the run-cost estimate gives the time.
     public static func minimumSize(resolution: AssemblyScene.Resolution) -> Double {
         baseMinimumSize / Double(resolution.rawValue)
     }
 
-    /// An enclosure also needs a 5 mm wall (two element layers) that is at most 40% of its smaller side,
-    /// so its smaller side is at least 12.5 mm whatever the mesh.
-    static let minimumEnclosureSide = 0.0125
+    /// An enclosure needs a 5 mm wall that is at most 40% of its smaller side, so its smaller side is at
+    /// least 12.5 mm. This is the enclosure's own geometry rule; an outline body with a hole has no such limit.
+    public static let minimumEnclosureSide = 0.0125
 
-    private func lowerSize(_ resolution: AssemblyScene.Resolution) -> Double {
-        let mesh = Self.minimumSize(resolution: resolution)
-        return shape == .enclosure ? max(mesh, Self.minimumEnclosureSide) : mesh
+    private var lowerSize: Double {
+        shape == .enclosure ? max(Self.acceptedSizeRange.lowerBound, Self.minimumEnclosureSide) : Self.acceptedSizeRange.lowerBound
     }
 
+    /// Accepted heights. The same for every mesh: resolution is advice, not a limit.
     public func sizeRange(resolution: AssemblyScene.Resolution) -> ClosedRange<Double> {
-        lowerSize(resolution)...Self.maximumSize
+        lowerSize...Self.maximumSize
     }
 
     public func widthRange(resolution: AssemblyScene.Resolution) -> ClosedRange<Double> {
-        lowerSize(resolution)...(support == .fixed ? Self.fixtureWidthRange.upperBound : Self.maximumSize)
+        lowerSize...Self.maximumSize
     }
 
     // MARK: Fracture status
@@ -51,6 +50,9 @@ extension AssemblyPart {
 
     /// Why Material fracture cannot be enabled, or nil when it can (whether or not it is currently on).
     public var fractureUnavailableReason: String? {
+        if shape == .outline {
+            return "Outline bodies cannot fracture yet: the crack model was verified only on the structured block meshes, and crack paths on generated meshes need their own verification first (planned next)."
+        }
         if shape == .round {
             return "Round bodies cannot fracture: they use an elliptical mesh with no grid of element faces for cracks to open along. Use a rectangular block."
         }
@@ -98,6 +100,48 @@ extension AssemblyScene {
 }
 
 extension AssemblyScene {
+    /// Advisory notes for one body: resolution, size against the mesh, outline mesh guidance. Never blocking.
+    public func advisories(for part: AssemblyPart) -> [String] {
+        var notes: [String] = []
+        let mesh = part.refinement ?? resolution
+        if let bending = bendingAdvisory(for: part) { notes.append(bending) }
+        if part.shape != .outline, part.support != .fixed {
+            let resolved = AssemblyPart.minimumSize(resolution: mesh)
+            let small = min(part.size.x, part.size.y)
+            if small < resolved - 1e-12 {
+                notes.append(String(format: "Advisory: at %.3g mm this body is smaller than three elements of the %@ mesh (%.3g mm), so its elements are shrunk to fit. That shortens the time step and lengthens the run; see the run-cost estimate. Nothing is blocked.",
+                                    small * 1000, mesh.label, resolved * 1000))
+            }
+            if max(part.size.x, part.size.y) > AssemblyPart.sizeRange.upperBound + 1e-12 {
+                notes.append(String(format: "Advisory: at %.4g mm this body is larger than the earlier 300 mm editor limit. Larger bodies carry more triangles at the same mesh; see the run-cost estimate.",
+                                    max(part.size.x, part.size.y) * 1000))
+            }
+        }
+        if let advice = part.outlineAdvice(resolution: mesh) {
+            let h = part.outline!.edgeLength(resolution: mesh)
+            if part.outlineQuality(resolution: mesh) == nil {
+                notes.append(String(format: "Mesh: target edge length %.3g mm, roughly %@ triangles (estimate).", h * 1000, advice.estimatedTriangles.formatted()))
+            }
+            if let thin = advice.thinnestSection {
+                // Rows of near-equilateral triangles across a section of width t: about t / (0.87 h).
+                let rows = thin / (0.866 * h)
+                if rows < 8, part.support != .fixed {
+                    notes.append(String(format: "Advisory: the narrowest section (%.3g mm) has about %.1f triangle rows across it. If it bends, roughly 8 or more are usually needed; fewer tends to make it too stiff (project beam check: 4 rows about 7%% too stiff, 8 rows about 1%%). A guideline, not a limit: a mesh size of %.2g mm gives about 8.",
+                                        thin * 1000, rows, thin / (8 * 0.866) * 1000))
+                }
+            }
+            notes += advice.notes.filter { $0.level == .caution || $0.text.hasPrefix("Re-entrant") }
+                .filter { !$0.text.hasPrefix("The narrowest part") }.map { "Advisory: " + $0.text }
+        }
+        return notes
+    }
+
+    /// Scene-wide advisory notes. Never blocking.
+    public var sceneAdvisories: [String] {
+        guard parts.count > Self.advisoryParts else { return [] }
+        return ["Advisory: \(parts.count) bodies. Contact is checked between every pair (\((parts.count * (parts.count - 1) / 2).formatted()) pairs), so run time grows quickly with the number of bodies; see the run-cost estimate. The earlier limit was \(Self.advisoryParts); up to \(Self.maximumParts) are accepted."]
+    }
+
     public struct Limit: Equatable, Sendable {
         public enum Kind: String, Sendable {
             /// A physical or numerical requirement of the model.
@@ -116,12 +160,12 @@ extension AssemblyScene {
     /// Each editor limit with its cause, so none is mistaken for physics.
     public static var limits: [Limit] {
         [
-            Limit(name: "Smallest body", value: "25 mm at the standard mesh, 25 mm ÷ n at a ×n mesh", kind: .numerical,
-                  cause: "A body must span about three nominal elements (the standard mesh has ≈9 mm elements). The minimum shrinks with the mesh element size, so a finer mesh can resolve a smaller body. It never exceeds 25 mm. Very small bodies on fine meshes run slowly; the run-cost estimate says so."),
-            Limit(name: "Largest body", value: "300 mm (a fixed support: 1,000 mm wide)", kind: .workshop,
-                  cause: "Keeps triangle counts and run times manageable. It is not physical. A fixed support is never calculated as a deforming body, so it may be wider."),
-            Limit(name: "Bodies", value: "\(maximumParts)", kind: .implementation,
-                  cause: "Contact detection checks body pairs and storage is sized for this many; it is not a physical limit."),
+            Limit(name: "Body size", value: "0.5 mm to 10 m (advice below 25 mm ÷ n and above 300 mm)", kind: .implementation,
+                  cause: "Input bounds only. Since 2026-11-24 size is advice, not a limit: a small body gets smaller elements and a shorter time step, a large one more triangles. The run-cost estimate gives the time and an advisory note explains the cause."),
+            Limit(name: "Bodies", value: "up to \(maximumParts) (advice above \(advisoryParts))", kind: .implementation,
+                  cause: "Contact checks every pair of bodies, so cost grows with the square of the count. An advisory note and the run-cost estimate report it; the upper bound only keeps the editor responsive."),
+            Limit(name: "Outline mesh", value: "about \(OutlineMeshCache.triangleCeiling.formatted()) triangles per body", kind: .implementation,
+                  cause: "Memory on this Mac, not physics. Outline bodies take a target edge length (12 mm ÷ n by default) and report triangle count, narrowest section and corner notes as advice."),
             Limit(name: "Connections", value: "\(maximumConnections)", kind: .implementation,
                   cause: "Springs and breakable links are stored with a fixed capacity; it is not a physical limit."),
             Limit(name: "Wall thickness", value: "5 mm to 40% of the smaller side", kind: .numerical,

@@ -1,0 +1,16 @@
+{
+  
+  "description": "An L-shaped outline body with a round hole, falling 2 m/s onto a fixed bench under gravity. Shows the outline field; numerical example only.",
+  "duration": 0.03,
+  "gravity": true,
+  "meshResolution": 2,
+  "parts": [
+    { "name": "Bracket", "center": [0, 0.06], "velocity": [0, -2],
+      "material": { "young": 2e6, "density": 1000, "poisson": 0.2 },
+      "outline": {
+        "outer": [[-0.04, -0.04], [0.04, -0.04], [0.04, -0.025], [-0.025, -0.025], [-0.025, 0.04], [-0.04, 0.04]],
+        "holes": [[[-0.0345, 0.02], [-0.0325, 0.0235], [-0.0305, 0.02], [-0.0325, 0.0165]]]
+      } },
+    { "name": "Bench", "center": [0, -0.0], "size": [0.3, 0.02], "support": "fixed" }
+  ]
+}

@@ -86,6 +86,12 @@ func sceneDocumentsCheck(examples directory: URL) throws {
     let linked = try load(#"{"parts": [{"name": "A", "id": "left", "size": [0.05, 0.05]}, {"name": "B", "size": [0.05, 0.05], "center": [0.06, 0]}], "connections": [{"first": "left", "second": "B"}], "monitor": "B", "meshResolution": "fine"}"#)
     require(linked.connections[0].first == linked.parts[0].id && linked.connections[0].second == linked.parts[1].id
             && linked.monitor == linked.parts[1].id && linked.resolution == .fine, "Names and readable ids resolve")
+    let small = try load(#"{"parts": [{"name": "A", "size": [0.01, 0.05]}]}"#)
+    require(small.parts[0].size.x == 0.01, "A 10 mm body is accepted (advice, not a limit)")
+    let outlined = try load(#"{"parts": [{"name": "L", "center": [0.1, 0], "outline": {"outer": [[0, 0], [0.04, 0], [0.04, 0.01], [0.01, 0.01], [0.01, 0.03], [0, 0.03]], "holes": [], "meshSize": 0.004}}]}"#)
+    require(outlined.parts[0].shape == .outline && abs(outlined.parts[0].size.x - 0.04) < 1e-15 && abs(outlined.parts[0].size.y - 0.03) < 1e-15
+            && outlined.parts[0].outline?.meshSize == 0.004 && outlined.parts[0].center == Point(0.1, 0),
+            "An outline body loads with shape Outline, size from its box and its mesh size")
     let cases: [(String, String)] = [
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "fixed": true}]}"#, "use support: \"fixed\""),
         (#"{"gravity": [0, -9.81], "parts": [{"name": "A", "size": [0.05, 0.05]}]}"#, "gravity: expected a number"),
@@ -94,7 +100,12 @@ func sceneDocumentsCheck(examples directory: URL) throws {
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05]}, {"name": "B", "size": [0.05, 0.05], "center": [0.06, 0]}], "connections": [{"first": "A", "second": "B", "kind": "breakable", "preload": 0.001}]}"#, "preload is available for springs only"),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "pressure": 100}]}"#, "other than gravity"),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "velocty": [1, 0]}]}"#, "did you mean \"velocity\""),
-        (#"{"parts": [{"name": "A", "size": [0.01, 0.05]}]}"#, "parts[0] \"A\".size[0] (width) is 0.01 m; allowed 0.025 m to 0.3 m"),
+        // Sizes became advice on 2026-11-24 (Joseph, Google Doc section 28, decision 2); only input bounds remain.
+        (#"{"parts": [{"name": "A", "size": [0.0001, 0.05]}]}"#, "parts[0] \"A\".size[0] (width) is 0.0001 m; allowed 0.0005 m to 10 m"),
+        (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0.03], [0.03, 0], [0, 0.03]]}}]}"#, "crosses or touches itself"),
+        (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0]]}}]}"#, "parts[0] \"A\".outline"),
+        (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0], [0, 0.03]], "mesh": 0.001}}]}"#, "unknown setting"),
+        (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0], [0, 0.03]]}, "fracture": {}}]}"#, "not available for outline bodies"),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "material": "titanium"}]}"#, "unknown material profile \"titanium\""),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05]}], "connections": [{"first": "A", "second": "Z"}]}"#, "no body named or with id \"Z\""),
         (#"{"parts": [{"name": "A", "size": "big"}]}"#, "expected a pair of numbers"),
@@ -109,6 +120,18 @@ func sceneDocumentsCheck(examples directory: URL) throws {
         require(found.contains { $0.contains(message) }, "Expected \"\(message)\" in \(found)")
     }
     print("Hand-written forms: defaults, profiles, named references and \(cases.count) specific errors")
+    // The outline example file (kept out of docs/scene-examples so the legacy replay set stays the 11 scenes).
+    let bracket = try AssemblyScene.open(URL(fileURLWithPath: "docs/geometry/outline-bracket.json"))
+    let bracketRun = try AssemblySimulation(bracket)
+    require(bracket.parts[0].shape == .outline && bracket.parts[0].outline?.holes.count == 1 && bracketRun.initialIssue == nil,
+            "docs/geometry/outline-bracket.json loads and builds")
+    let bracketFile = FileManager.default.temporaryDirectory.appendingPathComponent("outline-bracket-roundtrip.json")
+    try bracket.save(to: bracketFile)
+    let reread = try AssemblyScene.open(bracketFile)
+    try? FileManager.default.removeItem(at: bracketFile)
+    require(reread == bracket,
+            "outline survives export and re-import")
+    print("  outline example: loads, builds (\(bracketRun.body(0).mesh.elements.count) triangles) and round-trips")
 
     // 4. The documented examples load, run, and re-export.
     let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -119,7 +142,7 @@ func sceneDocumentsCheck(examples directory: URL) throws {
             let issues = (try? AssemblyScene.open(file)).map { _ in [String]() } ?? {
                 do { _ = try AssemblyScene.open(file); return [] } catch let error as SceneDocumentError { return error.issues } catch { return [] }
             }()
-            for text in ["gravity", "fixed", "titanium", "did you mean \"velocity\"", "\"Ceiling\"", "duration is 3 s", "(width) is 0.5 m"] {
+            for text in ["gravity", "fixed", "titanium", "did you mean \"velocity\"", "\"Ceiling\"", "duration is 3 s"] {
                 require(issues.contains { $0.contains(text) }, "invalid-example.json explains \(text): \(issues)")
             }
             print("  invalid-example.json: \(issues.count) explained problems")

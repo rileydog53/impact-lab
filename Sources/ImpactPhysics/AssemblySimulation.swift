@@ -374,8 +374,8 @@ public struct AssemblySimulation: Sendable {
         try scene.validate()
         precondition(refinement > 0 && stepLimit > 0 && stepScale > 0 && notchDepth >= 0)
         self.scene = scene
-        let made = scene.parts.enumerated().map { i, part in
-            part.makeLayeredBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
+        let made = try scene.parts.enumerated().map { i, part in
+            try part.makeLayeredBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
         }
         var bodies = made.map(\.body)
         // Verification only: a prescribed starting velocity field in each body's reference frame
@@ -409,6 +409,9 @@ public struct AssemblySimulation: Sendable {
                 if !support.isFixture { step.clamped = part.clampedNodes(body, support) }
             }
             return step
+        }
+        for (part, step) in zip(scene.parts, steps) where part.shape == .outline {
+            if let support = part.support, !support.isFixture, step.clamped.count < 2 { throw AssemblyError.clampTooFew(part.name) }
         }
         gravity = scene.gravity ?? 0
         initialHeightMoments = bodies.map { body in body.mass.indices.reduce(0) { $0 + body.mass[$1] * body.position[$1].y } }

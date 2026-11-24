@@ -1,4 +1,5 @@
 import AppKit
+import ImpactGeometry
 import ImpactPhysics
 import simd
 import SwiftUI
@@ -224,6 +225,10 @@ struct AssemblyCanvas: View {
         case placement
         /// Dragging one end of the selected connection across its body.
         case linkAnchor(AssemblyConnection, second: Bool)
+        /// Clicking a point of an outline being drawn.
+        case draft
+        /// Dragging one point of an outline (ring 0 is the outer boundary, 1… the holes), in the body frame.
+        case vertex(AssemblyPart, ring: Int, index: Int, original: PolygonRegion)
     }
 
     let experiment: AssemblyExperiment
@@ -238,12 +243,17 @@ struct AssemblyCanvas: View {
     @State private var dragStart = CGPoint.zero
     /// The connection as it would be after the anchor drag in progress.
     @State private var anchorPreview: AssemblyConnection?
+    /// The outline as it would be after the point drag in progress (body frame).
+    @State private var vertexPreview: PolygonRegion?
+    /// Pointer position over the canvas while drawing an outline, for the rubber-band line.
+    @State private var hover: CGPoint?
 
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
             canvas(in: size)
                 .overlay(alignment: .topTrailing) { cameraControls(in: size).padding(8) }
+                .overlay(alignment: .topLeading) { outlineBanner.padding(8) }
                 .onAppear { fitAssembly(in: size) }
                 .onChange(of: experiment.cameraRevision) {
                     cancelDrag()
@@ -313,7 +323,10 @@ struct AssemblyCanvas: View {
                 }
             }
             if let anchor = experiment.linkPlacement?.first { drawAnchor(anchor, in: context, projection: projection) }
+            if let draft = experiment.outlineDraft { drawDraft(draft, in: context, projection: projection) }
+            if experiment.canEdit, let part = editedOutlinePart { drawPointHandles(part, in: context, projection: projection) }
             if experiment.canEdit, !experiment.placingGauge, experiment.linkPlacement == nil,
+               experiment.outlineDraft == nil, experiment.editingOutline == nil,
                experiment.selectedParts.count == 1, let part = selected,
                handlesAreVisible(for: part, projection: projection) {
                 drawHandles(for: part, in: context, projection: projection)
@@ -346,6 +359,35 @@ struct AssemblyCanvas: View {
         }
     }
 
+    @ViewBuilder private var outlineBanner: some View {
+        if let draft = experiment.outlineDraft {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Drawing an outline · \(draft.count) point\(draft.count == 1 ? "" : "s")").font(.callout.weight(.semibold))
+                Text(draft.count < 3 ? "Click on the canvas to place points\(experiment.gridStep > 0 ? " (snapped to the grid)" : "")."
+                     : experiment.draftIssues.first.map { "Not closable yet: " + $0 } ?? "Click the first point, or press Return, to finish.")
+                    .font(.caption).foregroundStyle(experiment.draftIssues.isEmpty || draft.count < 3 ? Color.secondary : assemblyAmber)
+                HStack {
+                    Button("Finish") { experiment.finishOutlineDrawing() }.disabled(!experiment.draftIssues.isEmpty)
+                    Button("Undo Point") { experiment.removeLastDraftPoint() }.disabled(draft.isEmpty)
+                    Button("Cancel") { experiment.cancelOutlineDrawing() }
+                }.controlSize(.small)
+            }
+            .padding(9).frame(maxWidth: 330, alignment: .leading)
+            .background(assemblyPanel.opacity(0.94), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(assemblyMint.opacity(0.5)))
+        } else if let part = editedOutlinePart {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Editing points · \(part.name)").font(.callout.weight(.semibold))
+                Text("Drag a square to move a point. Drag a small circle to add a point on that edge. Option-click a square to delete it.\(experiment.gridStep > 0 ? " Points snap to the grid." : "")")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Done") { experiment.endPointEditing() }.controlSize(.small)
+            }
+            .padding(9).frame(maxWidth: 330, alignment: .leading)
+            .background(assemblyPanel.opacity(0.94), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(assemblyMint.opacity(0.5)))
+        }
+    }
+
     private func cameraControls(in size: CGSize) -> some View {
         HStack(spacing: 5) {
             Button("Fit Assembly", systemImage: "arrow.up.left.and.arrow.down.right") { fitAssembly(in: size) }
@@ -374,7 +416,18 @@ struct AssemblyCanvas: View {
         let projection = camera.projection(in: viewport)
         switch event.type {
         case .leftMouseDown:
-            beginDrag(at: location, projection: projection, additive: event.modifierFlags.contains(.shift))
+            beginDrag(at: location, projection: projection, additive: event.modifierFlags.contains(.shift),
+                      option: event.modifierFlags.contains(.option))
+        case .mouseMoved where experiment.outlineDraft != nil:
+            hover = location
+        case .keyDown:
+            switch event.keyCode {
+            case 36, 76: if experiment.outlineDraft != nil { experiment.finishOutlineDrawing() }
+            case 53:
+                if experiment.outlineDraft != nil { experiment.cancelOutlineDrawing() } else { experiment.endPointEditing() }
+            case 51: experiment.removeLastDraftPoint()
+            default: break
+            }
         case .leftMouseDragged:
             updateDrag(at: location, projection: projection)
         case .leftMouseUp:
@@ -396,11 +449,35 @@ struct AssemblyCanvas: View {
         }
     }
 
-    private func beginDrag(at location: CGPoint, projection: AssemblyProjection, additive: Bool) {
+    private func beginDrag(at location: CGPoint, projection: AssemblyProjection, additive: Bool, option: Bool = false) {
         cancelDrag()
         dragStart = location
         let world = projection.world(location)
-        if experiment.placingGauge || experiment.linkPlacement != nil {
+        if experiment.outlineDraft != nil {
+            drag = .draft
+        } else if experiment.canEdit, let part = editedOutlinePart, let hit = pointHandle(at: location, part: part, projection: projection) {
+            var region = part.outline!.region
+            if hit.midpoint {
+                // Insert a point on the edge and drag it straight away.
+                var ring = region.rings[hit.ring]
+                let a = ring[hit.index], b = ring[(hit.index + 1) % ring.count]
+                ring.insert(0.5 * (a + b), at: hit.index + 1)
+                region = replacing(region, ring: hit.ring, with: ring)
+                drag = .vertex(part, ring: hit.ring, index: hit.index + 1, original: region)
+                vertexPreview = region
+            } else if option {
+                var ring = region.rings[hit.ring]
+                guard ring.count > 3 else {
+                    experiment.error = "An outline ring needs at least three points."
+                    return
+                }
+                ring.remove(at: hit.index)
+                experiment.reshape(part.id, to: replacing(region, ring: hit.ring, with: ring), action: "Delete Outline Point")
+            } else {
+                drag = .vertex(part, ring: hit.ring, index: hit.index, original: region)
+                vertexPreview = region
+            }
+        } else if experiment.placingGauge || experiment.linkPlacement != nil {
             drag = .placement
         } else if experiment.canEdit, let link = selectedConnection,
                   let end = [false, true].first(where: { second in
@@ -436,6 +513,13 @@ struct AssemblyCanvas: View {
             experiment.previewMove(originals, anchor: anchor, delta: projection.worldDelta(translation))
         case .linkAnchor(let original, let second) where experiment.canEdit:
             anchorPreview = moved(original, second: second, to: projection.world(location))
+        case .vertex(let part, let ring, let index, let original) where experiment.canEdit:
+            let target = experiment.local(experiment.snapped(projection.world(location)), in: part)
+            var points = original.rings[ring]
+            points[index] = target
+            vertexPreview = replacing(original, ring: ring, with: points)
+        case .draft:
+            hover = location
         case .body(let original, let handle) where experiment.canEdit:
             var part = original
             switch handle {
@@ -464,6 +548,18 @@ struct AssemblyCanvas: View {
         defer { cancelDrag() }
         let distance = hypot(location.x - dragStart.x, location.y - dragStart.y)
         switch drag {
+        case .draft where distance < 4:
+            if let first = experiment.outlineDraft?.first, (experiment.outlineDraft?.count ?? 0) >= 3,
+               hypot(projection.screen(first).x - location.x, projection.screen(first).y - location.y) <= 9 {
+                experiment.finishOutlineDrawing()
+            } else {
+                experiment.addDraftPoint(projection.world(location))
+            }
+        case .vertex(let part, _, _, let original) where experiment.canEdit:
+            updateDrag(at: location, projection: projection)
+            if let preview = vertexPreview, preview != part.outline?.region || original != part.outline?.region {
+                experiment.reshape(part.id, to: preview, action: "Move Outline Point")
+            }
         case .placement where distance < 4:
             let point = projection.world(location)
             if let id = part(at: point) {
@@ -498,6 +594,7 @@ struct AssemblyCanvas: View {
     private func cancelDrag() {
         drag = nil
         anchorPreview = nil
+        vertexPreview = nil
         experiment.previewParts.removeAll()
     }
 
@@ -585,6 +682,81 @@ struct AssemblyCanvas: View {
         }
         context.draw(Text(Image(systemName: "arrow.clockwise")).font(.system(size: 10, weight: .semibold))
             .foregroundStyle(.white), at: rotation)
+    }
+
+    // MARK: Outline drawing and point editing
+
+    private var editedOutlinePart: AssemblyPart? {
+        guard let id = experiment.editingOutline, experiment.outlineDraft == nil else { return nil }
+        return experiment.scene.parts.first { $0.id == id && $0.shape == .outline && $0.outline != nil }
+    }
+
+    private func replacing(_ region: PolygonRegion, ring: Int, with points: [Point]) -> PolygonRegion {
+        var copy = region
+        if ring == 0 { copy.outer = points } else { copy.holes[ring - 1] = points }
+        return copy
+    }
+
+    /// The point or edge-midpoint handle under the pointer, if any (points win over midpoints).
+    private func pointHandle(at location: CGPoint, part: AssemblyPart, projection: AssemblyProjection)
+        -> (ring: Int, index: Int, midpoint: Bool)? {
+        let rings = part.outline!.region.rings
+        var best: (ring: Int, index: Int, midpoint: Bool, distance: Double)?
+        for (r, ring) in rings.enumerated() {
+            for i in ring.indices {
+                for midpoint in [false, true] {
+                    let local = midpoint ? 0.5 * (ring[i] + ring[(i + 1) % ring.count]) : ring[i]
+                    let screen = projection.screen(experiment.world(local, in: part))
+                    let d = hypot(screen.x - location.x, screen.y - location.y)
+                    let reach = midpoint ? 6.0 : 8.0
+                    if d <= reach, d + (midpoint ? 3 : 0) < (best?.distance ?? .infinity) { best = (r, i, midpoint, d + (midpoint ? 3 : 0)) }
+                }
+            }
+        }
+        return best.map { ($0.ring, $0.index, $0.midpoint) }
+    }
+
+    private func drawPointHandles(_ part: AssemblyPart, in context: GraphicsContext, projection: AssemblyProjection) {
+        let region = vertexPreview ?? part.outline!.region
+        let issues = vertexPreview.map { $0.validationIssues() } ?? []
+        let ink: Color = issues.isEmpty ? .white : Color(red: 1, green: 0.39, blue: 0.33)
+        for ring in region.rings {
+            let screen = ring.map { projection.screen(experiment.world($0, in: part)) }
+            var path = Path()
+            path.addLines(screen)
+            path.closeSubpath()
+            context.stroke(path, with: .color(ink), style: StrokeStyle(lineWidth: 1.4, dash: vertexPreview == nil ? [] : [4, 3]))
+            for i in screen.indices {
+                let a = screen[i], b = screen[(i + 1) % screen.count]
+                let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+                if hypot(b.x - a.x, b.y - a.y) > 26 {
+                    let plus = Path(ellipseIn: CGRect(x: mid.x - 4, y: mid.y - 4, width: 8, height: 8))
+                    context.fill(plus, with: .color(assemblyPanel))
+                    context.stroke(plus, with: .color(assemblyMint.opacity(0.9)), lineWidth: 1.2)
+                }
+                let square = Path(CGRect(x: a.x - 4.5, y: a.y - 4.5, width: 9, height: 9))
+                context.fill(square, with: .color(assemblyPanel))
+                context.stroke(square, with: .color(ink), lineWidth: 1.5)
+            }
+        }
+        if let issue = issues.first, let at = region.outer.first {
+            context.draw(Text(issue).font(.caption2.weight(.semibold)).foregroundStyle(ink),
+                         at: projection.screen(experiment.world(at, in: part)), anchor: .bottomLeading)
+        }
+    }
+
+    private func drawDraft(_ draft: [Point], in context: GraphicsContext, projection: AssemblyProjection) {
+        let screen = draft.map(projection.screen)
+        var path = Path()
+        path.addLines(screen)
+        if let hover, !screen.isEmpty { path.addLine(to: hover) }
+        context.stroke(path, with: .color(assemblyMint), style: StrokeStyle(lineWidth: 1.6, dash: [5, 3]))
+        for (i, point) in screen.enumerated() {
+            let size = i == 0 && screen.count >= 3 ? 12.0 : 8.0
+            let dot = Path(ellipseIn: CGRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size))
+            context.fill(dot, with: .color(i == 0 ? assemblyMint : assemblyPanel))
+            context.stroke(dot, with: .color(assemblyMint), lineWidth: 1.5)
+        }
     }
 
     private func scaleBarMillimetres(at scale: Double) -> Double {
@@ -885,6 +1057,17 @@ private struct AssemblyCanvasInput: NSViewRepresentable {
 
         override func mouseDragged(with event: NSEvent) { route(event) }
         override func mouseUp(with event: NSEvent) { route(event) }
+        override func mouseMoved(with event: NSEvent) { route(event) }
+        override func keyDown(with event: NSEvent) {
+            // Return, Escape and Delete drive outline drawing; anything else goes up the responder chain.
+            if [36, 53, 51, 76].contains(event.keyCode) { route(event) } else { super.keyDown(with: event) }
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+        }
         override func scrollWheel(with event: NSEvent) { route(event) }
         override func magnify(with event: NSEvent) { route(event) }
 
