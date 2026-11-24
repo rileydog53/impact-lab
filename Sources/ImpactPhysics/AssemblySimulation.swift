@@ -188,6 +188,8 @@ public struct AssemblySimulation: Sendable {
         fractures[part]?.contactTrack(corners, at: steps[part].body.position)
     }
     public private(set) var peakRelativePenetration = 0.0
+    /// Deepest absolute contact overlap (m) on any accepted step. Reporting only.
+    public private(set) var peakPenetrationDepth = 0.0
     public private(set) var firstContactTimes: [SIMD2<Int>: Double] = [:]
     public private(set) var activeContacts: [SIMD2<Int>] = []
     public private(set) var linkReadings: [AssemblyLinkReading] = []
@@ -481,7 +483,7 @@ public struct AssemblySimulation: Sendable {
     }
 
     private mutating func selfContact(fractures: [MaterialFracture?], energy: inout AssemblyEnergy,
-                                          penetration: inout Double, active: inout [SIMD2<Int>],
+                                          penetration: inout Double, depth: inout Double, active: inout [SIMD2<Int>],
                                           loads: inout [FragmentPair: FragmentLoad], normal: inout [SIMD2<Int>: Double],
                                           deepest: inout SIMD4<Int>?) {
         for i in steps.indices {
@@ -504,6 +506,7 @@ public struct AssemblySimulation: Sendable {
                     penetration = hit.relativePenetration
                     deepest = SIMD4(i, pieces.x, i, pieces.y)
                 }
+                depth = max(depth, hit.penetrationDepth)
                 guard a != b else { return }
                 if !active.contains(parts) { active.append(parts) }
                 normal[parts, default: 0] += hit.normalLoad
@@ -520,7 +523,7 @@ public struct AssemblySimulation: Sendable {
     }
 
     private mutating func fractureContact(fractures: [MaterialFracture?], energy: inout AssemblyEnergy,
-                                          penetration: inout Double, active: inout [SIMD2<Int>],
+                                          penetration: inout Double, depth: inout Double, active: inout [SIMD2<Int>],
                                           loads: inout [FragmentPair: FragmentLoad], normal: inout [SIMD2<Int>: Double],
                                           deepest: inout SIMD4<Int>?, locations: inout [SIMD2<Int>: ContactLocation]) {
         // Keep the existing boundary penetration measurement as an independent
@@ -568,6 +571,7 @@ public struct AssemblySimulation: Sendable {
                     penetration = result.relativePenetration
                     deepest = SIMD4(partPair.x, pieces.x, partPair.y, pieces.y)
                 }
+                depth = max(depth, result.penetration)
                 if result.penetration > 0 {
                     if !active.contains(partPair) { active.append(partPair) }
                     normal[partPair, default: 0] += result.normalLoad
@@ -614,7 +618,7 @@ public struct AssemblySimulation: Sendable {
         }
     }
 
-    private mutating func intactContact(energy: inout AssemblyEnergy, penetration: inout Double,
+    private mutating func intactContact(energy: inout AssemblyEnergy, penetration: inout Double, depth: inout Double,
                                         active: inout [SIMD2<Int>], normal: inout [SIMD2<Int>: Double], locations: inout [SIMD2<Int>: ContactLocation]) {
         let bounds = steps.indices.map { ContactBounds(surface: surfaces[$0], position: steps[$0].nextPosition) }
         let contacts = pairs
@@ -628,6 +632,7 @@ public struct AssemblySimulation: Sendable {
                                                      leftForce: &a.pointee.nextApplied, rightForce: &b.pointee.nextApplied)
                 energy.contact += result.energy
                 penetration = max(penetration, result.relativePenetration)
+                depth = max(depth, result.penetration)
                 if result.penetration > 0 {
                     let key = SIMD2(pair.a, pair.b)
                     active.append(key)
@@ -702,7 +707,7 @@ public struct AssemblySimulation: Sendable {
         }
         var active: [SIMD2<Int>] = []
         var nextNormal: [SIMD2<Int>: Double] = [:]
-        var penetration = 0.0
+        var penetration = 0.0, penetrationDepth = 0.0
         var deepest: SIMD4<Int>?
         var nextFractures = fractures
         var fragmentLoads: [FragmentPair: FragmentLoad] = [:]
@@ -764,13 +769,13 @@ public struct AssemblySimulation: Sendable {
                 }
             }
             work?.end(\.fracture)
-            selfContact(fractures: nextFractures, energy: &trial, penetration: &penetration,
+            selfContact(fractures: nextFractures, energy: &trial, penetration: &penetration, depth: &penetrationDepth,
                         active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest)
             if nextFractures.contains(where: { ($0?.reading.insertedEdges ?? 0) > 0 }) {
-                fractureContact(fractures: nextFractures, energy: &trial, penetration: &penetration,
+                fractureContact(fractures: nextFractures, energy: &trial, penetration: &penetration, depth: &penetrationDepth,
                                 active: &active, loads: &fragmentLoads, normal: &nextNormal, deepest: &deepest, locations: &locations)
             } else {
-                intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal, locations: &locations)
+                intactContact(energy: &trial, penetration: &penetration, depth: &penetrationDepth, active: &active, normal: &nextNormal, locations: &locations)
             }
             guard penetration <= 0.10 else {
                 rejectedPenetration = penetration
@@ -781,7 +786,7 @@ public struct AssemblySimulation: Sendable {
             }
         } else {
             work?.end(\.integration)
-            intactContact(energy: &trial, penetration: &penetration, active: &active, normal: &nextNormal, locations: &locations)
+            intactContact(energy: &trial, penetration: &penetration, depth: &penetrationDepth, active: &active, normal: &nextNormal, locations: &locations)
         }
 
         work?.end(\.contact)
@@ -879,6 +884,7 @@ public struct AssemblySimulation: Sendable {
             peakRelativePenetration = penetration
             peakContactDomains = deepest
         }
+        peakPenetrationDepth = max(peakPenetrationDepth, penetrationDepth)
         accepted = true
         work?.end(\.integration)
         work?.steps += 1

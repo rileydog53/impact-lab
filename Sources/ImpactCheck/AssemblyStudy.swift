@@ -84,6 +84,20 @@ func assemblyStudyCheck() async throws {
     let lineCount = parallel.cases.reduce(1) { $0 + $1.samples.count }
     require(rows.count == lineCount && rows[0].contains("pressure_Pa") && rows[0].contains("scalar_impulse_Ns_per_m"),
             "CSV includes one row per accepted sample and SI headings")
+    let pulseCSV = folder.appendingPathComponent("pulses.csv")
+    try parallel.exportPulseCSV(to: pulseCSV)
+    let pulseRows = try String(contentsOf: pulseCSV, encoding: .utf8).split(whereSeparator: \.isNewline)
+    let pulseCount = parallel.cases.reduce(0) { $0 + $1.contacts.reduce(0) { $0 + ($1.pulses?.pulses.count ?? 0) } }
+    require(pulseRows.count == pulseCount + 1 && pulseCount > 0 && pulseRows[0].contains("merge_gap_s")
+                && pulseRows[0].contains("averaging_windows_s") && rows[0].contains("peak_penetration_depth_m"),
+            "Pulse CSV states merge gap and windows, one row per pulse")
+    for item in parallel.cases {
+        for contact in item.contacts { if let r = contact.pulses {
+            require(abs(r.pulses.map(\.impulse).reduce(0, +) + r.minorImpulse - r.totalImpulse) <= 1e-9 * max(1, r.totalImpulse)
+                        && abs(r.totalImpulse - contact.impulse) <= 1e-6 * max(1e-12, contact.impulse),
+                    "Pulse impulses add up to the pair impulse")
+        } }
+    }
     var small = AssemblyScene()
     var block = AssemblyPart("Free elastic block")
     block.velocity = Point(0.05, 0)

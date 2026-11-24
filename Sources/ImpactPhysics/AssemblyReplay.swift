@@ -26,6 +26,8 @@ public struct AssemblyReplayFrame: Sendable {
     public let energies: AssemblyEnergy
     public let relativeMotion, momentum: Point
     public let angularMomentum, peakRelativePenetration: Double
+    /// Deepest absolute contact overlap so far (m).
+    public let peakPenetrationDepth: Double
     public let links: [AssemblyLinkReading]
     public let contacts: [AssemblyReplayContact]
     public let fragments: [FragmentContactReading]
@@ -165,7 +167,8 @@ public struct AssemblyReplay: Sendable {
         let frame = AssemblyReplayFrame(time: s.time, bodies: (0..<s.bodyCount).map(s.replayBody),
             gauges: (s.scene.gauges ?? []).indices.map(s.gaugeReading), energies: s.energies,
             relativeMotion: run.relativeMotion, momentum: s.momentum, angularMomentum: s.angularMomentum,
-            peakRelativePenetration: s.peakRelativePenetration, links: s.linkReadings,
+            peakRelativePenetration: s.peakRelativePenetration,
+            peakPenetrationDepth: s.peakPenetrationDepth, links: s.linkReadings,
             contacts: contacts, fragments: s.fragmentContacts)
         fieldPayloadBytes += frame.fieldPayloadBytes
         frames.append(frame)

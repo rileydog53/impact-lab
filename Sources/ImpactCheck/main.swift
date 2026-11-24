@@ -153,6 +153,11 @@ if CommandLine.arguments.dropFirst().contains("--receiver-extended") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--contact-reporting") {
+    try contactReportingCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--compliant-striker") {
     try compliantStrikerCheck()
     exit(EXIT_SUCCESS)

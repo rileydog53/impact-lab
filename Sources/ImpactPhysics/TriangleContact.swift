@@ -99,6 +99,8 @@ struct TriangleContact: Sendable {
         let elements: SIMD2<Int>
         let force: [Point]
         let energy, relativePenetration, normalLoad: Double
+        /// Absolute overlap (m) along the limiting face. Reporting only.
+        let penetrationDepth: Double
         let face: Int
     }
 
@@ -288,7 +290,7 @@ struct TriangleContact: Sendable {
         let load = simd_length(force[0] + force[1] + force[2])
         return Contact(elements: SIMD2(a, b), force: force, energy: 0.5 * stiffness * depth * depth,
                        relativePenetration: minimumDepth / gaps[limitingFace].length, normalLoad: load,
-                       face: limitingFace)
+                       penetrationDepth: minimumDepth, face: limitingFace)
     }
 }
 
