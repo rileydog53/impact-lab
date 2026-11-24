@@ -579,3 +579,67 @@ extension Mesh {
         return Mesh(reference: points, triangles: triangles, boundary: edges)
     }
 }
+
+extension AssemblyPart {
+    /// Starting crack settings for a material: the profile's sourced estimate for a reference metal
+    /// (nil when it has none), otherwise the illustrative default.
+    public static func defaultLayerFracture(for material: Material) -> MaterialFractureSettings? {
+        guard let provenance = material.provenance else { return MaterialFractureSettings() }
+        return MaterialProfile.references.first { $0.id == (provenance.referenceID ?? provenance.id) }?.defaultFracture
+    }
+
+    /// A starting bond: half the strength and half the toughness of the weaker neighbouring layer,
+    /// in pascals. Illustrative, not a measured adhesive or interface value.
+    static func defaultBond(between a: (Material, MaterialFractureSettings?), _ b: (Material, MaterialFractureSettings?)) -> MaterialFractureSettings? {
+        let sides = [a, b].compactMap { material, settings in
+            settings.map { (strength: $0.resolvedStrength(young: material.young), energy: $0.energy) }
+        }
+        guard !sides.isEmpty else { return nil }
+        var bond = MaterialFractureSettings()
+        bond.strength = max(MaterialFractureSettings.absoluteStrengthRange.lowerBound, 0.5 * sides.map(\.strength).min()!)
+        bond.energy = max(MaterialFractureSettings.absoluteEnergyRange.lowerBound, 0.5 * sides.map(\.energy).min()!)
+        return bond
+    }
+
+    /// The starting bond offered for bond `index` (0: first–second layer, 1: second–third).
+    public func suggestedBond(_ index: Int) -> MaterialFractureSettings? {
+        guard let layer = bondedLayer else { return nil }
+        let sides: [(Material, MaterialFractureSettings?)] = [(material, fracture), (layer.material, layer.fracture)]
+            + (layer.third.map { [($0.material, $0.fracture)] } ?? [])
+        guard sides.indices.contains(index + 1) else { return nil }
+        return Self.defaultBond(between: sides[index], sides[index + 1])
+            ?? MaterialFractureSettings()
+    }
+
+    /// Keeps layer crack and bond settings consistent with the body: none while fracture is off,
+    /// defaults for any layer or bond that has none when `fillMissing`, and a sourced estimate in
+    /// place of a fraction-of-E strength on a reference metal layer.
+    public mutating func alignLayerFracture(fillMissing: Bool = false) {
+        guard var layer = bondedLayer else { return }
+        guard fracture != nil else {
+            layer.fracture = nil
+            layer.bond = nil
+            layer.third?.fracture = nil
+            layer.third?.bond = nil
+            bondedLayer = layer
+            return
+        }
+        func align(_ settings: MaterialFractureSettings?, _ material: Material) -> MaterialFractureSettings? {
+            guard let settings else { return fillMissing ? Self.defaultLayerFracture(for: material) : nil }
+            if material.provenance != nil && !settings.usesAbsoluteStrength { return Self.defaultLayerFracture(for: material) }
+            return settings
+        }
+        layer.fracture = align(layer.fracture, layer.material)
+        if fillMissing && layer.bond == nil {
+            layer.bond = Self.defaultBond(between: (material, fracture), (layer.material, layer.fracture))
+        }
+        if var third = layer.third {
+            third.fracture = align(third.fracture, third.material)
+            if fillMissing && third.bond == nil {
+                third.bond = Self.defaultBond(between: (layer.material, layer.fracture), (third.material, third.fracture))
+            }
+            layer.third = third
+        }
+        bondedLayer = layer
+    }
+}

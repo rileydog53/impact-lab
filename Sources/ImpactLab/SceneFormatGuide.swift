@@ -43,6 +43,7 @@ struct SceneFormatGuide: View {
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
                         row("Scene", "parts, connections, gauges, duration (0.0001–2 s), gravity (m/s², downward), meshResolution (standard, fine, extraFine, x4–x7), monitor, relativeTo, groups")
                         row("Body", "name, shape (block, enclosure, round), size [w, h] 0.025–0.30 m, center, angle, velocity [vx, vy] ±150 m/s, wall, refinement, material, plasticity, fracture, notch, bondedLayer, support (fixed, clampLeft, clampRight, clampBottom, clampTop)")
+                        row("Layers", "bondedLayer { interfaceFraction, material, plasticity, fracture, bond, third { … } }: each layer can yield and crack, and bond is a weaker cohesive interface with the layer before it")
                         row("Material", "a profile id, { \"profile\": id, \"elasticOnly\": true }, or { young, density, poisson }")
                         row("Profiles", MaterialProfile.references.map(\.id).joined(separator: ", "))
                         row("Connections", "first, second (body names), kind (spring, breakable), stiffness, criticalExtension, span, anchors, preload (m, springs only)")

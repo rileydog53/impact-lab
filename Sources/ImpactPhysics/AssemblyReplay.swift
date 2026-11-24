@@ -57,6 +57,12 @@ public struct AssemblyReplayEvent: Identifiable, Sendable {
 public struct AssemblyReplay: Sendable {
     public private(set) var frames: [AssemblyReplayFrame] = []
     public private(set) var events: [AssemblyReplayEvent] = []
+    /// Gauge readings on a fixed fine cadence, independent of the field frames. Field frames are
+    /// thinned by a memory budget (fracture scenes keep fewer), but gauges cost a few bytes each, so
+    /// window averages over gauges should not depend on how many field frames fit.
+    public private(set) var gaugeTrack: [(time: Double, readings: [AssemblyGaugeReading])] = []
+    private let gaugeInterval: Double
+    private var nextGauge: Double
     package private(set) var fieldPayloadBytes = 0
     private var resumeCheckpoint = false
     private let interval: Double
@@ -78,7 +84,16 @@ public struct AssemblyReplay: Sendable {
         let target = min(160, max(4, (96 * 1024 * 1024) / estimate))
         interval = sim.scene.duration / Double(target)
         next = interval
+        gaugeInterval = sim.scene.duration / 2000
+        nextGauge = 0
         append(run)
+        sampleGauges(sim)
+    }
+
+    private mutating func sampleGauges(_ sim: AssemblySimulation) {
+        guard let count = sim.scene.gauges?.count, count > 0, sim.time >= nextGauge else { return }
+        gaugeTrack.append((sim.time, (0..<count).map(sim.gaugeReading)))
+        nextGauge = (floor(sim.time / gaugeInterval) + 1) * gaugeInterval
     }
 
     public mutating func record(_ run: AssemblyRun) {
@@ -113,6 +128,7 @@ public struct AssemblyReplay: Sendable {
                 return event.lastTime == sim.time && !event.onExposedFace
             }
         }
+        sampleGauges(sim)
         if sim.time >= next {
             next = (floor(sim.time / interval) + 1) * interval
             if next <= sim.time { next += interval }

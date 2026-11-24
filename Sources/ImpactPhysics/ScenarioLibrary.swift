@@ -401,7 +401,9 @@ public enum LabScenario: String, CaseIterable, Identifiable, Sendable {
         let scale = 31.6227766 / specimen.material.waveSpeed
         func average(_ run: Case, gauge: Int, _ range: ClosedRange<Double>) -> Double? {
             let window = (range.lowerBound * scale)...(range.upperBound * scale)
-            let values = run.replay.frames.filter { window.contains($0.time) }.map { $0.gauges[gauge].velocity.x }
+            // The fine gauge track, so breakable (fracture-on) runs, which keep fewer field frames,
+            // average over the same number of samples as permanent ones.
+            let values = run.replay.gaugeTrack.filter { window.contains($0.time) }.map { $0.readings[gauge].velocity.x }
             return values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
         }
         guard let incident = average(control, gauge: 0, 0.008...0.009), abs(incident) > 0,

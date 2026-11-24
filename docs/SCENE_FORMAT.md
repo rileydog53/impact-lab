@@ -63,7 +63,7 @@ The timestep is not a setting. The solver chooses the largest stable step from t
 | `fracture` (real units) | `{ "strength": 3.1e8, "energy": 10877 }`: strength in pascals, energy in J/m² up to 1000000, both required. Allowed on library metal profiles. Optional `energySource` `{status, citation, url, caution}` records where an estimated energy came from. Files that use `strengthFraction` behave exactly as before. | off |
 | `notch` | V-notch on a block's local bottom edge: `{ "depthFraction": 0.2, "widthFraction": 0.2, "centerFraction": 0 }` | none |
 | `support` | `fixed` (rigid bench, floor, roller or fixture: never moves or deforms, ignores gravity, its material sets only contact stiffness) or `clampLeft`, `clampRight`, `clampBottom`, `clampTop` (that local edge is held, the rest deforms). Supported bodies start at rest and cannot use fracture; fixed supports are elastic and may be up to 1.0 m wide. | free |
-| `bondedLayer` | Permanently bonded second (and `third`) material along the block: `{ "interfaceFraction": 0.5, "material": …, "third": { "interfaceFraction": 0.75, "material": … } }` | none |
+| `bondedLayer` | Bonded second (and `third`) material along the block: `{ "interfaceFraction": 0.5, "material": …, "third": { "interfaceFraction": 0.75, "material": … } }`. Each layer may also take `plasticity`, `fracture` and `bond`, see [Layered blocks](#layered-blocks). | none |
 
 Bodies must start at least slightly apart. If two bodies overlap or touch, the scene still opens so you can fix it in the workshop, but **Calculate** explains the problem and stays disabled until you do.
 
@@ -88,6 +88,28 @@ There are three ways to write a material:
 Each table point is `[equivalent plastic strain, flow stress in Pa]`. Strains start at 0 and increase up to 1. Stresses never decrease. Without a table, `yieldFraction` (0.010–0.035 × E) and `hardeningFraction` (0.25–0.45 × E) give linear hardening.
 
 Custom profiles you save in the app's Material Library live in the app's own library and cannot be named in a file. Assign one in the app, then **Save**: the file then holds its full values and provenance.
+
+## Layered blocks
+
+A block with `bondedLayer` is one body whose layers share nodes along each interface. The first layer is the body's own `material`, `plasticity` and `fracture`. Each further layer can carry its own settings:
+
+```json
+"fracture": { "strength": 3.1e8, "energy": 10877 },
+"bondedLayer": {
+  "interfaceFraction": 0.5,
+  "material": { "young": 3e9, "density": 1200, "poisson": 0.35 },
+  "plasticity": { "response": "Elastoplastic", "yieldFraction": 0.02, "hardeningFraction": 0.3 },
+  "fracture": { "strengthFraction": 0.03, "energy": 7 },
+  "bond": { "strengthFraction": 0.01, "energy": 2 },
+  "third": { "interfaceFraction": 0.75, "material": "aluminum-6061-t6" }
+}
+```
+
+- `plasticity` is J2 plasticity for that layer only (same keys as a body's). A reference profile named as a layer `material` stays elastic unless it says `"elasticOnly": false`, which keeps older files unchanged.
+- `fracture` is that layer's own crack strength and fracture energy (same keys as a body's, without `meshPattern`). Leave it out and that layer never cracks.
+- `bond` is the interface between this layer and the one before it, usually weaker than either layer, so the layers can come apart (delaminate). A `strengthFraction` bond is measured against the softer side's Young's modulus. Leave it out and the bond never fails.
+- Layer `fracture` and `bond` need fracture switched on for the body (`parts[].fracture`). A layered block cannot also have a `notch`, and a `fixed` support must be elastic.
+- Cracks open between existing triangles with a linear-softening cohesive law (Camacho and Ortiz 1996; Ortiz and Pandolfi 1999), so crack paths follow the mesh. The bond and layer values are illustrative unless you give sourced real-unit numbers.
 
 ## Connections and gauges
 

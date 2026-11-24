@@ -117,7 +117,7 @@ func layeredBodiesCheck(quick: Bool) throws {
         let reading = simulation.fractureReading(0)!
         let expected = bond.energy * bar.size.y
         let ratio = simulation.energies.fracture / expected
-        print(String(format: "  3. Bar pulled apart at %.0f/s: %d pieces at %@, bond crack %.2f mm of %.2f mm, %d failed faces (%d on the bond), fracture energy %.5f J/m vs G·h %.5f J/m (ratio %.4f, criterion 0.98–1.02), max energy error %.3f%%",
+        print(String(format: "  3. Bar pulled apart at %.0f/s: %d pieces at %@, bond crack %.2f mm of %.2f mm, %d failed faces (%d on the bond), fracture energy %.5f J/m vs G·h %.5f J/m (ratio %.6f, criterion 0.98–1.02), max energy error %.5f%%",
                      rate, reading.pieces, separated.map { String(format: "%.2f ms", $0 * 1000) } ?? "never",
                      reading.bondCrackLength * 1000, bar.size.y * 1000, reading.failedEdges, reading.failedBondEdges,
                      simulation.energies.fracture, expected, ratio, 100 * worst))
@@ -254,4 +254,36 @@ func layeredBodiesCheck(quick: Bool) throws {
         }
     }
     print("Layered bodies: all checks passed")
+}
+
+/// Diagnostic only: compares the Card 7 measurement inputs for the permanent and breakable bond.
+func layeredBondProbe() throws {
+    func run(_ scene: AssemblyScene) throws -> LabScenario.Case {
+        var solver = try AssemblyRun(scene)
+        solver.measureWork(parallelFEM: true)
+        var replay = AssemblyReplay(solver)
+        while solver.step(recording: &replay) {}
+        replay.finish(solver)
+        print(String(format: "    dt %.4e frames %d", solver.simulation.dt, replay.frames.count))
+        return LabScenario.Case(scene: scene, replay: replay)
+    }
+    let scenario = LabScenario.bondedLayers
+    for shared in 0..<2 {
+        var settings = scenario.defaultSettings
+        settings.shared = shared
+        settings.second = 0
+        print("shared \(shared)")
+        let control = try run(scenario.scene(settings, case: 0))
+        let variant = try run(scenario.scene(settings, case: 1))
+        let scale = 31.6227766 / variant.scene.parts[1].material.waveSpeed
+        for (name, c) in [("control", control), ("variant", variant)] {
+            for gauge in 0..<2 {
+                let series = c.replay.frames.filter { $0.time >= 0.004 * scale && $0.time <= 0.016 * scale }
+                    .map { String(format: "%.3f:%.4f", $0.time / scale * 1000, $0.gauges[gauge].velocity.x) }
+                print("  \(name) g\(gauge) " + series.joined(separator: " "))
+            }
+        }
+        let b = LabScenario.measureBond(control: control, variant: variant)!
+        print(String(format: "  R %.4f T %.4f", b.reflection, b.transmission))
+    }
 }
