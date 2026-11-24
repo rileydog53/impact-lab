@@ -288,7 +288,7 @@ struct AssemblyStudyView: View {
         let dialog = NSSavePanel()
         dialog.allowedContentTypes = [.commaSeparatedText]
         dialog.nameFieldStringValue = "Impact Lab Study.csv"
-        guard dialog.runModal() == .OK, let url = dialog.url else { return }
+        guard let url = ExperimentDirectory.run(dialog) else { return }
         do {
             try study.exportCSV(to: url)
             let pulses = url.deletingPathExtension().lastPathComponent + " pulses.csv"

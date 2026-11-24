@@ -103,7 +103,10 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     }
 
     public static let velocityRange = -150.0...150.0
+    /// Size range at the standard mesh, which is also the range every earlier scene was saved under.
+    /// A finer mesh lowers the minimum (see `minimumSize(resolution:)`); it never raises it.
     public static let sizeRange = 0.025...0.30
+    public static let maximumSize = 0.30
     /// A fixed support is rigid and skips the element calculation, so it may be as wide as a bench.
     public static let fixtureWidthRange = 0.025...1.0
 
@@ -147,13 +150,16 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         return nil
     }
 
-    var isValid: Bool {
-        widthRange.contains(size.x) && Self.sizeRange.contains(size.y)
+    var isValid: Bool { isValid(resolution: .standard) }
+
+    /// `resolution` is the mesh this body is actually calculated on (its own override, else the assembly mesh).
+    func isValid(resolution: AssemblyScene.Resolution) -> Bool {
+        widthRange(resolution: resolution).contains(size.x) && sizeRange(resolution: resolution).contains(size.y)
             && supportConflict == nil
             && (-1...1).contains(center.x) && (-1...1).contains(center.y)
             && (-360...360).contains(angle)
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
-            && (shape != .enclosure || (0.005...0.4 * min(size.x, size.y)).contains(wall))
+            && (shape != .enclosure || (0.4 * min(size.x, size.y) >= 0.005 && (0.005...0.4 * min(size.x, size.y)).contains(wall)))
             && material.isValidForAssembly
             && plasticity.isValid && (fracture.map { shape != .round && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
             && !name.isEmpty && name.count <= 48
@@ -372,6 +378,14 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
         let groups = groups ?? []
         let members = groups.flatMap(\.members)
         let order = bodyOrder ?? []
+        // Name the cause when a body is too small only for the mesh it is on, not for the finest mesh.
+        for part in parts {
+            let mesh = part.refinement ?? resolution
+            let limit = part.sizeRange(resolution: mesh).lowerBound
+            if min(part.size.x, part.size.y) < limit - 1e-12, part.isValid(resolution: .x7) {
+                throw AssemblyError.bodyTooSmall(part.name, minimum: limit * 1000, mesh: mesh.label)
+            }
+        }
         guard assemblyVersion == 1, parts.count <= Self.maximumParts, connections.count <= Self.maximumConnections,
               ids.count == parts.count, Set(connections.map(\.id)).count == connections.count,
               Set(order).count == order.count, order.allSatisfy(ids.contains),
@@ -383,7 +397,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
               (gauges?.count ?? 0) <= AssemblyGauge.limit,
               Set(gauges?.map(\.id) ?? []).count == (gauges?.count ?? 0),
               gauges?.allSatisfy({ $0.isValid && ids.contains($0.body) }) ?? true,
-              parts.allSatisfy(\.isValid), connections.allSatisfy({ $0.isValid && ids.contains($0.first) && ids.contains($0.second) })
+              parts.allSatisfy({ $0.isValid(resolution: $0.refinement ?? resolution) }), connections.allSatisfy({ $0.isValid && ids.contains($0.first) && ids.contains($0.second) })
         else { throw AssemblyError.invalidSettings }
     }
 
@@ -405,6 +419,7 @@ enum AssemblyError: LocalizedError {
     case coincidentAnchors(Int)
     case gaugeOutsideMaterial(String)
     case preloadTooLarge(Int)
+    case bodyTooSmall(String, minimum: Double, mesh: String)
 
     var errorDescription: String? {
         switch self {
@@ -412,6 +427,7 @@ enum AssemblyError: LocalizedError {
         case .overlap(let a, let b): "\(a) and \(b) overlap or touch at the start. Leave a small clearance."
         case .coincidentAnchors(let index): "Connection \(index + 1) needs at least 0.5 mm between its start anchors."
         case .gaugeOutsideMaterial(let name): "\(name) must be inside its body's reference material."
+        case .bodyTooSmall(let name, let minimum, let mesh): "\(name) is smaller than \(String(format: "%g", minimum)) mm, the smallest body the \(mesh) mesh can resolve. Make it larger or choose a finer mesh."
         case .preloadTooLarge(let index): "Connection \(index + 1): the preload compression is longer than the spring itself. The rest length must stay above 0.5 mm."
         }
     }

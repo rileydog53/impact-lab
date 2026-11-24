@@ -287,6 +287,15 @@ public struct AssemblySimulation: Sendable {
         steps[index].history?.current.map(\.equivalentStrain) ?? []
     }
     public func stress(_ index: Int) -> [Double] { steps[index].equivalentCauchyStress() }
+    /// A connection's length at time zero and the length at which it carries no force, in metres. Start minus
+    /// rest is the preload stretch. nil for an unknown connection. For a band of links this is the centre link.
+    public func linkLengths(_ connection: Int) -> (start: Double, rest: Double)? {
+        let mine = links.filter { $0.connection == connection }
+        guard let link = mine.isEmpty ? nil : mine[mine.count / 2],
+              scene.connections.indices.contains(connection) else { return nil }
+        return (link.restLength + (scene.connections[connection].preload ?? 0), link.restLength)
+    }
+
     public func fractureReading(_ index: Int) -> MaterialFractureReading? { fractures[index]?.reading }
     public func crackFaces(_ index: Int) -> [CrackFace] {
         fractures[index]?.crackFaces(position: steps[index].body.position) ?? []

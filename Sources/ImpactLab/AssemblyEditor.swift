@@ -134,11 +134,13 @@ struct AssemblyEditor: View {
                 case .block: part.bondedLayer == nil ? "square.fill" : "square.3.layers.3d"
                 }
                 row(part.name + (part.support == nil ? "" : part.support == .fixed ? " · fixed" : " · clamped")
-                    + (part.refinement == nil ? "" : " · own mesh"), icon: icon, color: assemblyColor(index),
+                    + (part.refinement == nil ? "" : " · own mesh"), tag: part.fractureStatus, icon: icon, color: assemblyColor(index),
                     selected: experiment.selectedParts.contains(part.id)) {
                     experiment.select(part.id, adding: multiSelect || (NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false))
                 }
-                .help(part.refinement == nil ? part.name : "\(part.name) uses its own mesh (\(part.refinement!.label)) instead of the assembly mesh.")
+                .help((part.refinement == nil ? part.name : "\(part.name) uses its own mesh (\(part.refinement!.label)) instead of the assembly mesh.")
+                      + "\n" + { if case let .unavailable(reason) = part.fractureStatus { return "Fracture not available: " + reason }
+                                  return part.fracture == nil ? "Material fracture is off. Turn it on under Material." : "Material fracture is on." }())
             }
             ForEach(Array((experiment.scene.groups ?? []).enumerated()), id: \.element.id) { number, group in
                 row("Group \(number + 1) · \(group.members.count) bodies", icon: "square.on.square",
@@ -185,8 +187,15 @@ struct AssemblyEditor: View {
             Text("Workshop limits").font(.headline)
             Text("Bodies may translate and rotate. A body can be a fixed support (a rigid bench, floor or roller that never moves) or have one edge clamped. A deformable support is an ordinary free block that can move and deform under load. Pinned points, rigid joints and partial constraints are unavailable.")
             Text("Gravity can be switched on in Simulation settings; it pulls every free body downward (−Y). No other applied loads, pressures or friction exist; contact is frictionless.")
-            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies and bonded blocks do not support material fracture, and supported bodies cannot fracture yet.")
-            Text("Round bodies use an elliptical mesh. Each local dimension can be 25–300 mm (a fixed support up to 1,000 mm wide). The 25 mm minimum keeps at least three triangles across a body at the standard mesh; the 300 mm maximum is a workshop limit that keeps triangle counts and run times manageable, not a physical limit. Imported outlines, arbitrary cracks, and nested groups are unavailable.")
+            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies, bonded blocks and supported bodies cannot fracture; each body's list entry says \"fracture on\", \"fracture off\" or \"fracture n/a\", and hovering explains why.")
+            Text("Round bodies use an elliptical mesh. Imported outlines, arbitrary cracks, and nested groups are unavailable.")
+            Text("Limits and their causes").font(.subheadline.weight(.semibold))
+            ForEach(AssemblyScene.limits, id: \.name) { limit in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(limit.name): \(limit.value)").fontWeight(.medium)
+                    Text("\(limit.kind.rawValue). \(limit.cause)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Text("Everything is two-dimensional plane strain: forces and energies are per metre of depth.")
             Text("Duplicates retain geometry, materials, initial motion, and links within the copied selection. External links and gauges stay with their original bodies.")
         }
@@ -219,11 +228,20 @@ struct AssemblyEditor: View {
         experiment.scene.parts.first { $0.id == id }?.name ?? "Body"
     }
 
-    private func row(_ title: String, icon: String, color: Color, selected: Bool,
+    private func row(_ title: String, tag: AssemblyPart.FractureStatus? = nil, icon: String, color: Color, selected: Bool,
                      select: @escaping () -> Void) -> some View {
         Button(action: select) {
             Label {
-                Text(title).lineLimit(1).foregroundStyle(assemblyInk)
+                HStack(spacing: 6) {
+                    Text(title).lineLimit(1).foregroundStyle(assemblyInk)
+                    Spacer(minLength: 4)
+                    if let tag {
+                        Text(tag.tag).font(.caption2.weight(.semibold)).lineLimit(1).fixedSize()
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .foregroundStyle(tag == .on ? assemblyAmber : Color.secondary)
+                            .background((tag == .on ? assemblyAmber : Color.secondary).opacity(0.16), in: Capsule())
+                    }
+                }
             } icon: {
                 Image(systemName: icon).foregroundStyle(color)
             }
@@ -236,8 +254,21 @@ struct AssemblyEditor: View {
         .buttonStyle(.plain)
     }
 
+    private func sizeHelp(_ part: AssemblyPart, mesh: AssemblyScene.Resolution) -> String {
+        let minimum = String(format: "%.3g", AssemblyPart.minimumSize(resolution: mesh) * 1000)
+        var text = "Sizes \(minimum)–300 mm"
+        if part.support == .fixed {
+            text += " (a fixed support may be up to 1,000 mm wide because it is never calculated as a deforming body)"
+        }
+        text += ". Minimum (numerical): a body must span about three elements of the \(mesh.label) mesh, so a finer mesh allows a smaller body and the standard mesh needs 25 mm."
+        text += " Maximum (workshop limit, not physical): keeps triangle counts and run times manageable. Typed values outside the range are set to the nearest limit."
+        if part.shape == .enclosure { text += " Walls are at least 5 mm (two element layers) and at most 40% of the smaller side." }
+        return text
+    }
+
     private func bodyInspector(_ part: AssemblyPart) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let mesh = part.refinement ?? experiment.scene.resolution
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(part.name).font(.headline).lineLimit(1)
                 Spacer()
@@ -248,7 +279,7 @@ struct AssemblyEditor: View {
                 .disabled(!experiment.canEdit)
                 .help("Remove this body and its connections")
             }
-            Text("\(part.shape.rawValue) · \(materialDescription(part))")
+            Text("\(part.shape.rawValue) · \(materialDescription(part)) · \(part.fractureStatus.tag)")
                 .font(.caption).foregroundStyle(.secondary)
             AssemblyBodyName(part: part, experiment: experiment)
             DisclosureGroup("Geometry", isExpanded: $bodySettings) {
@@ -258,22 +289,19 @@ struct AssemblyEditor: View {
                         bodyNumber("Center Y (mm)", part, \.center.y, -1...1, scale: 1000)
                     }
                     GridRow {
-                        bodyNumber(part.shape == .round ? "Local X diameter (mm)" : "Local width (mm)", part, \.size.x, part.widthRange, scale: 1000)
-                        bodyNumber(part.shape == .round ? "Local Y diameter (mm)" : "Local height (mm)", part, \.size.y, AssemblyPart.sizeRange, scale: 1000)
+                        bodyNumber(part.shape == .round ? "Local X diameter (mm)" : "Local width (mm)", part, \.size.x, part.widthRange(resolution: mesh), scale: 1000)
+                        bodyNumber(part.shape == .round ? "Local Y diameter (mm)" : "Local height (mm)", part, \.size.y, part.sizeRange(resolution: mesh), scale: 1000)
                     }
                     GridRow {
                         bodyNumber("Rotation (°)", part, \.angle, -360...360)
                             .help("Counterclockwise angle from the assembly X axis")
                         if part.shape == .enclosure {
-                            bodyNumber("Wall thickness (mm)", part, \.wall, 0.005...0.4 * min(part.size.x, part.size.y), scale: 1000)
+                            bodyNumber("Wall thickness (mm)", part, \.wall, 0.005...max(0.005, 0.4 * min(part.size.x, part.size.y)), scale: 1000)
                         }
                     }
                 }.padding(.top, 5)
-                Text(part.support == .fixed
-                     ? "Sizes 25–300 mm; a fixed support may be up to 1,000 mm wide because it is never calculated as a deforming body. Typed values outside the range are set to the nearest limit."
-                     : "Sizes 25–300 mm. The minimum keeps at least three triangles across the body at the standard mesh; the maximum is a workshop limit on triangle count and run time. Typed values outside the range are set to the nearest limit."
-                     + (part.shape == .enclosure ? " Walls are at least 5 mm (two element layers) and at most 40% of the smaller side." : ""))
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(sizeHelp(part, mesh: mesh))
+                       .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if part.shape == .block && part.bondedLayer == nil {
                     notchEditor(part).disabled(!experiment.canEdit)
                 } else if part.shape == .block {
@@ -311,6 +339,10 @@ struct AssemblyEditor: View {
                      : "Overrides the assembly mesh. This body keeps \(part.refinement!.label) even when the assembly mesh changes. Reset all overrides in Simulation settings.")
                     .font(.caption).foregroundStyle(part.refinement == nil ? Color.secondary : assemblyAmber)
                     .fixedSize(horizontal: false, vertical: true)
+                if let advisory = experiment.scene.bendingAdvisory(for: part) {
+                    Label(advisory, systemImage: "info.circle").font(.caption).foregroundStyle(assemblyAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let index = experiment.selectedIndex {
                     let quality = experiment.meshQuality[index]
                     Text("\(quality.triangleCount) triangles · Minimum shape quality \(quality.minimum, specifier: "%.2f")")
@@ -389,10 +421,10 @@ struct AssemblyEditor: View {
                             if let fracture = part.fracture { fractureControls(part, fracture) }
                         }.disabled(!experiment.canEdit)
                     } else if part.material.provenance != nil {
-                        Text("The selected metal profile supports elastic and J2 response. Bulk fracture is unavailable.")
+                        Text("Material fracture is unavailable here: the selected profile has no sourced fracture estimate for this model. Choose an illustrative material to set fracture values yourself.")
                             .font(.caption).foregroundStyle(.secondary)
-                    } else if part.shape == .round {
-                        Text("Material fracture is unavailable for round bodies.")
+                    } else if let reason = part.fractureUnavailableReason {
+                        Text("Material fracture is unavailable: \(reason)")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if part.bondedLayer == nil {
                         VStack(alignment: .leading, spacing: 7) {
@@ -402,7 +434,7 @@ struct AssemblyEditor: View {
                             if let fracture = part.fracture { fractureControls(part, fracture) }
                         }.disabled(!experiment.canEdit)
                     } else {
-                        Text("Bonded layers require elastic material and use permanent bonds.")
+                        Text("Material fracture is unavailable: bonded-layer blocks are elastic only and joined by permanent bonds. Remove the bonded layers to allow fracture, or join two bodies with a Breakable link.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if part.shape == .block { bondedLayerEditor(part) }
@@ -620,6 +652,21 @@ struct AssemblyEditor: View {
         }
     }
 
+    /// Starting length, rest length, preload and stiffness in plain words, with a to-scale picture.
+    private func springSummary(_ link: AssemblyConnection, start: Double, rest: Double) -> some View {
+        let preload = link.preload ?? 0
+        let state = preload > 0 ? "starts stretched, pulling the bodies together"
+            : preload < 0 ? "starts squeezed, pushing the bodies apart" : "starts relaxed, so it carries no force until the bodies move"
+        return VStack(alignment: .leading, spacing: 5) {
+            SpringLengthHint(start: start, rest: rest)
+            Text("Starting length \(start * 1000, specifier: "%.3g") mm: the distance between the two anchors at time zero, set by where the bodies and anchors are.")
+            Text("Rest length \(rest * 1000, specifier: "%.3g") mm: the length at which the spring pulls or pushes with zero force. Rest length = starting length − preload.")
+            Text("Preload \(preload * 1000, specifier: "%.3g") mm: the spring \(state). Starting force \(abs(link.stiffness * preload), specifier: "%.3g") N/m, stored energy \(0.5 * link.stiffness * preload * preload, specifier: "%.3g") J/m.")
+            Text("Stiffness k \(link.stiffness / 1000, specifier: "%.3g") kN/m²: force = k × (current length − rest length).")
+        }
+        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+
     private func connectionInspector(_ link: AssemblyConnection) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
@@ -642,7 +689,8 @@ struct AssemblyEditor: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                 GridRow {
-                    linkNumber("Stiffness (kN/m²)", link, \.stiffness, 500...250_000, scale: 0.001)
+                    linkNumber(link.kind == .spring ? "Stiffness k (kN/m²)" : "Stiffness (kN/m²)", link, \.stiffness, 500...250_000, scale: 0.001)
+                        .help("Force per unit of stretch, per metre of depth (2-D plane strain). Doubling it doubles the force at the same stretch.")
                     if link.kind == .cohesive {
                         linkNumber("Failure extension (mm)", link, \.criticalExtension, 0.0005...0.04, scale: 1000)
                     }
@@ -658,16 +706,16 @@ struct AssemblyEditor: View {
                 GridRow {
                     linkNumber("Link band height (%)", link, \.span, 0...1.9, scale: 50)
                     if link.kind == .spring {
-                        numeric("Preload stretch (mm)", value: link.preload ?? 0, range: AssemblyConnection.preloadRange, scale: 1000) { value in
+                        numeric("Preload (mm, + stretched)", value: link.preload ?? 0, range: AssemblyConnection.preloadRange, scale: 1000) { value in
                             experiment.updateConnection(link.id, action: "Set Preload") { $0.preload = value == 0 ? nil : value }
                         }
                         .help("Positive: the spring starts stretched and pulls the bodies together. Negative: it starts compressed and pushes them apart. 0: unloaded.")
                     }
                 }
             }
-            if link.kind == .spring, let preload = link.preload, preload != 0 {
-                Text("Starting force \(abs(link.stiffness * preload), specifier: "%.3g") N/m (\(preload > 0 ? "tension" : "compression")), stored energy \(0.5 * link.stiffness * preload * preload, specifier: "%.3g") J/m. Rest length = starting distance \(preload > 0 ? "−" : "+") \(abs(preload) * 1000, specifier: "%.3g") mm.")
-                    .font(.caption.monospacedDigit()).foregroundStyle(assemblyMint).fixedSize(horizontal: false, vertical: true)
+            if link.kind == .spring, let index = experiment.scene.connections.firstIndex(where: { $0.id == link.id }),
+               let lengths = experiment.simulation.linkLengths(index) {
+                springSummary(link, start: lengths.start, rest: lengths.rest)
             }
             if let index = experiment.scene.connections.firstIndex(where: { $0.id == link.id }) {
                 let readings = experiment.displayedLinks.filter { $0.connection == index }
@@ -871,5 +919,43 @@ private struct AssemblyBodyName: View {
         let name = trimmed.isEmpty ? part.name : String(trimmed.prefix(48))
         draft = name
         experiment.updatePart(part.id, action: "Rename Body") { $0.name = name }
+    }
+}
+
+
+/// Two to-scale bars: the starting length against the force-free rest length. The amber part is the preload.
+private struct SpringLengthHint: View {
+    let start, rest: Double
+
+    var body: some View {
+        Canvas { context, size in
+            let longest = max(start, rest, 1e-9)
+            let scale = (size.width - 2) / longest
+            func bar(_ y: CGFloat, _ length: Double, _ color: Color) {
+                let end = 1 + length * scale
+                var line = Path()
+                line.move(to: CGPoint(x: 1, y: y)); line.addLine(to: CGPoint(x: end, y: y))
+                context.stroke(line, with: .color(color), lineWidth: 3)
+                for x in [1, end] {
+                    var tick = Path()
+                    tick.move(to: CGPoint(x: x, y: y - 5)); tick.addLine(to: CGPoint(x: x, y: y + 5))
+                    context.stroke(tick, with: .color(color), lineWidth: 2)
+                }
+            }
+            bar(8, start, assemblyMint)
+            bar(24, rest, assemblyInk.opacity(0.8))
+            if abs(start - rest) > 1e-9 {
+                var gap = Path()
+                gap.move(to: CGPoint(x: 1 + min(start, rest) * scale, y: 16))
+                gap.addLine(to: CGPoint(x: 1 + max(start, rest) * scale, y: 16))
+                context.stroke(gap, with: .color(assemblyAmber), style: StrokeStyle(lineWidth: 3, dash: [3, 2]))
+            }
+        }
+        .frame(height: 32)
+        .overlay(alignment: .topTrailing) {
+            Text("top: starting · bottom: rest · amber: preload").font(.caption2).foregroundStyle(.secondary).offset(y: 30)
+        }
+        .padding(.bottom, 14)
+        .accessibilityLabel("Starting length \(start * 1000) millimetres, rest length \(rest * 1000) millimetres")
     }
 }
