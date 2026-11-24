@@ -61,7 +61,7 @@ public enum LabScenario: String, CaseIterable, Identifiable, Sendable {
         case .elasticContrast: "2D plane strain with elastic constants only. The prediction is the plane-strain bar speed √(E/ρ(1−ν²)). Short pulses in a 25 mm bar disperse, so expect agreement within several percent rather than exactly. Gauge timing is limited by the recorded frame spacing. The striker is about as long as it is thick, so its rebound shows the impedance trend but not the 1D formula."
         case .elasticVersusYielding: "Rate-independent J2 plasticity in plane strain, with no strain-rate or thermal effects. Real metals are stronger at high strain rates, so measured permanent strain here is not a prediction for a real part. The elastic stress estimate is one-dimensional."
         case .strainHardening: "Initial yield values are reference-backed, but every post-yield hardening curve is illustrative. Compare the trend, not the exact numbers. No strain-rate, temperature or damage effects."
-        case .bondedLayers: "Small-amplitude elastic waves with an illustrative soft material. The bond never fails. The analytic values are 1D impedance predictions, and the automatic windows assume the scenario's geometry."
+        case .bondedLayers: "Small-amplitude elastic waves with an illustrative soft material. With the permanent bond the layers share nodes and never separate; the breakable option switches on crack insertion in both layers and on the bond, set far stronger than this pulse, so it should agree with the permanent bond. The analytic values are 1D impedance predictions, and the automatic windows assume the scenario's geometry."
         case .interfaceFailure: "Illustrative elastic material with cohesive crack insertion between existing triangles. Crack paths follow the mesh and change with refinement. This is not a model of a specific real material."
         }
     }
@@ -106,8 +106,35 @@ public enum LabScenario: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    public var sharedLabel: String? { self == .elasticVersusYielding ? "Metal" : nil }
-    public var sharedOptions: [String] { self == .elasticVersusYielding ? Self.metals.map(\.name) : [] }
+    public var sharedLabel: String? {
+        switch self {
+        case .elasticVersusYielding: "Metal"
+        case .bondedLayers: "Bond"
+        default: nil
+        }
+    }
+    public var sharedOptions: [String] {
+        switch self {
+        case .elasticVersusYielding: Self.metals.map(\.name)
+        case .bondedLayers: ["Permanent (shared nodes)", "Breakable layers (fracture on, strong bond)"]
+        default: []
+        }
+    }
+
+    /// The strong but breakable bond used by the bonded-layer scenario's second option: fracture is on
+    /// in both layers and on the bond, all far stronger than the 0.1 m/s pulse (about 1.6 kPa), so the
+    /// result should match the permanent bond. Strengths are fractions of each side's Young's modulus.
+    public static func breakableBondedLayers(_ part: inout AssemblyPart) {
+        var bulk = MaterialFractureSettings()
+        bulk.strengthFraction = 0.08
+        bulk.energy = 50
+        var bond = MaterialFractureSettings()
+        bond.strengthFraction = 0.04
+        bond.energy = 20
+        part.fracture = bulk
+        part.bondedLayer?.fracture = bulk
+        part.bondedLayer?.bond = bond
+    }
 
     public var speedRange: ClosedRange<Double> {
         switch self {
@@ -166,6 +193,7 @@ public enum LabScenario: String, CaseIterable, Identifiable, Sendable {
             scene.parts[1].bondedLayer?.material = Material(young: soft.young * ratio, density: soft.density * ratio,
                                                             poisson: soft.poisson)
             scene.parts[0].velocity.x = settings.speed
+            if settings.shared == 1 { Self.breakableBondedLayers(&scene.parts[1]) }
             return scene
         case .interfaceFailure:
             var scene = AssemblyScene.bendingFractureExample()

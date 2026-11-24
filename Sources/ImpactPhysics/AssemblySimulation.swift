@@ -365,15 +365,25 @@ public struct AssemblySimulation: Sendable {
 
     package init(_ scene: AssemblyScene, refinement: Int, stepLimit: Double,
                  notchDepth: Double = 0, stepScale: Double = 1, interbodyStiffnessScale: Double? = nil,
-                 insertionEnabled: Bool = true, strikerPad: StrikerPad? = nil) throws {
+                 insertionEnabled: Bool = true, strikerPad: StrikerPad? = nil,
+                 perElementPlasticity: Bool = false,
+                 initialVelocity: ((_ part: Int, _ reference: Point) -> Point)? = nil) throws {
         try scene.validate()
         precondition(refinement > 0 && stepLimit > 0 && stepScale > 0 && notchDepth >= 0)
         self.scene = scene
-        let bodies = scene.parts.enumerated().map { i, part in
-            part.makeBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
+        let made = scene.parts.enumerated().map { i, part in
+            part.makeLayeredBody(refinement: part.refinement?.rawValue ?? refinement, notchDepth: i == 0 ? notchDepth : 0)
         }
-        let fractures = zip(bodies, scene.parts).map { body, part in
-            part.fracture.map { MaterialFracture(body: body, settings: $0) }
+        var bodies = made.map(\.body)
+        // Verification only: a prescribed starting velocity field in each body's reference frame
+        // (for example a uniform stretch that pulls a bar apart). Scenes never set this.
+        if let initialVelocity {
+            for i in bodies.indices {
+                bodies[i].velocity = bodies[i].mesh.reference.map { initialVelocity(i, $0) }
+            }
+        }
+        let fractures = zip(made, scene.parts).map { made, part in
+            part.fracture.map { MaterialFracture(body: made.body, settings: $0, layers: part.fractureLayers(layers: made.layers)) }
         }
         self.fractures = fractures
         contactWorkspaces = Array(repeating: TriangleContact.Workspace(), count: bodies.count)
@@ -383,9 +393,14 @@ public struct AssemblySimulation: Sendable {
         self.strikerPad = strikerPad
         let surfaces = bodies.map(ContactSurface.init)
         self.surfaces = surfaces
-        steps = zip(bodies, scene.parts).map { body, part in
-            var step = BodyStep(body, j2: part.plasticity.response == .elastoplastic ? part.plasticity.model(for: body.material) : nil,
-                                recordsTraction: part.fracture != nil)
+        steps = zip(zip(bodies, made), scene.parts).map { pair, part in
+            let (body, made) = pair
+            let elementJ2 = part.elementPlasticity(layers: made.layers)
+                ?? (perElementPlasticity && part.plasticity.response == .elastoplastic
+                    ? Array(repeating: part.plasticity.model(for: body.material), count: body.mesh.elements.count) : nil)
+            var step = BodyStep(body, j2: elementJ2 == nil && part.plasticity.response == .elastoplastic
+                                    ? part.plasticity.model(for: body.material) : nil,
+                                recordsTraction: part.fracture != nil, elementJ2: elementJ2)
             if let support = part.support {
                 step.fixture = support.isFixture
                 if !support.isFixture { step.clamped = part.clampedNodes(body, support) }
@@ -577,7 +592,7 @@ public struct AssemblySimulation: Sendable {
             let state = tree.state(mesh: body.mesh, position: steps[i].nextPosition)
             let parts = SIMD2(repeating: i)
             var force = steps[i].nextApplied
-            tree.visit(state, stiffness: Self.trianglePenalty * body.material.young, workspace: &contactWorkspaces[i]) { hit in
+            tree.visit(state, stiffness: Self.trianglePenalty * fracture.contactYoung, workspace: &contactWorkspaces[i]) { hit in
                 let left = state.elements[hit.elements.x].nodes, right = state.elements[hit.elements.y].nodes
                 for j in 0..<3 {
                     force[left[j]] += hit.force[j]
@@ -834,7 +849,7 @@ public struct AssemblySimulation: Sendable {
                         let tree = old.contactTree
                         let oldState = tree.state(mesh: mesh, position: position)
                         let newState = tree.state(mesh: steps[i].body.mesh, position: newPosition)
-                        let stiffness = Self.trianglePenalty * steps[i].body.material.young
+                        let stiffness = Self.trianglePenalty * old.contactYoung
                         var oldContact = 0.0, newContact = 0.0
                         tree.visit(oldState, stiffness: stiffness) { oldContact += $0.energy }
                         tree.visit(newState, stiffness: stiffness) { newContact += $0.energy }

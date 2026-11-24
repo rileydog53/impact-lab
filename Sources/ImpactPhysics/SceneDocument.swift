@@ -333,26 +333,7 @@ enum SceneDocument {
                 out["plasticity"] = plasticity ?? ["response": "Elastic", "yieldFraction": 0.016, "hardeningFraction": 0.32]
             }
             if let fracture = object(part["fracture"], path + ".fracture") {
-                keys(fracture, path + ".fracture", allowed: ["strengthFraction", "strength", "energy", "energySource", "meshPattern"])
-                var result: Object = ["strengthFraction": number(fracture["strengthFraction"], path + ".fracture.strengthFraction") ?? 0.030,
-                                      "energy": number(fracture["energy"], path + ".fracture.energy") ?? 7.0]
-                if let strength = fracture["strength"] {
-                    if fracture["strengthFraction"] != nil {
-                        fail(path + ".fracture", "give strength (Pa) or strengthFraction, not both")
-                    }
-                    if fracture["energy"] == nil {
-                        fail(path + ".fracture.energy", "is required with strength: no default is assumed for real-unit fracture energy (J/m²)")
-                    }
-                    result["strength"] = number(strength, path + ".fracture.strength")
-                }
-                if let source = object(fracture["energySource"], path + ".fracture.energySource") {
-                    keys(source, path + ".fracture.energySource", allowed: ["status", "citation", "url", "caution"])
-                    result["energySource"] = source
-                }
-                if let pattern = fracture["meshPattern"] {
-                    result["meshPattern"] = choice(pattern, path + ".fracture.meshPattern", ["aligned": "Aligned", "staggered": "Staggered"])
-                }
-                out["fracture"] = result
+                out["fracture"] = self.fracture(fracture, path + ".fracture", allowsPattern: true)
             }
             if let refinement = part["refinement"] { out["refinement"] = resolution(refinement, path + ".refinement") }
             if let support = part["support"] {
@@ -369,19 +350,73 @@ enum SceneDocument {
             }
             if let layer = object(part["bondedLayer"], path + ".bondedLayer") {
                 let layerPath = path + ".bondedLayer"
-                keys(layer, layerPath, allowed: ["interfaceFraction", "material", "third"])
-                var result: Object = ["interfaceFraction": number(layer["interfaceFraction"], layerPath + ".interfaceFraction") ?? 0.5,
-                                      "material": layer["material"] == nil
-                                        ? ["young": 2e6, "density": 2000, "poisson": 0]
-                                        : self.material(layer["material"], layerPath + ".material", allowPlastic: false).0]
+                keys(layer, layerPath, allowed: ["interfaceFraction", "material", "third", "plasticity", "fracture", "bond"])
+                var result: Object = ["interfaceFraction": number(layer["interfaceFraction"], layerPath + ".interfaceFraction") ?? 0.5]
+                layerSettings(layer, layerPath, into: &result,
+                              defaultMaterial: ["young": 2e6, "density": 2000, "poisson": 0])
                 if let third = object(layer["third"], layerPath + ".third") {
-                    keys(third, layerPath + ".third", allowed: ["interfaceFraction", "material"])
-                    result["third"] = ["interfaceFraction": number(third["interfaceFraction"], layerPath + ".third.interfaceFraction") ?? 0.75,
-                                       "material": self.material(third["material"], layerPath + ".third.material", allowPlastic: false).0]
+                    keys(third, layerPath + ".third", allowed: ["interfaceFraction", "material", "plasticity", "fracture", "bond"])
+                    var thirdResult: Object = ["interfaceFraction": number(third["interfaceFraction"], layerPath + ".third.interfaceFraction") ?? 0.75]
+                    layerSettings(third, layerPath + ".third", into: &thirdResult, defaultMaterial: nil)
+                    result["third"] = thirdResult
                 }
                 out["bondedLayer"] = result
             }
             return out
+        }
+
+        /// A bonded layer's material, optional plasticity, crack settings and bond settings.
+        /// A named profile in a layer gives elastic constants only, as it always has; write
+        /// `"elasticOnly": false` next to the profile name to bring the profile's plasticity too.
+        mutating func layerSettings(_ layer: Object, _ path: String, into result: inout Object, defaultMaterial: Object?) {
+            var profilePlasticity: Object?
+            if layer["material"] == nil, let defaultMaterial {
+                result["material"] = defaultMaterial
+            } else {
+                let explicitPlastic = (layer["material"] as? Object)?["elasticOnly"] as? Bool == false
+                let (material, plasticity) = self.material(layer["material"], path + ".material", allowPlastic: explicitPlastic)
+                result["material"] = material
+                if explicitPlastic { profilePlasticity = plasticity }
+            }
+            if let explicit = layer["plasticity"] {
+                if profilePlasticity != nil {
+                    fail(path + ".plasticity", "the material profile already sets plasticity; remove one of them")
+                } else {
+                    result["plasticity"] = self.plasticity(explicit, path + ".plasticity")
+                }
+            } else if let profilePlasticity {
+                result["plasticity"] = profilePlasticity
+            }
+            if let fracture = object(layer["fracture"], path + ".fracture") {
+                result["fracture"] = self.fracture(fracture, path + ".fracture", allowsPattern: false)
+            }
+            if let bond = object(layer["bond"], path + ".bond") {
+                result["bond"] = self.fracture(bond, path + ".bond", allowsPattern: false)
+            }
+        }
+
+        /// Crack settings: strength as a fraction of E or in Pa, and fracture energy in J/m².
+        mutating func fracture(_ fracture: Object, _ path: String, allowsPattern: Bool) -> Object {
+            keys(fracture, path, allowed: Set(["strengthFraction", "strength", "energy", "energySource"] + (allowsPattern ? ["meshPattern"] : [])))
+            var result: Object = ["strengthFraction": number(fracture["strengthFraction"], path + ".strengthFraction") ?? 0.030,
+                                  "energy": number(fracture["energy"], path + ".energy") ?? 7.0]
+            if let strength = fracture["strength"] {
+                if fracture["strengthFraction"] != nil {
+                    fail(path, "give strength (Pa) or strengthFraction, not both")
+                }
+                if fracture["energy"] == nil {
+                    fail(path + ".energy", "is required with strength: no default is assumed for real-unit fracture energy (J/m²)")
+                }
+                result["strength"] = number(strength, path + ".strength")
+            }
+            if let source = object(fracture["energySource"], path + ".energySource") {
+                keys(source, path + ".energySource", allowed: ["status", "citation", "url", "caution"])
+                result["energySource"] = source
+            }
+            if let pattern = fracture["meshPattern"] {
+                result["meshPattern"] = choice(pattern, path + ".meshPattern", ["aligned": "Aligned", "staggered": "Staggered"])
+            }
+            return result
         }
 
         /// Returns the material, plus plasticity when a reference profile was named.
@@ -523,22 +558,28 @@ extension AssemblyScene {
             range(part.velocity.y, AssemblyPart.velocityRange, path + ".velocity[1]", " m/s")
             if part.shape == .enclosure { range(part.wall, 0.005...max(0.005, 0.4 * min(part.size.x, part.size.y)), path + ".wall", " m") }
             material(part.material, path + ".material")
-            range(part.plasticity.yieldFraction, ImpactPlasticity.yieldRange, path + ".plasticity.yieldFraction")
-            range(part.plasticity.hardeningFraction, ImpactPlasticity.hardeningRange, path + ".plasticity.hardeningFraction")
-            if let table = part.plasticity.table, !table.isValid {
-                result.append("\(path).plasticity.table needs 2–32 points starting at strain 0, strains increasing up to 1, and stresses 1 Pa to 20 GPa that never decrease.")
-            }
-            if let fracture = part.fracture {
-                if part.shape == .round { result.append("\(path).fracture is not available for round bodies.") }
-                if part.material.provenance != nil && !fracture.usesAbsoluteStrength {
-                    result.append("\(path).fracture: a metal profile needs fracture.strength in Pa and fracture.energy in J/m² (see the profile's sourced estimate); the fraction-of-E model cannot be combined with a metal profile.")
+            func fracture(_ fracture: MaterialFractureSettings, _ path: String, metal: Bool) {
+                if metal && !fracture.usesAbsoluteStrength {
+                    result.append("\(path): a metal profile needs strength in Pa and energy in J/m² (see the profile's sourced estimate); the fraction-of-E model cannot be combined with a metal profile.")
                 }
                 if let strength = fracture.strength {
-                    range(strength, MaterialFractureSettings.absoluteStrengthRange, path + ".fracture.strength", " Pa")
+                    range(strength, MaterialFractureSettings.absoluteStrengthRange, path + ".strength", " Pa")
                 } else {
-                    range(fracture.strengthFraction, MaterialFractureSettings.strengthRange, path + ".fracture.strengthFraction")
+                    range(fracture.strengthFraction, MaterialFractureSettings.strengthRange, path + ".strengthFraction")
                 }
-                range(fracture.energy, fracture.activeEnergyRange, path + ".fracture.energy", " J/m²")
+                range(fracture.energy, fracture.activeEnergyRange, path + ".energy", " J/m²")
+            }
+            func plasticity(_ plasticity: ImpactPlasticity, _ path: String) {
+                range(plasticity.yieldFraction, ImpactPlasticity.yieldRange, path + ".yieldFraction")
+                range(plasticity.hardeningFraction, ImpactPlasticity.hardeningRange, path + ".hardeningFraction")
+                if let table = plasticity.table, !table.isValid {
+                    result.append("\(path).table needs 2–32 points starting at strain 0, strains increasing up to 1, and stresses 1 Pa to 20 GPa that never decrease.")
+                }
+            }
+            plasticity(part.plasticity, path + ".plasticity")
+            if let settings = part.fracture {
+                if part.shape == .round { result.append("\(path).fracture is not available for round bodies.") }
+                fracture(settings, path + ".fracture", metal: part.material.provenance != nil)
             }
             if let notch = part.notch {
                 if part.shape != .block { result.append("\(path).notch is available for blocks only.") }
@@ -549,16 +590,24 @@ extension AssemblyScene {
             if let layer = part.bondedLayer {
                 let layerPath = path + ".bondedLayer"
                 if part.shape != .block { result.append("\(layerPath) is available for blocks only.") }
-                if part.fracture != nil || part.notch != nil {
-                    result.append("\(layerPath) cannot be combined with fracture or a notch.")
+                if part.notch != nil {
+                    result.append("\(layerPath) cannot be combined with a notch.")
                 }
-                if part.plasticity.response != .elastic { result.append("\(layerPath) requires an elastic body (bonded regions share nodes).") }
+                if part.fracture == nil && layer.hasFractureSettings {
+                    result.append("\(layerPath): layer crack or bond settings need fracture switched on for the body (parts[].fracture).")
+                }
                 let bounds = AssemblyPart.BondedLayer.minimumFraction...(1 - AssemblyPart.BondedLayer.minimumFraction)
                 range(layer.interfaceFraction, bounds, layerPath + ".interfaceFraction")
                 material(layer.material, layerPath + ".material")
+                if let settings = layer.plasticity { plasticity(settings, layerPath + ".plasticity") }
+                if let settings = layer.fracture { fracture(settings, layerPath + ".fracture", metal: layer.material.provenance != nil) }
+                if let settings = layer.bond { fracture(settings, layerPath + ".bond", metal: false) }
                 if let third = layer.third {
                     range(third.interfaceFraction, bounds, layerPath + ".third.interfaceFraction")
                     material(third.material, layerPath + ".third.material")
+                    if let settings = third.plasticity { plasticity(settings, layerPath + ".third.plasticity") }
+                    if let settings = third.fracture { fracture(settings, layerPath + ".third.fracture", metal: third.material.provenance != nil) }
+                    if let settings = third.bond { fracture(settings, layerPath + ".third.bond", metal: false) }
                     if third.interfaceFraction - layer.interfaceFraction < AssemblyPart.BondedLayer.minimumFraction - 1e-12 {
                         result.append("\(layerPath).third.interfaceFraction must be at least 0.1 beyond the first interface.")
                     }

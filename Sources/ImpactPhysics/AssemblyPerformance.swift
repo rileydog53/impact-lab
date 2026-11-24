@@ -62,13 +62,14 @@ extension BodyStep {
     var statePayload: AssemblyStatePayload {
         let n = body.position.count
         let elements = strain.count
-        let plastic = history?.current.count ?? 0
+        let stored = history?.current.count ?? 0
+        let plastic = history?.plasticCount ?? 0
         let traction = trialPiola.count
         // Nominal live/trial numerical buffer payload before sharing or capacity,
         // excluding immutable mesh data, contact/topology and retained replay.
         let bytes = 8 * n * MemoryLayout<Point>.stride
             + 2 * elements * MemoryLayout<Double>.stride
-            + 2 * plastic * MemoryLayout<J2History>.stride
+            + 2 * stored * MemoryLayout<J2History>.stride
             + traction * MemoryLayout<ElementPiola>.stride
         return AssemblyStatePayload(elasticElements: elements - plastic, plasticElements: plastic,
                                     tractionElements: traction, bytes: bytes)
