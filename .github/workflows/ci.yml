@@ -87,6 +87,14 @@ jobs:
           done <<< "${{ matrix.cmds }}"
           cat ci-out/timings.txt >> "$GITHUB_STEP_SUMMARY"
           exit $status
+      - name: VTK export check
+        # Runs once, in the headless runner job: export one scene's raw fields and check the files.
+        if: ${{ !cancelled() && matrix.name == 'headless runner' }}
+        timeout-minutes: 15
+        run: |
+          export PATH="$PWD/.build/release:$PATH"
+          ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/vtk-metal-plate-impact --timeout 600 --vtk
+          python3 tests/vtk/check_vtk.py ci-out/headless/vtk-metal-plate-impact
       - uses: actions/upload-artifact@v4
         if: always()
         with:
