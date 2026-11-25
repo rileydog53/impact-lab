@@ -343,6 +343,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--locking") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--bend-rig") {
+    try bendRigCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--taylor-trend") {
     try taylorTrendCheck()
     exit(EXIT_SUCCESS)

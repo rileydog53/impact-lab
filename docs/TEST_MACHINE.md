@@ -66,8 +66,43 @@ The references are:
 
 **Scene files:** a valid grip loads. The opposite-edge rule, a fixed support, a body that starts moving, a speed over 10 m/s, an unknown edge and a missing ramp are each refused with an explanation.
 
+## Displacement-driven bend and crack load (`ImpactCheck --bend-rig`, about 30 minutes; `--bend-rig quick`, about 10, in CI)
+
+Added 2026-11-25. The code is in `Sources/ImpactCheck/BendRig.swift`.
+
+**Setup.** A 160 × 20 mm beam (E 1 GPa, ν 0.2) is clamped on its left edge. A grip holds its right edge and moves it straight down. Both ends keep their slope, so it is a fixed-guided beam with end moments P L / 2.
+
+**What is gated.** Following the review of PR 16, the check gates the **grip's force at the prescribed deflection** against Timoshenko beam theory, F = δ / (L³/(12 E′ I) + L/(κ G A)), in plane strain with κ = 5/6. A check on the deflection itself would be empty, because the machine prescribes it. The force-driven sags (cantilever 1.2180 mm, rollers 1.0885 mm) stay as separate regressions in `--supports-gravity`.
+
+**Stiffness. The criterion was amended after the first run.** The first run failed the 3% criterion on the x4 mesh (12 elements through the depth): the beam came out +3.41% stiff. The probe mode (`--bend-rig probe`) split that number up:
+
+| Mesh | Full crack deflection | A tenth of it |
+|---|---|---|
+| x4 | +3.41% | +2.75% |
+| x5 | +2.59% | +1.93% |
+| x6 | +2.10% | +1.44% |
+| x7 | +1.84% | +1.18% |
+
+- **About 0.66 points are membrane tension.** The grip also holds the beam's end at its length, so a 1.9 mm deflection stretches the beam (axial grip force 1.47 kN/m, against 15 N/m at a tenth of the deflection). Linear beam theory leaves that out.
+- **The rest is the mesh.** Linear triangles are too stiff in bending. The error falls about as the square of the element size (fitted order 1.9) toward about +0.3% to +0.5% (extrapolated), which is what remains of the end conditions.
+
+The amended criterion compares the **linear** response (a tenth of the deflection) with linear theory. The limit is still 3% on x4, and the check now also requires x6 to be closer to theory than x4. Result: +2.75% (x4) and +1.44% (x6). The full-deflection +3.41% is still printed.
+
+**Crack load.** The crack strength is 4.5 MPa and the energy 100 J/m². The end moment gives a surface stress of 3 P L / h², so the first crack is predicted at P = σ h² / (3 L) = 3750 N/m. The criteria were written before the first run:
+
+- the first crack is at an end, on that end's tension face;
+- the load at first crack is within 20% on x4;
+- the x6 result is reported.
+
+| Mesh | First crack | Grip force at first crack | Deflection |
+|---|---|---|---|
+| x4 | grip end, bottom face, 78.3 ms | 4064 N/m (+8.4%) | 2.02 mm |
+| x6 | clamp end, top face, 74.2 ms | 3784 N/m (+0.9%) | 1.91 mm |
+
+The finer mesh cracks 6.9% earlier, as expected at the singular clamp and grip corners [recall: Williams 1952]. The two ends carry equal moments, so either may crack first. Every step was accepted.
+
 ## Not done yet
 
-- The three-point bend and the cantilever driven by displacement (a moving platen or loading nose), and the clamped-cantilever crack-load benchmark (first crack near 1.5 kN/m) that needs it.
+- A loading nose or platen in contact (three-point bend, tip-loaded cantilever). A first try with a gripped elastic nose on a cantilever chattered (contact force swinging ±15%) and was slow, so the crack-load benchmark moved to the fixed-guided rig above.
 - Engineering stress-strain output and CSV columns in the app, and showing grips in the editor and the replay.
 - The stress-strain results above come from the check, not from a run the app can export yet.

@@ -73,6 +73,6 @@ The annealed copper hardens a lot (69 to 225 MPa over the curve). The 1D formula
 
 ## Not done here
 
-- The clamped-cantilever crack-load benchmark (first crack near 1.5 kN/m). It needs a moving platen or loading nose. The moving grip in PR 17 is the first part of that.
+- The crack-load benchmark is done on the fixed-guided bend rig instead of a tip-loaded cantilever (see [`TEST_MACHINE.md`](TEST_MACHINE.md)).
 - The notched three-point bend.
 - Any check above 150 m/s.

@@ -4,7 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  # Draft pull requests do not run CI (Joseph, 2026-11-25: one PR in the cloud queue at a time). Marking a PR ready
+  # for review starts the run; later pushes to a ready PR run it again.
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -13,12 +16,30 @@ concurrency:
 jobs:
   suite:
     name: ${{ matrix.name }}
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
+          - name: test machine + plate impact + scene documents
+            cmds: |
+              ImpactCheck --test-machine
+              ImpactCheck --plate-impact
+              ImpactCheck --taylor-trend
+              ImpactCheck --scene-documents
+          - name: bend rig (quick)
+            cmds: |
+              ImpactCheck --bend-rig quick
+          - name: headless runner
+            cmds: |
+              ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600
+              ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/metal-plate-impact --timeout 600
+              ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600
+          - name: regression suite
+            cmds: |
+              REGRESSION
           - name: build + replay + materials
             cmds: |
               ImpactCheck --legacy-replay check docs/legacy-replay-baseline.txt
@@ -40,20 +61,6 @@ jobs:
               ImpactCheck --lab-examples
               ImpactCheck --supports-gravity
               ImpactCheck --workshop-improvements
-          - name: test machine + plate impact + scene documents
-            cmds: |
-              ImpactCheck --test-machine
-              ImpactCheck --plate-impact
-              ImpactCheck --taylor-trend
-              ImpactCheck --scene-documents
-          - name: headless runner
-            cmds: |
-              ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600
-              ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/metal-plate-impact --timeout 600
-              ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600
-          - name: regression suite
-            cmds: |
-              REGRESSION
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
@@ -66,6 +73,7 @@ jobs:
       - name: Toolchain
         run: swift --version
       - name: Build (release)
+        if: matrix.name != 'regression suite'
         run: swift build -c release 2>&1 | tee build.log
       - name: Run checks
         timeout-minutes: 35
