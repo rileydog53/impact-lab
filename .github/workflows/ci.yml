@@ -40,9 +40,11 @@ jobs:
               ImpactCheck --lab-examples
               ImpactCheck --supports-gravity
               ImpactCheck --workshop-improvements
-          - name: test machine + scene documents
+          - name: test machine + plate impact + scene documents
             cmds: |
               ImpactCheck --test-machine
+              ImpactCheck --plate-impact
+              ImpactCheck --taylor-trend
               ImpactCheck --scene-documents
           - name: headless runner
             cmds: |
