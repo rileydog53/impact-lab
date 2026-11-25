@@ -30,6 +30,7 @@ import SwiftUI
             case .stress, .maximum, .minimum, .pressure: limit >= 1e6 ? ("MPa", 1e-6) : ("kPa", 1e-3)
             case .strain, .plastic: ("%", 100)
             case .speed: ("m/s", 1)
+            case .plasticWork: limit >= 1e6 ? ("MJ/m³", 1e-6) : ("kJ/m³", 1e-3)
             default: ("", 1)
             }
         }()

@@ -212,16 +212,16 @@ public struct AssemblyStudy: Sendable {
     }
 
     public func exportCSV(to url: URL) throws {
-        var header = ["case", "triangles", "dt_s", "time_s", "initial_energy_J_per_m", "kinetic_J_per_m",
-                      "elastic_J_per_m", "hardening_J_per_m", "plastic_dissipation_J_per_m", "penalty_contact_J_per_m",
+        var header = ["case", "triangles_count", "dt_s", "time_s", "initial_energy_J_per_m", "kinetic_J_per_m",
+                      "elastic_J_per_m", "stored_hardening_J_per_m", "modelled_plastic_dissipation_J_per_m", "penalty_contact_J_per_m",
                       "connection_J_per_m", "cohesive_face_J_per_m", "fracture_dissipation_J_per_m", "residual_J_per_m"]
         // Only scenes with bulk viscosity get the extra column, so earlier exports keep their layout.
         let viscous = scene.bulkViscosity != nil
-        if viscous { header.append("bulk_viscosity_J_per_m") }
-        header += scene.parts.enumerated().map { "body_\($0.offset + 1) \($0.element.name) mesh_factor" }
+        if viscous { header.append("bulk_viscosity_numerical_J_per_m") }
+        header += scene.parts.enumerated().map { "body_\($0.offset + 1) \($0.element.name) mesh_factor_dimensionless" }
         for (i, gauge) in (scene.gauges ?? []).enumerated() {
-            header += ["x_m", "y_m", "vx_m_per_s", "vy_m_per_s", "green_strain_xx", "pressure_Pa", "mises_Pa",
-                       "plastic_strain", "adjacent_face_damage"].map { "gauge_\(i + 1) \(gauge.name) \($0)" }
+            header += ["x_m", "y_m", "vx_m_per_s", "vy_m_per_s", "green_strain_xx_dimensionless", "pressure_Pa", "mises_Pa",
+                       "equivalent_plastic_strain_dimensionless", "adjacent_face_damage_0_to_1"].map { "gauge_\(i + 1) \(gauge.name) \($0)" }
         }
         for (i, pair) in pairs.enumerated() {
             let windows = pulseSettings[i].windows.map { "load_avg_\(Self.seconds($0))_N_per_m" }
@@ -231,10 +231,10 @@ public struct AssemblyStudy: Sendable {
         }
         let fractureParts = scene.parts.indices.filter { scene.parts[$0].fracture != nil }
         for part in fractureParts {
-            header += ["inserted_edges", "failed_edges", "pieces", "crack_length_m", "face_dissipation_J_per_m",
+            header += ["inserted_edges_count", "failed_edges_count", "pieces_count", "crack_length_m", "face_dissipation_J_per_m",
                        "first_insertion_s"].map { "body_\(part + 1) \(scene.parts[part].name) \($0)" }
         }
-        header += ["peak_relative_penetration", "peak_penetration_depth_m", "case_wall_s", "solver_failure"]
+        header += ["peak_relative_penetration_fraction", "peak_penetration_depth_m", "case_wall_s", "solver_failure_text"]
         func quoted(_ cell: String) -> String { "\"\(cell.replacingOccurrences(of: "\"", with: "\"\""))\"" }
         var csv = header.map(quoted).joined(separator: ",") + "\n"
         for item in cases {
@@ -271,9 +271,9 @@ public struct AssemblyStudy: Sendable {
     /// One row per contact pulse: the headline contact numbers, with the
     /// merge gap and averaging windows stated on every row.
     public func exportPulseCSV(to url: URL) throws {
-        var csv = "case,pair,transit_time_s,merge_gap_s,minor_fraction,pulse,start_s,end_s,duration_s,impulse_Ns_per_m,"
-            + "mean_force_N_per_m,averaging_windows_s,peak_windowed_force_N_per_m,solver_episodes,"
-            + "raw_step_peak_numerical_diagnostic_N_per_m,minor_touches,minor_impulse_Ns_per_m\n"
+        var csv = "case,pair,transit_time_s,merge_gap_s,minor_fraction_dimensionless,pulse_index,start_s,end_s,duration_s,impulse_Ns_per_m,"
+            + "mean_force_N_per_m,averaging_windows_s,peak_windowed_force_N_per_m,solver_episodes_count,"
+            + "raw_step_peak_numerical_diagnostic_N_per_m,minor_touches_count,minor_impulse_Ns_per_m\n"
         func quoted(_ cell: String) -> String { "\"\(cell.replacingOccurrences(of: "\"", with: "\"\""))\"" }
         for item in cases {
             for (index, contact) in item.contacts.enumerated() {

@@ -62,7 +62,7 @@ public enum FieldSnapshot {
             [kCTFontAttributeName: CTFontCreateWithName("Helvetica" as CFString, 16, nil)] as CFDictionary)), nil, nil, nil)
         text(endLabel, x: margin + barW - endWidth, y: barY - 22, size: 16)
         if signed { text("0", x: margin + barW / 2 - 4, y: barY - 22, size: 16) }
-        text("Interpolated display of solver output (superconvergent patch recovery); peaks may read lower than raw element values.",
+        text("Illustration of calculated field: interpolated display of solver output (superconvergent patch recovery); peaks may read lower than raw element values.",
              x: margin, y: margin - 18, size: 13)
         guard let image = ctx.makeImage() else { return nil }
         let data = NSMutableData()

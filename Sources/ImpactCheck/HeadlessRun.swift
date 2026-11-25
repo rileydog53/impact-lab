@@ -149,15 +149,18 @@ private func writeCSVs(_ replay: AssemblyReplay, scene: AssemblyScene, to out: U
 
     let keys = ["kinetic", "elastic", "contact", "connection", "hardening", "plastic", "fracture", "cohesive",
                 "gravitational", "viscous", "total"]
-    try write("energy.csv", ["time_s"] + keys.map { "\($0)_J_per_m" } + ["peak_relative_penetration", "angular_momentum_kg_m2_per_s_per_m"],
+    // Column names say what the solver holds: "hardening" is the stored hardening energy of the J2 model and
+    // "plastic" is its modelled plastic dissipation (initial yield × plastic strain), not heat.
+    let columns = ["hardening": "stored_hardening", "plastic": "modelled_plastic_dissipation", "viscous": "bulk_viscosity_numerical"]
+    try write("energy.csv", ["time_s"] + keys.map { "\(columns[$0] ?? $0)_J_per_m" } + ["peak_relative_penetration_fraction", "angular_momentum_kg_m2_per_s_per_m"],
               replay.frames.map { f in
                   let e = energyRecord(f.energies)
                   return [s(f.time)] + keys.map { s(e[$0]!) } + [s(f.peakRelativePenetration), s(f.angularMomentum)]
               })
 
     let gaugeNames = (scene.gauges ?? []).map(\.name)
-    try write("gauges.csv", ["time_s", "gauge", "x_m", "y_m", "vx_m_per_s", "vy_m_per_s", "strain", "pressure_Pa",
-                             "von_mises_stress_Pa", "plastic_strain", "damage"],
+    try write("gauges.csv", ["time_s", "gauge", "x_m", "y_m", "vx_m_per_s", "vy_m_per_s", "green_strain_xx_dimensionless", "pressure_Pa",
+                             "von_mises_stress_Pa", "equivalent_plastic_strain_dimensionless", "damage_0_to_1"],
               replay.frames.flatMap { f in
                   f.gauges.enumerated().map { i, g in
                       [s(f.time), q(i < gaugeNames.count ? gaugeNames[i] : "gauge \(i + 1)"), s(g.position.x), s(g.position.y),
@@ -173,7 +176,7 @@ private func writeCSVs(_ replay: AssemblyReplay, scene: AssemblyScene, to out: U
                   f.contacts.map { [s(f.time), q(name(Int($0.pair.x))), q(name(Int($0.pair.y))), s($0.force), s($0.impulse)] }
               })
 
-    try write("links.csv", ["time_s", "connection", "extension_m", "force_N_per_m", "damage", "stored_energy_J_per_m",
+    try write("links.csv", ["time_s", "connection", "extension_m", "force_N_per_m", "damage_0_to_1", "stored_energy_J_per_m",
                             "fracture_dissipation_J_per_m"],
               replay.frames.flatMap { f in
                   f.links.map { [s(f.time), String($0.connection + 1), s($0.extensionLength), s($0.force), s($0.damage),

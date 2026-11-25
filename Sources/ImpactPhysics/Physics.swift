@@ -245,6 +245,11 @@ struct ElementHistory: Sendable {
     var plasticCount: Int { elementModel.map { $0.reduce(0) { $0 + ($1 < 0 ? 0 : 1) } } ?? current.count }
 
     mutating func accept() { swap(&current, &next) }
+
+    /// Accumulated plastic work per reference volume (J/m³) of each element; 0 for elastic elements.
+    var plasticWorkDensity: [Double] {
+        current.indices.map { i in model(for: i)?.plasticWork(at: current[i].equivalentStrain) ?? 0 }
+    }
 }
 
 struct ElementEnergy: Sendable {

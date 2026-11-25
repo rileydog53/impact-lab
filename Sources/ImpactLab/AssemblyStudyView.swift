@@ -321,8 +321,8 @@ struct AssemblyStudyView: View {
 
 private enum StudyEnergy: String, CaseIterable {
     case residual = "Energy residual", kinetic = "Kinetic", elastic = "Elastic", contact = "Penalty contact"
-    case connection = "Stored connection", cohesive = "Stored cohesive", hardening = "Hardening"
-    case plastic = "Plastic dissipation", fracture = "Fracture dissipation", viscous = "Bulk viscosity (numerical)"
+    case connection = "Stored connection", cohesive = "Stored cohesive", hardening = "Stored hardening"
+    case plastic = "Modelled plastic dissipation", fracture = "Fracture dissipation", viscous = "Bulk viscosity (numerical)"
     case total = "Total accounted energy"
 
     func value(_ sample: AssemblyStudySample) -> Double {

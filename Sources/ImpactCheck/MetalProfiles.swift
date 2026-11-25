@@ -124,6 +124,9 @@ func metalProfilesCheck() throws {
             loss = energy.plastic
             energyError = max(energyError, abs(energy.total / run.initialEnergy - 1))
         }
+        let ledger = run.energies.plastic + run.energies.hardening
+        require(abs(run.plasticWorkIntegral - ledger) <= 1e-9 * max(1, ledger),
+                "\(title) plastic-work map does not integrate to the ledger (map \(run.plasticWorkIntegral), ledger \(ledger))")
         require(run.failure == nil && run.time >= setup.duration && !run.firstContactTimes.isEmpty,
                 run.failure ?? "\(title) did not complete a contact event")
         let momentumError = simd_length(run.momentum - initialMomentum) / simd_length(initialMomentum)

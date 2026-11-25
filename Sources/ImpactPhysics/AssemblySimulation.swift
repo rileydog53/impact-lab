@@ -289,7 +289,7 @@ public struct AssemblySimulation: Sendable {
     func replayBody(_ index: Int) -> AssemblyReplayBody {
         let step = steps[index]
         return AssemblyReplayBody(body: step.body, strain: step.strain,
-            plasticStrain: plasticStrain(index), damage: materialDamage(index),
+            plasticStrain: plasticStrain(index), plasticWork: plasticWorkDensity(index), damage: materialDamage(index),
             stress: step.body.mesh.elements.indices.map(step.replayStress),
             cracks: crackFaces(index), fracture: fractureReading(index), pieces: materialPieces(index))
     }
@@ -299,6 +299,17 @@ public struct AssemblySimulation: Sendable {
     public func strain(_ index: Int) -> [Double] { steps[index].strain }
     public func plasticStrain(_ index: Int) -> [Double] {
         steps[index].history?.current.map(\.equivalentStrain) ?? []
+    }
+    /// Accumulated plastic work per reference volume (J/m³, the same as J per m² of section per metre of
+    /// depth) for each element of body `index`: initial yield × plastic strain plus stored hardening energy.
+    /// Empty for an elastic body. Its area-weighted sum equals the plastic + hardening energy ledger entries.
+    public func plasticWorkDensity(_ index: Int) -> [Double] { steps[index].history?.plasticWorkDensity ?? [] }
+    /// Area integral of `plasticWorkDensity` over every body (J per metre of depth). A consistency check for
+    /// the plastic-work map against the energy ledger; not used by the time step.
+    public var plasticWorkIntegral: Double {
+        steps.indices.reduce(0) { total, index in
+            zip(steps[index].body.mesh.elements, plasticWorkDensity(index)).reduce(total) { $0 + $1.0.area * $1.1 }
+        }
     }
     public func stress(_ index: Int) -> [Double] { steps[index].equivalentCauchyStress() }
     /// A connection's length at time zero and the length at which it carries no force, in metres. Start minus

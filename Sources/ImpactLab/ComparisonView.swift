@@ -44,7 +44,7 @@ struct ComparisonView: View {
             let motion: [Signal] = [("Relative X", "mm", \.values.x, .mint), ("Body kinetic energy", "J/m", \.values.y, .orange),
                     ("Stored connection energy", "J/m", \.connectionEnergy, .yellow)]
             guard tracksFracture else {
-                return motion + [("Plastic dissipation", "J/m", \.plasticDissipation, .pink),
+                return motion + [("Modelled plastic dissipation", "J/m", \.plasticDissipation, .pink),
                                  ("Sampled peak stress", "kPa", \.peakStress, .cyan)]
             }
             return motion + [("Material fracture dissipation", "J/m", \.materialFracture, .pink),
@@ -64,10 +64,10 @@ struct ComparisonView: View {
             [("Mean opening", "mm", \.values.x, .mint), ("Fracture dissipation", "J/m²", \.values.y, .orange)]
         case .offAxisImpact:
             [("Backing angle", "°", \.values.x, .mint), ("Receiver velocity X", "m/s", \.values.y, .orange),
-             ("Plastic dissipation", "J/m", \.plasticDissipation, .yellow)]
+             ("Modelled plastic dissipation", "J/m", \.plasticDissipation, .yellow)]
         case .layeredImpact:
             [("Mean opening", "mm", \.values.x, .mint), ("Fracture dissipation", "J/m²", \.values.y, .orange),
-             ("Plastic dissipation", "J/m", \.plasticDissipation, .yellow)]
+             ("Modelled plastic dissipation", "J/m", \.plasticDissipation, .yellow)]
         }
     }
 
