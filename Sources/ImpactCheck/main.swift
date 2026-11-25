@@ -334,6 +334,16 @@ if let index = CommandLine.arguments.firstIndex(of: "--locking") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--spall") {
+    try spallCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--bulk-viscosity") {
+    try bulkViscosityCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--plasticity") {
     try plasticityCheck()
     try materialImpactCheck()

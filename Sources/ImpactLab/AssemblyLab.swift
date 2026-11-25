@@ -760,6 +760,12 @@ struct AssemblyLab: View {
                     metric("Angular momentum", frame?.angularMomentum ?? s.angularMomentum, "N·m·s/m")
                     metric("Energy error", error, "%")
                 }
+                if experiment.scene.bulkViscosity != nil {
+                    GridRow {
+                        metric("Bulk viscosity (numerical)", e.viscous, "J/m")
+                        metric("Peak viscous damping", 100 * s.peakViscousDamping, "% critical")
+                    }
+                }
             }.padding(.top, 8)
             let contacts = s.firstContactTimes.filter { $0.value <= experiment.displayTime }.sorted { $0.value < $1.value }
             if !contacts.isEmpty {

@@ -58,7 +58,8 @@ struct ReplayMeasurements: View {
              Signal(name: "Isotropic hardening", unit: "J/m", color: .purple, value: { $0.energies.hardening }),
              Signal(name: "Penalty contact", unit: "J/m", color: .gray, value: { $0.energies.contact }),
              Signal(name: "Stored connection / cohesive", unit: "J/m", color: .yellow,
-                    value: { $0.energies.connection + $0.energies.cohesive })]
+                    value: { $0.energies.connection + $0.energies.cohesive }),
+             Signal(name: "Artificial bulk viscosity (numerical)", unit: "J/m", color: .brown, value: { $0.energies.viscous })]
         case .balance:
             [Signal(name: "Energy residual", unit: "J/m", color: .orange, value: { $0.energies.total - (frames.first?.energies.total ?? 0) }),
              Signal(name: "Momentum change X", unit: "N·s/m", color: .mint, value: { $0.momentum.x - (frames.first?.momentum.x ?? 0) }),

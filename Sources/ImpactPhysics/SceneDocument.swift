@@ -251,7 +251,7 @@ enum SceneDocument {
 
         mutating func scene(_ scene: Object) -> Object {
             keys(scene, "scene", allowed: ["$schema", "description", "assemblyVersion", "parts", "connections", "duration", "monitor",
-                                        "relativeTo", "gauges", "meshResolution", "bodyOrder", "groups", "gravity"])
+                                        "relativeTo", "gauges", "meshResolution", "bodyOrder", "groups", "gravity", "bulkViscosity"])
             var out: Object = [:]
             if let version = scene["assemblyVersion"] {
                 if number(version, "assemblyVersion") != 1 { fail("assemblyVersion", "only version 1 is supported") }
@@ -278,6 +278,18 @@ enum SceneDocument {
             if let gravity = scene["gravity"] {
                 if let flag = gravity as? Bool { out["gravity"] = flag ? AssemblyScene.standardGravity : nil }
                 else { out["gravity"] = number(gravity, "gravity") }
+            }
+            if let viscosity = scene["bulkViscosity"] {
+                // true: the standard coefficients; false: off; or an object with either coefficient.
+                if let settings = viscosity as? Object {
+                    keys(settings, "bulkViscosity", allowed: ["linear", "quadratic"])
+                    out["bulkViscosity"] = ["linear": number(settings["linear"], "bulkViscosity.linear") ?? BulkViscosity.standard.linear,
+                                            "quadratic": number(settings["quadratic"], "bulkViscosity.quadratic") ?? BulkViscosity.standard.quadratic]
+                } else if let flag = viscosity as? Bool {
+                    if flag { out["bulkViscosity"] = ["linear": BulkViscosity.standard.linear, "quadratic": BulkViscosity.standard.quadratic] }
+                } else {
+                    fail("bulkViscosity", "use true, false, or { \"linear\": 0.06, \"quadratic\": 1.2 }")
+                }
             }
             if let monitor = scene["monitor"] { out["monitor"] = reference(monitor, "monitor") }
             if let relative = scene["relativeTo"] { out["relativeTo"] = reference(relative, "relativeTo") }
@@ -560,6 +572,11 @@ extension AssemblyScene {
         }
         range(duration, Self.durationRange, "duration", " s")
         if let gravity { range(gravity, Self.gravityRange, "gravity", " m/s²") }
+        if let bulkViscosity {
+            range(bulkViscosity.linear, BulkViscosity.linearRange, "bulkViscosity.linear", "")
+            range(bulkViscosity.quadratic, BulkViscosity.quadraticRange, "bulkViscosity.quadratic", "")
+            if bulkViscosity.linear + bulkViscosity.quadratic <= 0 { result.append("bulkViscosity: both coefficients are zero; remove it to turn bulk viscosity off.") }
+        }
         if !parts.isEmpty && parts.allSatisfy({ $0.support?.isFixture == true }) {
             result.append("parts: every body is a fixed support, so nothing can move. Leave at least one body free.")
         }

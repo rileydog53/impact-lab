@@ -410,6 +410,8 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
     /// Downward gravitational acceleration in m/s² (acts along −y). nil keeps the gravity-free behaviour bit for bit.
     public var gravity: Double?
     public static let gravityRange = 0.0...50.0
+    /// Artificial bulk viscosity (shock smoothing, see `BulkViscosity`). nil keeps it off, bit for bit as before.
+    public var bulkViscosity: BulkViscosity?
     public static let standardGravity = 9.80665
     public var monitor: UUID?
     public var relativeTo: UUID?
@@ -469,6 +471,7 @@ public struct AssemblyScene: Codable, Equatable, Sendable {
               Set(groups.map(\.id)).count == groups.count, groups.allSatisfy({ $0.members.count >= 2 }),
               Set(members).count == members.count, members.allSatisfy(ids.contains),
               Self.durationRange.contains(duration), gravity.map(Self.gravityRange.contains) ?? true,
+              bulkViscosity?.isValid ?? true,
               parts.isEmpty || parts.contains(where: { $0.support?.isFixture != true }), monitor.map(ids.contains) ?? true,
               relativeTo.map({ ids.contains($0) && $0 != (monitor ?? parts.first?.id) }) ?? true,
               (gauges?.count ?? 0) <= AssemblyGauge.limit,

@@ -35,6 +35,7 @@ SI throughout: **metres, seconds, m/s, pascals (Pa), kg/m³**. Angles are in **d
 | `gauges` | Measurement points inside bodies | up to 8 |
 | `duration` | Simulated time, s | 0.12; 0.0001–2 |
 | `gravity` | Downward acceleration (−Y) on every free body, m/s². `true` means 9.80665 | off; 0–50 |
+| `bulkViscosity` | Artificial bulk viscosity (shock smoothing): a numerical pressure added only while an element is compressed, q = ρ l (b1 c \|ε̇v\| + b2² l ε̇v²). `true` uses the Abaqus defaults b1 = 0.06, b2 = 1.2; or give `{ "linear": b1, "quadratic": b2 }`. The energy it removes is reported as its own term. Numerical, not a material property | off; b1 0–0.5, b2 0–3 |
 | `meshResolution` | Mesh for bodies without their own `refinement`: `standard` (≈9 mm), `fine` (4.5), `extraFine` (3), `x4`–`x7` (2.25–1.29 mm), or 1–7 | `standard` |
 | `monitor` | Body shown in the motion plot | first body |
 | `relativeTo` | Plot motion relative to this body | none |

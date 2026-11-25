@@ -11,6 +11,7 @@
     "description": { "type": "string", "description": "Free text. Not kept when the app saves." },
     "assemblyVersion": { "const": 1 },
     "duration": { "type": "number", "minimum": 0.0001, "maximum": 2.0, "default": 0.12, "description": "Simulated time in seconds." },
+    "bulkViscosity": { "description": "Artificial bulk viscosity (shock smoothing), compression only. true uses b1 = 0.06, b2 = 1.2. Omit for off.", "oneOf": [ { "type": "boolean" }, { "type": "object", "additionalProperties": false, "properties": { "linear": { "type": "number", "minimum": 0, "maximum": 0.5 }, "quadratic": { "type": "number", "minimum": 0, "maximum": 3 } } } ] },
     "gravity": { "type": ["number", "boolean"], "minimum": 0, "maximum": 50, "description": "Downward (−Y) acceleration on every free body, m/s². true means 9.80665. Omit for no gravity." },
     "meshResolution": { "$ref": "#/$defs/resolution", "description": "Assembly mesh for every body without its own refinement. Default standard." },
     "parts": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/part" } },
