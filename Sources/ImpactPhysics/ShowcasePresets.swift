@@ -43,13 +43,13 @@ public enum ShowcasePreset: String, CaseIterable, Identifiable, Sendable {
         case .aluminumBracket:
             "A drawn 6061-T6 aluminium L-bracket is clamped at its foot. A steel ball lands on the tip of the arm. Watch the plastic-work map at the inside corner, where bending concentrates."
         case .laminatedGlass:
-            "Glass laminated with PVB and bonded to aluminium, hit by a steel ball at 40 m/s (a ball-drop style test). Watch for the first glass crack and for the glass coming off the interlayer."
+            "Glass laminated with PVB and bonded to aluminium, hit by a steel ball at 20 m/s (a ball-drop style test). Watch for the first glass crack and for the glass coming off the interlayer."
         case .dogbone:
             "A drawn 6061-T6 aluminium dogbone coupon in the virtual test machine: the left grip holds, the right grip pulls at 5 m/s. Watch yielding start in the narrow gauge section."
         case .perforatedBlock:
             "A drawn copper block with nine holes is clamped at the bottom and crushed from the top by the test machine at 8 m/s. Watch the ligaments between the holes yield and the holes squash."
         case .glassWindow:
-            "A glass plate with a window cut out, clamped at its base, struck by a steel ball at 20 m/s. After Calculate, open the first-crack milestone and use Slow Down Here to replay it frame by frame."
+            "A glass plate with a window cut out, clamped at its base, struck by a steel ball at 8 m/s. After Calculate, open the first-crack milestone and use Slow Down Here to replay it frame by frame."
         }
     }
 
@@ -73,7 +73,7 @@ public enum ShowcasePreset: String, CaseIterable, Identifiable, Sendable {
                      "material": Self.pmma, "fracture": Self.pmmaFracture],
                     Self.fixedSupport("Left support", center: [-0.05, -0.0135]),
                     Self.fixedSupport("Right support", center: [0.05, -0.0135]),
-                    Self.steelBall(diameter: 0.012, center: [0, 0.0145], velocity: [0, -12])
+                    Self.steelBall(diameter: 0.012, center: [0, 0.0145], velocity: [0, -40])
                 ]
             ]
         case .glassArch:
@@ -149,7 +149,7 @@ public enum ShowcasePreset: String, CaseIterable, Identifiable, Sendable {
                     ["name": "Glass plate", "shape": "outline", "center": [0, 0], "support": "clampBottom",
                      "outline": ["outer": plate, "holes": [window], "meshSize": 0.003],
                      "material": Self.glass, "fracture": Self.glassFracture],
-                    Self.steelBall(diameter: 0.012, center: [0, 0.0262], velocity: [0, -20])
+                    Self.steelBall(diameter: 0.012, center: [0, 0.0262], velocity: [0, -8])
                 ]
             ]
         }
@@ -196,7 +196,7 @@ public enum ShowcasePreset: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// The documented laminated-glass example (docs/layered-examples/laminated-glass-on-aluminium.json), with the
-    /// ball at 40 m/s instead of 20 and the ball started just clear of the glass.
+    /// ball at the documented 20 m/s.
     static func laminatedGlassScene() throws -> AssemblyScene {
         let text = #"""
         { "duration": 0.0002, "meshResolution": "x4", "bulkViscosity": true, "monitor": "Laminated glass on aluminium",
@@ -213,7 +213,7 @@ public enum ShowcasePreset: String, CaseIterable, Identifiable, Sendable {
                   "material": { "profile": "aluminum-6061-t6", "elasticOnly": false },
                   "fracture": { "strength": 3.1e8, "energy": 10877 },
                   "bond": { "strength": 3.1e7, "energy": 466.5 } } } },
-            { "name": "Steel ball", "shape": "round", "size": [0.02, 0.02], "center": [-0.0185, 0], "velocity": [40, 0],
+            { "name": "Steel ball", "shape": "round", "size": [0.02, 0.02], "center": [-0.0185, 0], "velocity": [20, 0],
               "material": { "profile": "structural-steel-a36", "elasticOnly": true } } ] }
         """#
         return try AssemblyScene.document(Data(text.utf8))
