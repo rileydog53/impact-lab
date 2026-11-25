@@ -28,6 +28,27 @@ public struct MaterialFractureSettings: Codable, Equatable, Sendable {
 
     public init() {}
 
+    private enum CodingKeys: String, CodingKey { case strengthFraction, strength, energy, energySource, meshPattern }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        strengthFraction = try c.decodeIfPresent(Double.self, forKey: .strengthFraction) ?? 0.030
+        strength = try c.decodeIfPresent(Double.self, forKey: .strength)
+        energy = try c.decode(Double.self, forKey: .energy)
+        energySource = try c.decodeIfPresent(FractureEstimateSource.self, forKey: .energySource)
+        meshPattern = try c.decodeIfPresent(MeshPattern.self, forKey: .meshPattern)
+    }
+
+    /// A strength in Pa is saved without the (then ignored) fraction of E, so a saved scene reopens through the
+    /// scene reader, which refuses a file that gives both.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        if let strength { try c.encode(strength, forKey: .strength) } else { try c.encode(strengthFraction, forKey: .strengthFraction) }
+        try c.encode(energy, forKey: .energy)
+        try c.encodeIfPresent(energySource, forKey: .energySource)
+        try c.encodeIfPresent(meshPattern, forKey: .meshPattern)
+    }
+
     public func resolvedStrength(young: Double) -> Double { strength ?? young * strengthFraction }
     public var usesAbsoluteStrength: Bool { strength != nil }
     public var activeEnergyRange: ClosedRange<Double> { usesAbsoluteStrength ? Self.absoluteEnergyRange : Self.energyRange }

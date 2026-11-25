@@ -1,0 +1,100 @@
+{
+  "description": "A 6 mm annealed soda-lime glass sheet laminated with PVB interlayer and bonded with structural epoxy to an aluminium plate, hit on the glass by a 20 mm steel ball at 20 m/s, as in a ball-drop test of a glass-faced panel. Watch for the first crack in the glass, the glass coming off the PVB (delamination), and any crack that opens inside the material. The PVB is drawn 1.6 mm thick (the app's thinnest layer; real sheets are 0.38-1.52 mm). Its stiffness, 33 MPa, is the shortest-load sourced value (3 s, 20 °C, AGC): PVB is much stiffer at impact speeds and no measured high-rate value was found, so this layer is too soft and its result is a lower bound. PVB has no sourced toughness, so it never cracks; the glass-PVB bond strength is a guess capped at PVB's own tensile strength. Values and their sources: docs/laminate-material-profiles.md. Every toughness and bond value is experimental. The app is 2D (plane strain), so the ball is really a long steel rod seen end on. Numerical results, not validation.",
+  "duration": 0.0002,
+  "meshResolution": "x4",
+  "bulkViscosity": true,
+  "monitor": "Laminated glass on aluminium",
+  "parts": [
+    {
+      "name": "Laminated glass on aluminium",
+      "size": [
+        0.016,
+        0.1
+      ],
+      "center": [
+        0,
+        0
+      ],
+      "material": {
+        "young": 72000000000.0,
+        "density": 2500,
+        "poisson": 0.23
+      },
+      "fracture": {
+        "strength": 41000000.0,
+        "energy": 7.4,
+        "energySource": {
+          "status": "estimated",
+          "citation": "Soda-lime glass K_IC 0.75 MPa√m (Wikipedia, MakeItFrom) and mean modulus of rupture 41 MPa (Pilkington ATS-129); G = K²(1-ν²)/E.",
+          "url": "https://en.wikipedia.org/wiki/Soda%E2%80%93lime_glass",
+          "caution": "Experimental; glass strength depends strongly on surface flaws."
+        }
+      },
+      "bondedLayer": {
+        "interfaceFraction": 0.375,
+        "material": {
+          "young": 33000000.0,
+          "density": 1070,
+          "poisson": 0.48
+        },
+        "bond": {
+          "strength": 20000000.0,
+          "energy": 329,
+          "energySource": {
+            "status": "estimated",
+            "citation": "Glass-PVB adhesion energy 329 J/m², average of the two closest of 258 (Butchart and Overend 2012, fast rate), 400 (Jagota, cited there) and 605 J/m² (Seshadri, cited there). Strength set to PVB's tensile strength, over 20 MPa (Trosifol Clear), as an upper bound.",
+            "url": "https://www.gft.eng.cam.ac.uk/system/files/documents/butchart-delamination-in-fractured-laminated-glass.pdf",
+            "caution": "Experimental and rate dependent; the bond strength is a guess."
+          }
+        },
+        "third": {
+          "interfaceFraction": 0.475,
+          "material": {
+            "profile": "aluminum-6061-t6",
+            "elasticOnly": false
+          },
+          "fracture": {
+            "strength": 310000000.0,
+            "energy": 10877,
+            "energySource": {
+              "status": "estimated",
+              "citation": "6061-T6 typical tensile strength 310 MPa and K_IC 29 MPa√m, as in the app's own 6061-T6 estimate (aerospacemetals.com datasheet); G = K²(1-ν²)/E.",
+              "url": "https://www.aerospacemetals.com/wp-content/uploads/2023/06/Aluminum-6061-T6-6061-T651.pdf",
+              "caution": "Handbook estimate; real toughness varies with heat, orientation and thickness."
+            }
+          },
+          "bond": {
+            "strength": 31000000.0,
+            "energy": 466.5,
+            "energySource": {
+              "status": "estimated",
+              "citation": "Structural epoxy G_IC 466.5 J/m², average of the two closest of 250 (Betamate 73455, Martiny et al. 2013), 683 (round-robin TDCB on aluminium, Blackman et al. 2003) and 1250 J/m² (ESP 110, Martiny et al. 2013). Strength 31 MPa is 3M DP460 overlap shear on etched aluminium, used as a stand-in for opening strength.",
+              "url": "https://core.ac.uk/download/77002118.pdf",
+              "caution": "Experimental; epoxy toughness varies widely with formulation and bond thickness."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Steel ball",
+      "shape": "round",
+      "size": [
+        0.02,
+        0.02
+      ],
+      "center": [
+        -0.0185,
+        0
+      ],
+      "velocity": [
+        20,
+        0
+      ],
+      "material": {
+        "profile": "structural-steel-a36",
+        "elasticOnly": true
+      }
+    }
+  ]
+}

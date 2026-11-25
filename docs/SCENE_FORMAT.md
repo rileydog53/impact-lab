@@ -158,6 +158,8 @@ Values out of range are reported with their location, value and allowed range. F
 
 Lab examples with supports, gravity and preload are in [`lab-examples/`](lab-examples/): `block-on-bench.json`, `drop-test.json`, `cantilever-sag.json`, `three-point-bend.json` and `hanging-springs.json`. Each file's `description` says what to check. `ImpactCheck --lab-examples` runs them all, and `ImpactCheck --supports-gravity` compares gravity, supports and preload against closed-form results.
 
+Layered examples (ordinary bonded laminates, each hit by a steel ball as in a ball-drop test) are in [`layered-examples/`](layered-examples/): `coated-steel-plate.json` (plasma-sprayed alumina on steel), `laminated-glass-on-aluminium.json` (glass, PVB, epoxy, aluminium) and `carbon-skin-aluminium-panel.json` (carbon-fibre skin bonded to aluminium). They are also in the app under **New / Examples ▸ Layered examples (laminates)**. Values and sources are in [`laminate-material-profiles.md`](laminate-material-profiles.md); what the presets show and what they leave out is in [`LAYERED_EXAMPLES.md`](LAYERED_EXAMPLES.md). `ImpactCheck --layered-examples` runs them.
+
 | File | What it shows | Physical behavior to look for |
 |---|---|---|
 | `metal-plate-impact.json` | Profiles, a round striker, a backing block, gauges | The plate dents permanently. Swap the plate to copper and compare. |

@@ -1,0 +1,71 @@
+{
+  "description": "An aluminium plate with a 2 mm carbon-fibre/epoxy fabric skin bonded on with structural epoxy, hit on the skin by a 20 mm steel ball at 20 m/s (the ball comes from the right), as in a ball-drop test of a composite-skinned panel. Watch for the skin coming off the aluminium (delamination) and any crack in the aluminium. No crack toughness was found for the carbon fabric, so the skin itself never cracks: only the bond and the aluminium can. The fabric is treated as isotropic at its fibre-direction stiffness (70 GPa, ACP Composites, single source), which overstates it off-axis. The same epoxy round robin measured about 208 J/m² on carbon-fibre substrates, so this bond may be weaker in reality. Values and their sources: docs/laminate-material-profiles.md. Every toughness and bond value is experimental. The app is 2D (plane strain), so the ball is really a long steel rod seen end on. Numerical results, not validation.",
+  "duration": 0.0002,
+  "meshResolution": "x4",
+  "bulkViscosity": true,
+  "monitor": "Carbon-skinned aluminium panel",
+  "parts": [
+    {
+      "name": "Carbon-skinned aluminium panel",
+      "size": [
+        0.012,
+        0.1
+      ],
+      "center": [
+        0,
+        0
+      ],
+      "material": {
+        "profile": "aluminum-6061-t6"
+      },
+      "fracture": {
+        "strength": 310000000.0,
+        "energy": 10877,
+        "energySource": {
+          "status": "estimated",
+          "citation": "6061-T6 typical tensile strength 310 MPa and K_IC 29 MPa√m, as in the app's own 6061-T6 estimate (aerospacemetals.com datasheet); G = K²(1-ν²)/E.",
+          "url": "https://www.aerospacemetals.com/wp-content/uploads/2023/06/Aluminum-6061-T6-6061-T651.pdf",
+          "caution": "Handbook estimate; real toughness varies with heat, orientation and thickness."
+        }
+      },
+      "bondedLayer": {
+        "interfaceFraction": 0.8333,
+        "material": {
+          "young": 70000000000.0,
+          "density": 1600,
+          "poisson": 0.1
+        },
+        "bond": {
+          "strength": 31000000.0,
+          "energy": 466.5,
+          "energySource": {
+            "status": "estimated",
+            "citation": "Structural epoxy G_IC 466.5 J/m², average of the two closest of 250 (Betamate 73455, Martiny et al. 2013), 683 (round-robin TDCB on aluminium, Blackman et al. 2003) and 1250 J/m² (ESP 110, Martiny et al. 2013). Strength 31 MPa is 3M DP460 overlap shear on etched aluminium, used as a stand-in for opening strength.",
+            "url": "https://core.ac.uk/download/77002118.pdf",
+            "caution": "Experimental; epoxy toughness varies widely with formulation and bond thickness."
+          }
+        }
+      }
+    },
+    {
+      "name": "Steel ball",
+      "shape": "round",
+      "size": [
+        0.02,
+        0.02
+      ],
+      "center": [
+        0.0165,
+        0
+      ],
+      "velocity": [
+        -20,
+        0
+      ],
+      "material": {
+        "profile": "structural-steel-a36",
+        "elasticOnly": true
+      }
+    }
+  ]
+}

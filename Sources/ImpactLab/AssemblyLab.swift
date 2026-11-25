@@ -79,7 +79,7 @@ struct AssemblyLab: View {
         .sheet(isPresented: $sceneGuide) { SceneFormatGuide() }
         .sheet(isPresented: $measurements) {
             ReplayMeasurements(scene: experiment.scene, frames: experiment.frames,
-                               events: experiment.replay?.events ?? [], time: experiment.displayTime)
+                               events: experiment.replay?.timeline ?? [], time: experiment.displayTime)
         }
         .sheet(isPresented: $study) {
             studyView
@@ -394,6 +394,17 @@ struct AssemblyLab: View {
                         .help(example.description)
                     }
                 }
+                Section("Layered examples (laminates)") {
+                    ForEach(LayeredExample.allCases, id: \.self) { example in
+                        Button(example.rawValue) {
+                            do {
+                                replacement = Replacement(scene: try example.scene(), title: example.rawValue, field: .damage)
+                                applyPendingReplacement()
+                            } catch { experiment.error = error.localizedDescription }
+                        }
+                        .help(example.description)
+                    }
+                }
             }.fixedSize()
             Button("Open", systemImage: "folder") { open() }
                 .keyboardShortcut("o", modifiers: .command)
@@ -440,10 +451,10 @@ struct AssemblyLab: View {
                 .labelStyle(.iconOnly).disabled(experiment.frameIndex == experiment.frames.count - 1)
             Text(replayTime(experiment.displayTime)).font(.caption.monospacedDigit()).fixedSize()
             Menu("Events") {
-                ForEach(experiment.replay?.events ?? []) { event in
+                ForEach(experiment.replay?.timeline ?? []) { event in
                     Button("\(event.label) · \(replayTime(event.time))") { experiment.seek(to: event.time) }
                 }
-            }.fixedSize().disabled(experiment.replay?.events.isEmpty != false)
+            }.fixedSize().disabled(experiment.replay?.timeline.isEmpty != false)
             Button("Copy Summary", systemImage: "doc.on.clipboard") {
                 guard let replay = experiment.replay else { return }
                 NSPasteboard.general.clearContents()
@@ -854,7 +865,7 @@ struct AssemblyLab: View {
                     }
                 }
                 context.stroke(path, with: .color(color), lineWidth: 1.6)
-                for event in experiment.replay?.events ?? [] {
+                for event in experiment.replay?.timeline ?? [] {
                     let x = left + event.time / duration * (right - left)
                     context.stroke(Path { p in
                         p.move(to: CGPoint(x: x, y: inset)); p.addLine(to: CGPoint(x: x, y: inset + 6))

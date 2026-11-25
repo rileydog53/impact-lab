@@ -325,6 +325,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--layered-bodies") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--layered-examples") {
+    try layeredExamplesCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--spall") {
     try spallCheck()
     exit(EXIT_SUCCESS)

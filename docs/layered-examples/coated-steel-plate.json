@@ -1,0 +1,82 @@
+{
+  "description": "A steel plate with a plasma-sprayed alumina (ceramic) coating on its struck face, hit by a 20 mm steel ball at 20 m/s, as in a ball-drop impact test of a coated part. Watch for the first crack in the coating, the coating coming off the steel (delamination), and any crack that opens inside the material. The coating is drawn 1.8 mm thick, the app's thinnest layer (10% of the plate); real sprayed coatings are about 0.1-0.7 mm. Sprayed alumina is porous and far softer than solid alumina: E 38 GPa (McPherson 1991). Its density, Poisson ratio and 83 MPa strength are stand-ins from related coatings. Bond: ASTM C633 pull-off 64 MPa (with a bond coat; about 15 MPa without one). Values and their sources: docs/laminate-material-profiles.md. Every toughness and bond value is experimental. The app is 2D (plane strain), so the ball is really a long steel rod seen end on. Numerical results, not validation.",
+  "duration": 0.0002,
+  "meshResolution": "x4",
+  "bulkViscosity": true,
+  "monitor": "Coated steel plate",
+  "parts": [
+    {
+      "name": "Coated steel plate",
+      "size": [
+        0.018,
+        0.1
+      ],
+      "center": [
+        0,
+        0
+      ],
+      "material": {
+        "young": 38000000000.0,
+        "density": 3510,
+        "poisson": 0.2
+      },
+      "fracture": {
+        "strength": 83000000.0,
+        "energy": 21.5,
+        "energySource": {
+          "status": "estimated",
+          "citation": "Plasma-sprayed alumina cohesive G_IC 16-27 J/m², midpoint (McPherson 1991, double cantilever beam). Strength is the flexural strength of free-standing flame-sprayed alumina, 83 MPa (Neumann et al. 2020), a stand-in.",
+          "url": "https://www.irsm.cas.cz/materialy/cs_content/1991/McPherson_CS_1991_0000.pdf",
+          "caution": "Experimental coating value; the strength is a stand-in from a related coating."
+        }
+      },
+      "bondedLayer": {
+        "interfaceFraction": 0.1,
+        "material": {
+          "profile": "structural-steel-a36",
+          "elasticOnly": false
+        },
+        "fracture": {
+          "strength": 475000000.0,
+          "energy": 89180,
+          "energySource": {
+            "status": "estimated",
+            "citation": "Mild steel K_IC 140 MPa√m (MIT OCW, eFunda) and A36 tensile strength 400-550 MPa midpoint, as in the app's own A36 estimate; G = K²(1-ν²)/E.",
+            "url": "https://www.efunda.com/formulae/solid_mechanics/fracture_mechanics/fm_lefm_Kc_Matl.cfm",
+            "caution": "Handbook estimate; real toughness varies with heat, orientation and thickness."
+          }
+        },
+        "bond": {
+          "strength": 64000000.0,
+          "energy": 12.5,
+          "energySource": {
+            "status": "estimated",
+            "citation": "Thermal-spray bond: ASTM C633 strength 64 MPa (average of 63 MPa, Sheibanian et al. 2026, and 65.5 MPa, Nayak et al. 2021; 15 MPa dropped). Interface G_IC 10-15 J/m², midpoint (McPherson 1991).",
+            "url": "https://iris.polito.it/retrieve/handle/11583/3007768/966768",
+            "caution": "Experimental; C633 strength depends on the bond coat and glue penetration."
+          }
+        }
+      }
+    },
+    {
+      "name": "Steel ball",
+      "shape": "round",
+      "size": [
+        0.02,
+        0.02
+      ],
+      "center": [
+        -0.0195,
+        0
+      ],
+      "velocity": [
+        20,
+        0
+      ],
+      "material": {
+        "profile": "structural-steel-a36",
+        "elasticOnly": true
+      }
+    }
+  ]
+}
