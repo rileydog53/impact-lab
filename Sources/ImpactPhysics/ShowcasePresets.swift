@@ -159,22 +159,22 @@ public enum ShowcasePreset: String, CaseIterable, Identifiable, Sendable {
 
     // MARK: Materials
 
-    static let pmma: [String: Any] = ["young": 3.0e9, "density": 1180, "poisson": 0.37]
-    static let pmmaFracture: [String: Any] = [
+    static var pmma: [String: Any] { ["young": 3.0e9, "density": 1180, "poisson": 0.37] }
+    static var pmmaFracture: [String: Any] { [
         "strength": 6.5e7, "energy": 290,
         "energySource": ["status": "estimated",
                          "citation": "PMMA K_IC about 1.0 MPa√m and tensile strength 47–79 MPa (Wikipedia); G = K²(1−ν²)/E.",
                          "url": "https://en.wikipedia.org/wiki/Poly(methyl_methacrylate)",
                          "caution": "Experimental; acrylic toughness depends on grade, rate and temperature."]
-    ]
-    static let glass: [String: Any] = ["young": 7.2e10, "density": 2500, "poisson": 0.23]
-    static let glassFracture: [String: Any] = [
+    ] }
+    static var glass: [String: Any] { ["young": 7.2e10, "density": 2500, "poisson": 0.23] }
+    static var glassFracture: [String: Any] { [
         "strength": 4.1e7, "energy": 7.4,
         "energySource": ["status": "estimated",
                          "citation": "Soda-lime glass K_IC 0.75 MPa√m (Wikipedia, MakeItFrom) and mean modulus of rupture 41 MPa (Pilkington ATS-129); G = K²(1-ν²)/E.",
                          "url": "https://en.wikipedia.org/wiki/Soda%E2%80%93lime_glass",
                          "caution": "Experimental; glass strength depends strongly on surface flaws."]
-    ]
+    ] }
 
     static func steelBall(diameter: Double, center: [Double], velocity: [Double]) -> [String: Any] {
         ["name": "Steel ball", "shape": "round", "size": [diameter, diameter], "center": center, "velocity": velocity,
