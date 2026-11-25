@@ -45,14 +45,24 @@ enum MaterialTarget: String, Identifiable {
         }
     }
 
-    func requiresElastic(in part: AssemblyPart) -> Bool { self != .body || part.bondedLayer != nil }
+    /// Each layer of a bonded block now has its own plasticity, so no target forces elastic,
+    /// except a fixed support, which never deforms.
+    func requiresElastic(in part: AssemblyPart) -> Bool { part.support == .fixed }
 
     func apply(_ profile: MaterialProfile, to part: inout AssemblyPart, elasticOnly: Bool) {
+        var applied = AssemblyPart("profile")
+        profile.apply(to: &applied, elasticOnly: elasticOnly || requiresElastic(in: part))
+        let plasticity = applied.plasticity.response == .elastoplastic ? applied.plasticity : nil
         switch self {
         case .body: profile.apply(to: &part, elasticOnly: elasticOnly || requiresElastic(in: part))
-        case .second: part.bondedLayer?.material = profile.material
-        case .third: part.bondedLayer?.third?.material = profile.material
+        case .second:
+            part.bondedLayer?.material = profile.material
+            part.bondedLayer?.plasticity = plasticity
+        case .third:
+            part.bondedLayer?.third?.material = profile.material
+            part.bondedLayer?.third?.plasticity = plasticity
         }
+        part.alignLayerFracture()
     }
 }
 

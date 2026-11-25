@@ -138,15 +138,21 @@
         },
         "bondedLayer": {
           "type": "object", "additionalProperties": false,
-          "description": "Permanently bonded second (and third) elastic material along the block's local x axis. Elastic blocks without fracture or notch only.",
+          "description": "Bonded second (and third) material along the block's local x axis. Each layer may yield (plasticity), crack (fracture) and delaminate from the layer before it (bond). Layer fracture and bond need the body's fracture on. Blocks without a notch only.",
           "properties": {
             "interfaceFraction": { "type": "number", "minimum": 0.1, "maximum": 0.9, "default": 0.5 },
             "material": { "$ref": "#/$defs/material" },
+            "plasticity": { "type": "object", "description": "J2 plasticity for this layer only, same keys as a body's plasticity." },
+            "fracture": { "type": "object", "description": "This layer's crack strength and energy, same keys as a body's fracture without meshPattern. Omit and the layer never cracks." },
+            "bond": { "type": "object", "description": "Cohesive bond with the previous layer (strengthFraction against the softer side's E, or strength in Pa, and energy in J/m²). Omit and the bond never fails." },
             "third": {
               "type": "object", "additionalProperties": false,
               "properties": {
                 "interfaceFraction": { "type": "number", "minimum": 0.1, "maximum": 0.9, "default": 0.75 },
-                "material": { "$ref": "#/$defs/material" }
+                "material": { "$ref": "#/$defs/material" },
+                "plasticity": { "type": "object" },
+                "fracture": { "type": "object" },
+                "bond": { "type": "object", "description": "Cohesive bond with the second layer." }
               }
             }
           }

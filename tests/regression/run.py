@@ -78,6 +78,10 @@ CHECKS = [
     ("stack_offset", "energy_drift_relative", None, "max", 0.01, "new"),
     ("stack_on_support", "energy_drift_relative", None, "max", 0.01, "new"),
     ("determinism", "max_abs_position_difference_two_runs", None, "max", 0.0, "new (bit-for-bit repeatability)"),
+    ("layered_two_region", "energy_drift_relative", None, "max", 0.005, "new (layered target plan step 2: energy error under 0.5%)"),
+    ("layered_bond_pull", "fracture_energy_over_gc_length", lambda m: 1.0, "rel", 0.02, "new (plan step 3: dissipation = bond toughness × bond length)"),
+    ("layered_bond_pull", "failed_faces_off_bond", None, "max", 0, "new (the bar separates only along the weaker bond)"),
+    ("layered_bond_pull", "bond_crack_length", lambda m: 0.03, "rel", 1e-9, "new (the whole 30 mm bond fails)"),
 ]
 # Always-on rule: every harness run must finish.
 NEVER_BASELINE = {"wall_seconds"}

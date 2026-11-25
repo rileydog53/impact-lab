@@ -195,14 +195,54 @@ public struct Diagnostics: Sendable {
 
 struct ElementHistory: Sendable {
     let model: J2Model
+    /// Per-element constitutive choice inside one body (bonded layers): an index into
+    /// `regionModels`, or -1 for an element that stays elastic. nil means every element
+    /// uses `model`, exactly as before per-element plasticity existed.
+    let elementModel: [Int32]?
+    let regionModels: [J2Model]
     var current: [J2History]
     var next: [J2History]
 
     init(model: J2Model, count: Int) {
         self.model = model
+        elementModel = nil
+        regionModels = []
         current = Array(repeating: J2History(), count: count)
         next = current
     }
+
+    /// One optional J2 model per element. Elements with nil use the body's elastic law.
+    init?(elementModels: [J2Model?]) {
+        var regions: [J2Model] = []
+        var indices: [Int32] = []
+        indices.reserveCapacity(elementModels.count)
+        // One shared model per distinct region (a body has at most three).
+        for model in elementModels {
+            guard let model else { indices.append(-1); continue }
+            if let found = regions.firstIndex(where: { $0.sameParameters(as: model) }) {
+                indices.append(Int32(found))
+            } else {
+                regions.append(model)
+                indices.append(Int32(regions.count - 1))
+            }
+        }
+        guard let first = regions.first else { return nil }
+        model = first
+        elementModel = indices
+        regionModels = regions
+        current = Array(repeating: J2History(), count: elementModels.count)
+        next = current
+    }
+
+    /// The J2 model of element `i`, or nil when that element is elastic.
+    @inline(__always) func model(for i: Int) -> J2Model? {
+        guard let elementModel else { return model }
+        let index = elementModel[i]
+        return index < 0 ? nil : regionModels[Int(index)]
+    }
+
+    /// Number of elements that carry plastic history.
+    var plasticCount: Int { elementModel.map { $0.reduce(0) { $0 + ($1 < 0 ? 0 : 1) } } ?? current.count }
 
     mutating func accept() { swap(&current, &next) }
 }
@@ -249,7 +289,7 @@ struct BodyStep: Sendable {
     /// Nodes held at their reference position (a clamped edge). Empty for a free body.
     var clamped: [Int] = []
 
-    init(_ body: Body, j2: J2Model? = nil, recordsTraction: Bool = false) {
+    init(_ body: Body, j2: J2Model? = nil, recordsTraction: Bool = false, elementJ2: [J2Model?]? = nil) {
         self.body = body
         strain = Array(repeating: 0, count: body.mesh.elements.count)
         nextStrain = strain
@@ -259,7 +299,12 @@ struct BodyStep: Sendable {
         nextApplied = internalForce
         nextPosition = body.position
         nextVelocity = body.velocity
-        history = j2.map { ElementHistory(model: $0, count: body.mesh.elements.count) }
+        if let elementJ2 {
+            precondition(elementJ2.count == body.mesh.elements.count)
+            history = ElementHistory(elementModels: elementJ2)
+        } else {
+            history = j2.map { ElementHistory(model: $0, count: body.mesh.elements.count) }
+        }
         if recordsTraction { trialPiola = Array(repeating: ElementPiola(.zero, .zero), count: strain.count) }
     }
 
@@ -805,7 +850,7 @@ public struct Simulation: Sendable {
             strain[i] = 0.5 * ((body.measuresVerticalStrain ? yy : xx) - 1)
             let kinematicsEnd = timing.mark()
             let stress: ElementPiola
-            if let model = history?.model {
+            if let model = history?.model(for: i) {
                 guard let response = model.update(x: fx, y: fy, from: history!.current[i]) else { return nil }
                 history!.next[i] = response.history
                 stress = ElementPiola(response.piolaX, response.piolaY)
@@ -847,7 +892,7 @@ extension BodyStep {
         let y = u * e.g1.y + v * e.g2.y
         let j = cross2D(x, y)
         let xx, yy, xy, zz: Double
-        if let history, let response = history.model.update(x: x, y: y, from: history.current[index]) {
+        if let history, let model = history.model(for: index), let response = model.update(x: x, y: y, from: history.current[index]) {
             // Cauchy stress is P Fᵀ / J. Average the two shear components
             // to remove floating-point asymmetry.
             let px = response.piolaX, py = response.piolaY
@@ -883,10 +928,10 @@ extension BodyStep {
         let x = u * e.g1.x + v * e.g2.x
         let y = u * e.g1.y + v * e.g2.y
         let jacobian = cross2D(x, y)
-        if let history {
-            let pressure = includePressure ? -history.model.bulk * log(jacobian) / jacobian : 0
+        if let history, let model = history.model(for: index) {
+            let pressure = includePressure ? -model.bulk * log(jacobian) / jacobian : 0
             let equivalent = includeEquivalent
-                ? (history.model.update(x: x, y: y, from: history.current[index])?.equivalentStress ?? 0) / jacobian : 0
+                ? (model.update(x: x, y: y, from: history.current[index])?.equivalentStress ?? 0) / jacobian : 0
             return (pressure, equivalent)
         }
         let material = body.elementMaterials?[index] ?? body.material

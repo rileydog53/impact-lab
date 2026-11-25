@@ -56,8 +56,8 @@ extension AssemblyPart {
         if shape == .round {
             return "Round bodies cannot fracture: they use an elliptical mesh with no grid of element faces for cracks to open along. Use a rectangular block."
         }
-        if bondedLayer != nil {
-            return "Bonded-layer blocks cannot fracture: permanent bonds share nodes, so there is no seam to open. Use two bodies joined by a Breakable link, or remove the bonded layers."
+        if bondedLayer != nil && notch != nil {
+            return "A bonded-layer block cannot also have a V-notch. Remove the notch to let the layers crack and delaminate."
         }
         if let support {
             return support.isFixture

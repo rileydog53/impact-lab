@@ -29,6 +29,8 @@ Output (`report.md`, `results.json`, `measurements.json`, `usability.json`, `har
 | stack_on_support | new (two blocks on a fixed bench) | reaction = total weight (1%); lateral drift < 0.01 mm; impulse balance |
 | stack_offset | new (upper block 4 mm off centre) | informational |
 | determinism | new | same scene twice, positions identical bit for bit |
+| layered_two_region | new (layered target plan step 2: plastic copper layer bonded to elastic steel in one body) | energy error < 0.5% |
+| layered_bond_pull | new (plan step 3: two-layer bar pulled apart, weak cohesive bond) | fracture dissipation = bond toughness × bond length (2%); no cracks off the bond; whole 30 mm bond fails |
 
 The impulse balance (support reaction impulse = weight impulse + change in momentum of the free bodies) agrees to about 1e-12 everywhere. That is a bookkeeping-consistency check on the solver's support reactions, not independent evidence of material accuracy; it would catch a broken support, gravity or momentum accounting.
 

@@ -55,6 +55,12 @@ package struct J2Model: Sendable {
         self.table = table
     }
 
+    /// True when both models give the same response (used to share one model per bonded region).
+    func sameParameters(as other: J2Model) -> Bool {
+        shear == other.shear && bulk == other.bulk && yieldStress == other.yieldStress && hardening == other.hardening
+            && table == other.table
+    }
+
     private func plasticIncrement(trial: Double, strain: Double) -> Double {
         if let table { return table.plasticIncrement(trial: trial, oldStrain: strain, threeShear: 3 * shear) }
         guard let yieldStress, trial > yieldStress + hardening * strain else { return 0 }

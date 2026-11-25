@@ -318,6 +318,13 @@ if CommandLine.arguments.dropFirst().contains("--metal-profiles") {
     exit(EXIT_SUCCESS)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--layered-bodies") {
+    let args = CommandLine.arguments
+    if args.indices.contains(index + 1) && args[index + 1] == "probe" { try layeredBondProbe(); exit(EXIT_SUCCESS) }
+    try layeredBodiesCheck(quick: args.indices.contains(index + 1) && args[index + 1] == "quick")
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--plasticity") {
     try plasticityCheck()
     try materialImpactCheck()
@@ -365,3 +372,4 @@ try layeredImpactEnvelopeCheck()
 try offAxisImpactCheck()
 try assemblyCheck()
 try fractureCheck()
+try layeredBodiesCheck(quick: true)

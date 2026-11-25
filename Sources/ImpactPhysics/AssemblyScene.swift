@@ -52,10 +52,21 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// Extra layers of the same block. Every layer has its own material and, optionally, its own
+    /// plasticity. When the body has fracture on, every layer has its own crack strength and
+    /// toughness and every bond between neighbouring layers has its own (usually weaker) strength
+    /// and toughness, so the layers can crack internally and delaminate along the bond.
+    /// All the per-layer settings are optional on disk: nil reproduces a scene saved before they existed.
     public struct BondedLayer: Codable, Equatable, Sendable {
         public struct ThirdLayer: Codable, Equatable, Sendable {
             public var interfaceFraction: Double
             public var material: Material
+            /// nil or Elastic keeps the layer elastic.
+            public var plasticity: ImpactPlasticity?
+            /// Crack strength and toughness inside this layer. nil: this layer does not crack.
+            public var fracture: MaterialFractureSettings?
+            /// Strength and toughness of the bond between the second and this third layer. nil: the bond does not fail.
+            public var bond: MaterialFractureSettings?
 
             public init(interfaceFraction: Double = 0.75, material: Material = Material()) {
                 self.interfaceFraction = interfaceFraction
@@ -67,6 +78,12 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         public var interfaceFraction = 0.5
         public var material = Material(young: 2e6, density: 2000)
         public var third: ThirdLayer?
+        /// Plasticity of the second layer. nil or Elastic keeps the layer elastic.
+        public var plasticity: ImpactPlasticity?
+        /// Crack strength and toughness inside the second layer. nil: this layer does not crack.
+        public var fracture: MaterialFractureSettings?
+        /// Strength and toughness of the bond between the first and second layer. nil: the bond does not fail.
+        public var bond: MaterialFractureSettings?
 
         public init() {}
 
@@ -76,11 +93,27 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             return result
         }
 
+        /// Plasticity of the second and third layers, in order.
+        var layerPlasticity: [ImpactPlasticity?] { [plasticity] + (third.map { [$0.plasticity] } ?? []) }
+        /// Crack settings of the second and third layers, in order.
+        var layerFracture: [MaterialFractureSettings?] { [fracture] + (third.map { [$0.fracture] } ?? []) }
+        /// Bond settings: first–second, then second–third.
+        var bonds: [MaterialFractureSettings?] { [bond] + (third.map { [$0.bond] } ?? []) }
+        var hasPlasticity: Bool { layerPlasticity.contains { $0?.response == .elastoplastic } }
+        var hasFractureSettings: Bool { (layerFracture + bonds).contains { $0 != nil } }
+
         var isValid: Bool {
             let range = Self.minimumFraction...(1 - Self.minimumFraction)
             return regions.allSatisfy { fraction, material in
                 range.contains(fraction) && material.isValidForAssembly
             } && (third.map { $0.interfaceFraction - interfaceFraction >= Self.minimumFraction - 1e-12 } ?? true)
+                && layerPlasticity.allSatisfy { $0?.isValid ?? true }
+                && zip(regions, layerFracture).allSatisfy { region, settings in
+                    settings.map { $0.isValid && (region.material.provenance == nil || $0.usesAbsoluteStrength) } ?? true
+                }
+                && bonds.allSatisfy { settings in
+                    settings.map { $0.isValid } ?? true
+                }
         }
     }
 
@@ -154,7 +187,9 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         if velocity != .zero { return "A supported body starts at rest; set its velocity to zero." }
         if fracture != nil { return "Supports cannot be combined with fracture yet (crack insertion would move the held nodes)." }
         if support.isFixture {
-            if plasticity.response != .elastic { return "A fixed support is rigid, so plasticity has no effect; set the response to Elastic." }
+            if plasticity.response != .elastic || bondedLayer?.hasPlasticity == true {
+                return "A fixed support is rigid, so plasticity has no effect; set the response to Elastic."
+            }
         } else if shape == .round {
             return "Round bodies have no straight edge to clamp; use a block, enclosure or outline."
         }
@@ -176,13 +211,20 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && outlineIssues.isEmpty
             && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)
-            && (bondedLayer.map { shape == .block && $0.isValid && fracture == nil && notch == nil
-                && plasticity.response == .elastic } ?? true)
+            && (bondedLayer.map { shape == .block && $0.isValid && notch == nil
+                && (fracture != nil || !$0.hasFractureSettings) } ?? true)
     }
 
     func makeBody(refinement: Int, notchDepth: Double = 0) throws -> Body {
+        try makeLayeredBody(refinement: refinement, notchDepth: notchDepth).body
+    }
+
+    /// The body plus, for a bonded-layer block, each element's layer (0 = this body's own material,
+    /// 1 = second layer, 2 = third layer). Crack insertion never renumbers elements, so the list stays valid.
+    func makeLayeredBody(refinement: Int, notchDepth: Double = 0) throws -> (body: Body, layers: [Int]?) {
         let mesh: Mesh
         var elementMaterials: [Material]?
+        var layers: [Int]?
         switch shape {
         case .outline:
             mesh = try outlineMesh(resolution: AssemblyScene.Resolution(rawValue: refinement) ?? .standard)
@@ -192,7 +234,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             let ny = max(3, Int((size.y / 0.009).rounded())) * refinement
             let staggered = fracture?.pattern == .staggered
             if notch != nil || bondedLayer != nil {
-                (mesh, elementMaterials) = partitionedBlock(rows: ny, refinement: refinement, staggered: staggered)
+                (mesh, elementMaterials, layers) = partitionedBlock(rows: ny, refinement: refinement, staggered: staggered)
             } else {
                 mesh = .rectangle(columns: nx, rows: ny, staggerDiagonals: staggered) { u, v in
                     var x = (u - 0.5) * size.x
@@ -213,8 +255,28 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         let radians = angle * .pi / 180
         let c = cos(radians), s = sin(radians)
         let position = mesh.reference.map { center + Point(c * $0.x - s * $0.y, s * $0.x + c * $0.y) }
-        return Body(mesh: mesh, material: material, position: position, velocity: velocity,
-                    elementMaterials: elementMaterials)
+        return (Body(mesh: mesh, material: material, position: position, velocity: velocity,
+                     elementMaterials: elementMaterials), layers)
+    }
+
+    /// One J2 model per element for a bonded-layer block in which at least one layer is plastic,
+    /// nil otherwise (then the body uses the single model of `plasticity`, as before).
+    func elementPlasticity(layers: [Int]?) -> [J2Model?]? {
+        guard let layer = bondedLayer, let layers, layer.hasPlasticity || plasticity.response == .elastoplastic else { return nil }
+        let materials = [material] + layer.regions.map(\.material)
+        let settings = [plasticity] + layer.layerPlasticity
+        let models = zip(materials, settings).map { material, settings -> J2Model? in
+            guard let settings, settings.response == .elastoplastic else { return nil }
+            return settings.model(for: material)
+        }
+        return layers.map { models[$0] }
+    }
+
+    /// Crack and bond laws for a bonded-layer block with fracture on, nil otherwise.
+    func fractureLayers(layers: [Int]?) -> MaterialFracture.Layers? {
+        guard let layer = bondedLayer, let layers, let fracture else { return nil }
+        return MaterialFracture.Layers(elementLayer: layers, materials: [material] + layer.regions.map(\.material),
+                                       cracks: [fracture] + layer.layerFracture, bonds: layer.bonds)
     }
 
     /// Nodes on the clamped edge, found from the reference mesh in the body's own (unrotated) frame.
@@ -232,7 +294,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    private func partitionedBlock(rows: Int, refinement: Int, staggered: Bool) -> (Mesh, [Material]?) {
+    private func partitionedBlock(rows: Int, refinement: Int, staggered: Bool) -> (Mesh, [Material]?, [Int]?) {
         var cuts = [0.0, 1.0]
         let center = 0.5 + (notch?.centerFraction ?? 0)
         let halfWidth = (notch?.widthFraction ?? 0) / 2
@@ -268,14 +330,15 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             let rise = notch.map { size.y * $0.depthFraction * max(0, 1 - 2 * abs(x - center) / $0.widthFraction) } ?? 0
             return Point((x - 0.5) * size.x, (v - 0.5) * size.y + rise * (1 - v))
         }
-        guard let first = interfaces.first else { return (mesh, nil) }
-        let materials = mesh.elements.indices.map { index in
+        guard let first = interfaces.first else { return (mesh, nil, nil) }
+        let layers = mesh.elements.indices.map { index in
             let column = (index / 2) % columns
-            if column < first { return material }
-            if let second = interfaces.dropFirst().first, column >= second { return regions[1].material }
-            return regions[0].material
+            if column < first { return 0 }
+            if let second = interfaces.dropFirst().first, column >= second { return 2 }
+            return 1
         }
-        return (mesh, materials)
+        let materials = layers.map { $0 == 0 ? material : regions[$0 - 1].material }
+        return (mesh, materials, layers)
     }
 }
 
@@ -532,5 +595,69 @@ extension Mesh {
             }
         }
         return Mesh(reference: points, triangles: triangles, boundary: edges)
+    }
+}
+
+extension AssemblyPart {
+    /// Starting crack settings for a material: the profile's sourced estimate for a reference metal
+    /// (nil when it has none), otherwise the illustrative default.
+    public static func defaultLayerFracture(for material: Material) -> MaterialFractureSettings? {
+        guard let provenance = material.provenance else { return MaterialFractureSettings() }
+        return MaterialProfile.references.first { $0.id == (provenance.referenceID ?? provenance.id) }?.defaultFracture
+    }
+
+    /// A starting bond: half the strength and half the toughness of the weaker neighbouring layer,
+    /// in pascals. Illustrative, not a measured adhesive or interface value.
+    static func defaultBond(between a: (Material, MaterialFractureSettings?), _ b: (Material, MaterialFractureSettings?)) -> MaterialFractureSettings? {
+        let sides = [a, b].compactMap { material, settings in
+            settings.map { (strength: $0.resolvedStrength(young: material.young), energy: $0.energy) }
+        }
+        guard !sides.isEmpty else { return nil }
+        var bond = MaterialFractureSettings()
+        bond.strength = max(MaterialFractureSettings.absoluteStrengthRange.lowerBound, 0.5 * sides.map(\.strength).min()!)
+        bond.energy = max(MaterialFractureSettings.absoluteEnergyRange.lowerBound, 0.5 * sides.map(\.energy).min()!)
+        return bond
+    }
+
+    /// The starting bond offered for bond `index` (0: first–second layer, 1: second–third).
+    public func suggestedBond(_ index: Int) -> MaterialFractureSettings? {
+        guard let layer = bondedLayer else { return nil }
+        let sides: [(Material, MaterialFractureSettings?)] = [(material, fracture), (layer.material, layer.fracture)]
+            + (layer.third.map { [($0.material, $0.fracture)] } ?? [])
+        guard sides.indices.contains(index + 1) else { return nil }
+        return Self.defaultBond(between: sides[index], sides[index + 1])
+            ?? MaterialFractureSettings()
+    }
+
+    /// Keeps layer crack and bond settings consistent with the body: none while fracture is off,
+    /// defaults for any layer or bond that has none when `fillMissing`, and a sourced estimate in
+    /// place of a fraction-of-E strength on a reference metal layer.
+    public mutating func alignLayerFracture(fillMissing: Bool = false) {
+        guard var layer = bondedLayer else { return }
+        guard fracture != nil else {
+            layer.fracture = nil
+            layer.bond = nil
+            layer.third?.fracture = nil
+            layer.third?.bond = nil
+            bondedLayer = layer
+            return
+        }
+        func align(_ settings: MaterialFractureSettings?, _ material: Material) -> MaterialFractureSettings? {
+            guard let settings else { return fillMissing ? Self.defaultLayerFracture(for: material) : nil }
+            if material.provenance != nil && !settings.usesAbsoluteStrength { return Self.defaultLayerFracture(for: material) }
+            return settings
+        }
+        layer.fracture = align(layer.fracture, layer.material)
+        if fillMissing && layer.bond == nil {
+            layer.bond = Self.defaultBond(between: (material, fracture), (layer.material, layer.fracture))
+        }
+        if var third = layer.third {
+            third.fracture = align(third.fracture, third.material)
+            if fillMissing && third.bond == nil {
+                third.bond = Self.defaultBond(between: (layer.material, layer.fracture), (third.material, third.fracture))
+            }
+            layer.third = third
+        }
+        bondedLayer = layer
     }
 }

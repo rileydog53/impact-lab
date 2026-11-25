@@ -404,6 +404,61 @@ func usabilityProbes() {
     }
 }
 
+// MARK: Layered bodies (plan steps 2 and 3)
+
+/// A plastic copper layer on the struck side bonded to an elastic steel layer, one body.
+func layeredTwoRegion() {
+    var scene = AssemblyScene.metalImpactExample()
+    scene.meshResolution = .x4
+    var layer = AssemblyPart.BondedLayer()
+    layer.interfaceFraction = 0.5
+    var steel = AssemblyPart("steel")
+    MaterialProfile.structuralSteel.apply(to: &steel, elasticOnly: true)
+    layer.material = steel.material
+    scene.parts[0].bondedLayer = layer
+    var worst = 0.0
+    guard let (final, steps, _) = run(scene, { sim in worst = max(worst, abs(sim.energies.total - sim.initialEnergy)) })
+    else { record("layered_two_region", "run_failed", 1, ""); return }
+    record("layered_two_region", "energy_drift_relative", worst / final.initialEnergy, "", "max |E − E0| / E0")
+    record("layered_two_region", "plastic_work", final.energies.plastic, "J/m")
+    record("layered_two_region", "peak_plastic_strain", final.plasticStrain(0).max() ?? 0, "")
+    record("layered_two_region", "steps", Double(steps), "")
+}
+
+/// A two-layer bar pulled apart by a uniform stretch; only the weaker bond can open.
+func layeredBondPull() {
+    var scene = AssemblyScene()
+    var bar = AssemblyPart("Two-layer bar", size: Point(0.20, 0.03))
+    bar.material = Material(young: 1e6, density: 1000, poisson: 0)
+    bar.refinement = .x4
+    var bulk = MaterialFractureSettings()
+    bulk.strengthFraction = 0.08
+    bulk.energy = 20
+    var bond = MaterialFractureSettings()
+    bond.strengthFraction = 0.02
+    bond.energy = 2
+    bar.fracture = bulk
+    var layer = AssemblyPart.BondedLayer()
+    layer.material = bar.material
+    layer.fracture = bulk
+    layer.bond = bond
+    bar.bondedLayer = layer
+    scene.parts = [bar]
+    scene.duration = 0.008
+    guard scene.issues().isEmpty,
+          var sim = try? AssemblySimulation(scene, refinement: 1, stepLimit: .infinity, initialVelocity: { _, p in Point(15 * p.x, 0) })
+    else { record("layered_bond_pull", "run_failed", 1, ""); return }
+    while sim.time < scene.duration {
+        guard sim.step() else { record("layered_bond_pull", "run_failed", 1, ""); return }
+    }
+    let reading = sim.fractureReading(0)!
+    record("layered_bond_pull", "fracture_energy_over_gc_length", sim.energies.fracture / (bond.energy * bar.size.y), "",
+           "fracture dissipation / (bond toughness × bond length)")
+    record("layered_bond_pull", "failed_faces_off_bond", Double(reading.failedEdges - reading.failedBondEdges), "")
+    record("layered_bond_pull", "bond_crack_length", reading.bondCrackLength, "m")
+    record("layered_bond_pull", "pieces", Double(reading.pieces), "")
+}
+
 // MARK: Main
 
 let args = CommandLine.arguments
@@ -414,7 +469,8 @@ try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirecto
 let all: [(String, () -> Void)] = [
     ("block_on_bench", blockOnBench), ("drop_test", dropTest), ("cantilever_sag", cantileverSag),
     ("bar_vibration", barVibration), ("outline_cantilever", outlineCantilever), ("three_point_bend", threePointBend), ("hanging_springs", hangingSprings),
-    ("stack_on_support", stackOnSupport), ("determinism", determinism), ("usability", usabilityProbes),
+    ("stack_on_support", stackOnSupport), ("determinism", determinism),
+    ("layered_two_region", layeredTwoRegion), ("layered_bond_pull", layeredBondPull), ("usability", usabilityProbes),
 ]
 for (name, body) in all where only == nil || only == name { body() }
 

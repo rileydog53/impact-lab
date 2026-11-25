@@ -6,6 +6,8 @@ public struct ImpactPlasticity: Codable, Equatable, Sendable {
     public var hardeningFraction = 0.32
     public var table: HardeningTable?
 
+    public init(response: CouponResponse = .elastoplastic) { self.response = response }
+
     public static let yieldRange = 0.010...0.035
     public static let hardeningRange = TensionSettings.hardeningRange
 

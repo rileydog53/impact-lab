@@ -14,6 +14,10 @@ public struct MaterialFractureReading: Sendable {
     public internal(set) var failedEdges = 0
     public internal(set) var pieces = 1
     public internal(set) var crackLength = 0.0
+    /// Failed faces, and their length, that lie on a bond between two layers (delamination).
+    /// Always zero for a body without bonded layers.
+    public internal(set) var failedBondEdges = 0
+    public internal(set) var bondCrackLength = 0.0
     public internal(set) var separation = 0.0
     public internal(set) var storedEnergy = 0.0
     public internal(set) var dissipation = 0.0
@@ -124,8 +128,47 @@ package struct MaterialFracture: Sendable {
         let left, right: Edge // Element corner IDs, both in the left triangle's orientation.
         let normal: Point
         let length, stiffness: Double
+        /// Cohesive strength (Pa) and fracture energy (J/m²) of this face. For a uniform body every
+        /// face carries the body's values; in a layered body each layer and each bond has its own.
+        let strength, toughness: Double
+        /// False for a face inside a layer, or on a bond, that was given no crack settings.
+        let canOpen: Bool
+        /// True when the two triangles belong to different layers (a bond face).
+        let isBond: Bool
         var a: Int { left.a / 3 }
         var b: Int { right.a / 3 }
+    }
+
+    /// Crack laws for a block made of bonded layers (Camacho and Ortiz 1996 extrinsic cohesive
+    /// insertion, one law per layer and one per bond between neighbouring layers).
+    package struct Layers: Sendable {
+        /// Layer of each element: 0 = the body's own material, 1 = second layer, 2 = third.
+        package let elementLayer: [Int]
+        package let materials: [Material]
+        /// Crack settings inside each layer; nil means that layer does not crack.
+        package let cracks: [MaterialFractureSettings?]
+        /// Bond settings between layer k and k + 1; nil means that bond does not fail.
+        package let bonds: [MaterialFractureSettings?]
+
+        package init(elementLayer: [Int], materials: [Material], cracks: [MaterialFractureSettings?],
+                     bonds: [MaterialFractureSettings?]) {
+            precondition(cracks.count == materials.count && bonds.count == materials.count - 1)
+            self.elementLayer = elementLayer
+            self.materials = materials
+            self.cracks = cracks
+            self.bonds = bonds
+        }
+
+        /// (strength, toughness) for the face between elements `a` and `b`, or nil if it cannot open.
+        /// A bond resolves a fraction-of-E strength against the more compliant side.
+        func law(_ a: Int, _ b: Int) -> (strength: Double, toughness: Double, bond: Bool)? {
+            let la = elementLayer[a], lb = elementLayer[b]
+            if la == lb {
+                return cracks[la].map { ($0.resolvedStrength(young: materials[la].young), $0.energy, false) }
+            }
+            let young = min(materials[la].young, materials[lb].young)
+            return bonds[min(la, lb)].map { ($0.resolvedStrength(young: young), $0.energy, true) }
+        }
     }
 
     private struct Interface: Sendable {
@@ -150,7 +193,13 @@ package struct MaterialFracture: Sendable {
 
     private let faces: [Face]
     private let exterior: [Edge] // Element corner IDs.
-    private let young, density, strength, toughness: Double
+    private let young, density: Double
+    /// Lowest strength of any face that can open: a cheap bound that skips weak waves.
+    private let minimumStrength: Double
+    /// Per-element material for a layered body, nil for a uniform one.
+    private let elementMaterials: [Material]?
+    /// Stiffest modulus in the body, used for crack-face self contact.
+    package let contactYoung: Double
     private let cornerStiffness: [Double]
     private var slots: [Int]
     private var recovery: [[(element: Int, weight: Double)]]
@@ -168,12 +217,14 @@ package struct MaterialFracture: Sendable {
         cornerNodes.indices.filter { cornerNodes[$0] == node }
     }
 
-    package init(body: Body, settings: MaterialFractureSettings) {
+    package init(body: Body, settings: MaterialFractureSettings, layers: Layers? = nil) {
         let mesh = body.mesh
         young = body.material.young
         density = body.material.density
-        strength = settings.resolvedStrength(young: young)
-        toughness = settings.energy
+        let strength = settings.resolvedStrength(young: young)
+        let toughness = settings.energy
+        elementMaterials = layers == nil ? nil : body.elementMaterials
+        contactYoung = elementMaterials?.map(\.young).max() ?? young
         cornerNodes = mesh.elements.flatMap { [$0.a, $0.b, $0.c] }
         var pending: [SIMD2<Int>: Edge] = [:]
         var faces: [Face] = []
@@ -187,17 +238,33 @@ package struct MaterialFracture: Sendable {
                     let delta = mesh.reference[cornerNodes[left.b]] - mesh.reference[cornerNodes[left.a]]
                     let length = simd_length(delta)
                     let altitude = min(triangle.area, mesh.elements[left.a / 3].area) * 2 / length
-                    let stiffness = max(30 * young / altitude, 2 * strength * strength / toughness)
                     let right = Edge(3 * i + k, 3 * i + j)
-                    faces.append(Face(left: left, right: right, normal: Point(delta.y, -delta.x) / length,
-                                      length: length, stiffness: stiffness))
-                    for corner in [left.a, left.b, right.a, right.b] { stiffnesses[corner] += 4 * length * stiffness }
+                    let normal = Point(delta.y, -delta.x) / length
+                    if let layers {
+                        // The stiffer side sets the penalty floor that keeps an uncracked bond stiff.
+                        let faceYoung = max(layers.materials[layers.elementLayer[i]].young,
+                                            layers.materials[layers.elementLayer[left.a / 3]].young)
+                        let law = layers.law(left.a / 3, i)
+                        let faceStrength = law?.strength ?? 0, faceToughness = law?.toughness ?? 1
+                        let stiffness = max(30 * faceYoung / altitude, 2 * faceStrength * faceStrength / faceToughness)
+                        faces.append(Face(left: left, right: right, normal: normal, length: length, stiffness: stiffness,
+                                          strength: faceStrength, toughness: faceToughness, canOpen: law != nil,
+                                          isBond: layers.elementLayer[i] != layers.elementLayer[left.a / 3]))
+                        // A face that can never open never adds crack stiffness to a node.
+                        if law != nil { for corner in [left.a, left.b, right.a, right.b] { stiffnesses[corner] += 4 * length * stiffness } }
+                    } else {
+                        let stiffness = max(30 * young / altitude, 2 * strength * strength / toughness)
+                        faces.append(Face(left: left, right: right, normal: normal, length: length, stiffness: stiffness,
+                                          strength: strength, toughness: toughness, canOpen: true, isBond: false))
+                        for corner in [left.a, left.b, right.a, right.b] { stiffnesses[corner] += 4 * length * stiffness }
+                    }
                 } else {
                     pending[key] = Edge(3 * i + j, 3 * i + k)
                 }
             }
         }
         self.faces = faces
+        minimumStrength = layers == nil ? strength : (faces.filter(\.canOpen).map(\.strength).min() ?? .infinity)
         cornerStiffness = stiffnesses
         exterior = pending.sorted { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }.map(\.value)
         contactTree = TriangleContact(mesh: mesh)
@@ -213,13 +280,15 @@ package struct MaterialFracture: Sendable {
     func squaredFrequencyBound(body: Body, contactAllowance: Double, springs: [(Int, Double)]) -> Double {
         var anchors = Array(repeating: 0.0, count: body.mesh.reference.count)
         for (node, value) in springs { anchors[node] += value }
-        let bulk = density * body.material.waveSpeed * body.material.waveSpeed
+        let uniformBulk = density * body.material.waveSpeed * body.material.waveSpeed
         var bound = 0.0
         for (i, e) in body.mesh.elements.enumerated() {
             let g = Point(simd_length(e.g0), simd_length(e.g1))
             let third = simd_length(e.g2)
+            let material = elementMaterials?[i]
+            let bulk = material.map { $0.density * $0.waveSpeed * $0.waveSpeed } ?? uniformBulk
             let scale = bulk * e.area * (g.x + g.y + third)
-            let mass = density * e.area / 3
+            let mass = (material?.density ?? density) * e.area / 3
             for (j, gradient) in [g.x, g.y, third].enumerated() {
                 let stiffness = scale * gradient + cornerStiffness[3 * i + j] + contactAllowance + anchors[e.nodes[j]]
                 bound = max(bound, stiffness / mass)
@@ -241,14 +310,15 @@ package struct MaterialFracture: Sendable {
 
     package mutating func insert(position: [Point], piola: [ElementPiola], mesh: Mesh) -> (mesh: Mesh, sources: [Int])? {
         var pending: [(index: Int, traction: Point, bulkGap: Double)] = []
-        let strengthSquared = strength * strength
+        let minimumSquared = minimumStrength * minimumStrength
         // A cheap upper bound avoids projecting every face in weak elastic
         // waves. The remaining candidates are evaluated in fixed mesh order.
-        if !piola.contains(where: { simd_length_squared($0.x) + simd_length_squared($0.y) >= strengthSquared }) {
+        if !piola.contains(where: { simd_length_squared($0.x) + simd_length_squared($0.y) >= minimumSquared }) {
             return nil
         }
         let patch = MaterialFracture.recoveredInsertionStress ? Self.recover(piola, weights: recovery) : []
-        for (i, face) in faces.enumerated() where slots[i] < 0 {
+        for (i, face) in faces.enumerated() where slots[i] < 0 && face.canOpen {
+            let strengthSquared = face.strength * face.strength
             let left = piola[face.a].traction(face.normal), right = piola[face.b].traction(face.normal)
             var mean = 0.5 * (left + right)
             if MaterialFracture.recoveredInsertionStress {
@@ -266,7 +336,7 @@ package struct MaterialFracture: Sendable {
             // Opening and shear fracture are supported under noncompressive
             // normal traction. Matching-face closure is separately unilateral.
             guard traction.x >= 0 else { continue }
-            pending.append((i, traction, simd_distance(left, right) / strength))
+            pending.append((i, traction, simd_distance(left, right) / face.strength))
         }
         guard !pending.isEmpty else { return nil }
         var cuts = Array(repeating: false, count: faces.count)
@@ -303,9 +373,9 @@ package struct MaterialFracture: Sendable {
         }
         for item in pending {
             let face = faces[item.index]
-            let law = InsertedLaw(traction: item.traction, energy: toughness, stiffness: face.stiffness)
+            let law = InsertedLaw(traction: item.traction, energy: face.toughness, stiffness: face.stiffness)
             let seed = law.evaluate(gap: .zero, previous: law.onset, closes: true)
-            reading.peakSeedTractionError = max(reading.peakSeedTractionError, simd_distance(seed.traction, item.traction) / strength)
+            reading.peakSeedTractionError = max(reading.peakSeedTractionError, simd_distance(seed.traction, item.traction) / face.strength)
             reading.peakBulkTractionGap = max(reading.peakBulkTractionGap, item.bulkGap)
             exposedCorners.insert(face.left.a)
             exposedCorners.insert(face.right.b)
@@ -410,14 +480,17 @@ package struct MaterialFracture: Sendable {
             }
             var exposed: Set<SIMD2<Int>> = []
             var sourceEdges: [Edge] = []
+            var moduli: [SIMD2<Int>: Double]? = elementMaterials == nil ? nil : [:]
             let edges = boundaries[id]!.map { item in
                 let materialEdge = edge(item.corners)
                 let face = Edge(locate(materialEdge.a), locate(materialEdge.b))
                 if item.lip { exposed.insert(SIMD2(face.a, face.b)) }
                 if !item.lip || item.failed { sourceEdges.append(face) }
+                if let materials = elementMaterials { moduli![SIMD2(face.a, face.b)] = materials[item.corners.a / 3].young }
                 return face
             }
-            let surface = ContactSurface(edges: edges, reference: nodes.map { reference[$0] }, young: young, sourceEdges: sourceEdges)
+            let surface = ContactSurface(edges: edges, reference: nodes.map { reference[$0] }, young: young, sourceEdges: sourceEdges,
+                                         boundaryModuli: moduli)
             return FractureSurface(id: id, nodes: nodes, surface: surface, exposedEdges: exposed,
                                    edgeCorners: boundaries[id]!.map(\.corners))
         }
@@ -430,6 +503,8 @@ package struct MaterialFracture: Sendable {
         values.damagedEdges = 0
         values.failedEdges = 0
         values.crackLength = 0
+        values.failedBondEdges = 0
+        values.bondCrackLength = 0
         values.separation = 0
         values.storedEnergy = 0
         values.dissipation = 0
@@ -464,6 +539,10 @@ package struct MaterialFracture: Sendable {
             if seam.failed {
                 values.failedEdges += 1
                 values.crackLength += length
+                if faces[seam.face].isBond {
+                    values.failedBondEdges += 1
+                    values.bondCrackLength += length
+                }
                 values.separation = max(values.separation, simd_length(gapA), simd_length(gapB))
             }
             interfaces[i] = seam
@@ -524,7 +603,7 @@ package struct MaterialFracture: Sendable {
         var totals: [Int: (mass: Double, center: Point, momentum: Point)] = [:]
         for (element, id) in pieces.enumerated() {
             let triangle = body.mesh.elements[element]
-            let mass = density * triangle.area / 3
+            let mass = (elementMaterials?[element].density ?? density) * triangle.area / 3
             var sum = totals[id] ?? (0, .zero, .zero)
             for node in [triangle.a, triangle.b, triangle.c] {
                 sum.mass += mass
