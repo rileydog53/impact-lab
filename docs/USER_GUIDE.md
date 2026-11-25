@@ -70,6 +70,51 @@ These slow-motion frames are real calculations, not in-between pictures made up 
 
 To go back to the full run, click **Whole Run**. You return to the same moment in the full run.
 
+## Building your own experiment
+
+Add bodies with the **+** menu in the workshop, or draw your own shape. Every new body starts as **aluminium**; benches and rollers start as **steel**. Pick a body to change it in the panel on the right.
+
+### Choosing a material
+
+Under **Material**, click **Choose a material** and pick one by name. The Library has metals that bend for good (steel, stainless steel, aluminium, copper, titanium, brass) and materials that spring back (carbon fibre, window glass, epoxy, polycarbonate, safety-glass plastic, rubber, oak). Each one's numbers come from published sources, listed under its **Source** link.
+
+To try something that isn't in the list, click **Type my own numbers instead**. The settings, in plain words:
+
+| Setting | What it means | For scale |
+|---|---|---|
+| **Stiffness** (Young's modulus) | How hard it is to bend or squash a little | rubber 0.003 · wood 12 · aluminium 69 · steel 200 GPa |
+| **Weight per size** (density) | How heavy it is for its size | water 1000 · aluminium 2700 · steel 7850 kg/m³ |
+| **Squish sideways** (Poisson ratio) | How much it bulges out the sides when you squash it | cork 0 · metals 0.3 · rubber about 0.5 |
+| **Bends for good at** (yield strength) | The push at which a metal stops springing back and stays bent | copper 69 · aluminium 276 · titanium 890 MPa |
+| **Takes after a big bend** | How much harder it is to bend further once it's bent a lot (12%) | a little above "bends for good at" |
+
+"How it behaves" picks **Springs back** (elastic, like glass or rubber) or **Metal: bends for good** (J2 plasticity, the standard model for metals).
+
+### Cracking
+
+Tick **Can crack** to let a body break. Two numbers control it:
+
+- **Crack starts at** (cohesive strength): how hard you have to pull before a crack begins. Glass 41, aluminium 310, steel 475 MPa.
+- **Crack resistance** (fracture energy): how much energy it takes to make the crack grow. Glass 7, epoxy 150, aluminium 11,000, steel 89,000 J/m². Lower means a crack, once started, runs through easily.
+
+Setting crack resistance very low does not make a body crack the moment it's touched. A crack only starts when the pull reaches **Crack starts at**. To make something crack easily, lower that number too.
+
+Round bodies can't crack, and neither can fixed supports. The app says so next to the body.
+
+### Making sure they actually hit
+
+Above **Run length** the app works out when the bodies will first touch, from their starting speeds, and how long the run goes on after that. If the run would end before anything touches, it says so and offers a button that makes the run long enough. Gravity and springs are not counted in that estimate.
+
+Speeds are in metres per second. A minus sign means moving left (or down).
+
+### Why some runs are slow
+
+The app calculates in tiny time steps, and one step has to be shorter than the time sound takes to cross the smallest triangle of the stiffest body. A steel or aluminium body on a fine mesh makes every step very short, so the whole scene takes many steps, even while nothing is touching yet. To speed things up, start the bodies closer together, use a coarser mesh where detail isn't needed, or shorten the run.
+
+### If a run stops with "pushed into each other"
+
+The app stops a run when two bodies sink into each other further than it can trust (more than a tenth of a triangle edge), rather than show a wrong result. The message names the two bodies. This mostly happens when one body is far softer or far more coarsely meshed than the one it hits. Using real materials for both, or a finer mesh on the body being hit, usually fixes it.
+
 ## "Calculated" and "Illustration"
 
 Next to the color scale, the app always says what kind of picture you are seeing.

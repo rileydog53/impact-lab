@@ -1002,7 +1002,7 @@ struct AssemblyLab: View {
                     field = .damage
                     signal = 3
                 }
-                if args.indices.contains(index + 3), let requested = AssemblyField(rawValue: args[index + 3]) { field = requested }
+                if args.indices.contains(index + 3), let requested = AssemblyField.allCases.first(where: { $0.rawValue == args[index + 3] || "\($0)" == args[index + 3] }) { field = requested }
                 if let milliseconds = Double(args[index + 2]), milliseconds.isFinite, milliseconds >= 0 {
                     experiment.advance(to: milliseconds / 1000)
                 }

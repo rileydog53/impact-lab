@@ -17,7 +17,8 @@ func libraryAndForecastCheck() throws {
         require((part.plasticity.response == .elastic) == profile.springsBackOnly, "\(profile.id) applies the right behaviour")
         require(MaterialProfile.libraryProfile(for: profile.material.provenance) == profile, "\(profile.id) is found again")
         let start = AssemblyPart.startingFracture(for: profile)
-        require(start.usesAbsoluteStrength && start.isValid, "\(profile.id) has a valid starting crack setting")
+        require(start.usesAbsoluteStrength && MaterialFractureSettings.absoluteStrengthRange.contains(start.strength!)
+                && MaterialFractureSettings.absoluteEnergyRange.contains(start.energy), "\(profile.id) has a valid starting crack setting")
         if case let .available(_, energy, source) = profile.fractureEstimate {
             require(source.url.hasPrefix("https://") && !source.citation.isEmpty && energy > 0.5, "\(profile.id) estimate is cited")
         }

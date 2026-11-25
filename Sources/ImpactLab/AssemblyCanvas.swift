@@ -11,32 +11,32 @@ let assemblyPanel = Color(red: 0.085, green: 0.125, blue: 0.17)
 private let crackColor = Color(red: 1, green: 0.39, blue: 0.33)
 
 enum AssemblyField: String, CaseIterable {
-    case strain = "Axial strain"
-    case stress = "Von Mises stress"
-    case maximum = "Maximum principal stress"
-    case minimum = "Minimum principal stress"
-    case pressure = "Mean pressure"
-    case plastic = "Plastic strain"
-    case plasticWork = "Plastic work density"
-    case damage = "Interface damage"
-    case separation = "Crack separation"
-    case speed = "Material speed"
+    case strain = "Stretch or squash (axial strain)"
+    case stress = "Overall stress (von Mises)"
+    case maximum = "Pulling stress (max principal)"
+    case minimum = "Squeezing stress (min principal)"
+    case pressure = "Pressure (mean stress)"
+    case plastic = "Bent for good (plastic strain)"
+    case plasticWork = "Energy spent bending for good (plastic work)"
+    case damage = "Glue or crack damage (interface damage)"
+    case separation = "Crack opening (crack separation)"
+    case speed = "Speed of the material"
 
     var signed: Bool { self == .strain || self == .pressure || self == .maximum || self == .minimum }
     var isStress: Bool { self == .stress || self == .pressure || self == .maximum || self == .minimum }
 
     var definition: String {
         switch self {
-        case .strain: "Element Green–Lagrange axial strain. Negative is compression."
-        case .stress: "Von Mises equivalent stress from the 3D Cauchy tensor in plane strain."
-        case .maximum: "Largest principal Cauchy stress, including the out-of-plane component. Positive is tension."
-        case .minimum: "Smallest principal Cauchy stress, including the out-of-plane component. Negative is compression."
-        case .pressure: "Minus one third of the Cauchy stress trace. Positive is compression."
-        case .plastic: "Accumulated equivalent plastic strain from the J2 history. Elastic bodies have no plastic field."
-        case .plasticWork: "Accumulated plastic work per reference volume (J/m³, i.e. J per m² of section per metre depth): initial yield × plastic strain plus stored hardening energy. Not heat; no heat fraction is applied."
-        case .damage: "Largest damage of adjacent cohesive faces (0 intact, 1 failed). Permanent layer bonds share nodes."
-        case .separation: "Mean distance between matching face nodes, including slip. Failed faces can reclose."
-        case .speed: "Magnitude of the mean nodal velocity in each element. Arrows show body mean velocity."
+        case .strain: "How much each triangle is stretched (positive) or squashed (negative) along the body (Green–Lagrange axial strain)."
+        case .stress: "How hard the material is being loaded overall, whatever the direction (von Mises equivalent stress, plane strain)."
+        case .maximum: "The strongest pull in each triangle. Positive means it is being pulled apart (largest principal stress)."
+        case .minimum: "The strongest squeeze in each triangle. Negative means it is being squashed (smallest principal stress)."
+        case .pressure: "How hard the material is squeezed from all sides. Positive is squeezed (minus one third of the stress trace)."
+        case .plastic: "How much the material has bent or stretched for good, so it won't spring back (equivalent plastic strain). Bodies that only spring back show nothing."
+        case .plasticWork: "The energy used up bending the material for good, per volume (J/m³, plastic work density). This is not heat; no heating is calculated."
+        case .damage: "How close each glue line or crack face is to failing: 0 whole, 1 broken (cohesive damage). Permanent bonds never fail."
+        case .separation: "How far apart the two sides of each crack are, including sliding. Broken faces can close again."
+        case .speed: "How fast the material in each triangle is moving. Arrows show each body's average speed."
         }
     }
 
