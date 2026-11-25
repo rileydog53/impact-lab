@@ -30,6 +30,7 @@ Anything that isn't Joey's own words is labeled as a description or a repo note.
 | 2 | 2026-11-25 | Live testing, sections 1 to 16: setting up the carbon-skinned aluminium panel run |
 | 3 | 2026-11-25 | Live testing part 2, sections 17 to 30: results, a clamped panel, runs that ended before contact |
 | 4 | 2026-11-25 | The ParaView export can't be sent as one file |
+| 5 | 2026-11-25 | Live testing part 4, sections 49 to 54: another run that started too far apart, time estimates, run message wording. Sections 31 to 48 not received yet |
 
 ## What he was testing (context, his words)
 
@@ -51,6 +52,8 @@ Anything that isn't Joey's own words is labeled as a description or a repo note.
 | 11 | Bond strength and fracture energy are easy to mix up | Confusing wording | Slows me down | Interface/wording |
 | 7 | Extra fine mesh "seemed to not change anything" | Bug | Unclear | Not known yet |
 | 6 | Wishes the steel ball's fracture could be turned on | Missing feature | Unclear | Not known yet |
+| 18 | Time estimate: "really actually hard to tell if you've succeeded" | Confusing wording | Unclear | Not known yet |
+| 19 | Run message about "CPU lane" and "element weight" | Confusing wording | Unclear | Interface/wording |
 | 4 | View options: "none of them show much meaning" | Confusing wording | Unclear | Not known yet |
 | 12 | Interior mesh choice: which one is normal | Confusing wording | Unclear | Not known yet |
 | 13 | "I was getting desperate" | Frustration | Unclear | Not known yet |
@@ -89,12 +92,12 @@ Anything that isn't Joey's own words is labeled as a description or a repo note.
 
 ### 15. No warning or estimate when a run will end before the bodies meaningfully touch
 
-Merged from chunk 3, sections 21, 25 and 27.
+Merged from chunk 3, sections 21, 25 and 27, and chunk 5, section 50.
 
-- **His words:** "Oh, because it never made contact. That's hilarious." and "I think I might have set the simulation time step to end before any significant contact really."
+- **His words:** "Oh, because it never made contact. That's hilarious." and "I think I might have set the simulation time step to end before any significant contact really." and, in chunk 5, "I didn't set the runtime to be long enough or for the positions to be close enough at the start."
 - **What he asked for (his words):** "an estimate of like when the bodies will impact if available, or like a warning that says, Hey, like you've selected this time step ... it does not appear that any meaningful simulation will actually occur"
 - He wants it shown while he types the duration: "something above it".
-- **Block level:** Slows me down. Two of his runs ended before or at first contact.
+- **Block level:** Slows me down. Three of his runs ended before or at first contact.
 - **Change type:** Interface/wording. It reads the setup before a run; the solver itself doesn't change.
 
 ### 14. Can't clamp two edges of one body
@@ -128,9 +131,9 @@ Merged from chunk 3, sections 21, 25 and 27.
 
 ### 2. Material settings need plain words
 
-Merged from chunk 1 (the "bendability thing") and chunk 2, section 7.
+Merged from chunk 1 (the "bendability thing"), chunk 2, section 7, and chunk 5, section 52.
 
-- **His words:** "I've maxed out the bendability thing, and I don't know what to call that" and "I don't know what linear coefficient or quadratic coefficients are. Like, we need plain words, like how hard it is to break, how much it resists pulling, or how much it resists bending."
+- **His words:** "I've maxed out the bendability thing, and I don't know what to call that" and "I don't know what linear coefficient or quadratic coefficients are. Like, we need plain words, like how hard it is to break, how much it resists pulling, or how much it resists bending." and "What is artificial bulk viscosity shock smoothing."
 - **Block level:** Blocking. He can't tell whether he changed the setting he meant to.
 - **Change type:** Interface/wording.
 - **Repo note:** "Linear coefficient b1" and "Quadratic coefficient b2" belong to the "Artificial bulk viscosity (shock smoothing)" setting. **Unclear** which control is the "bendability thing". Body Material settings have three candidates: "Young’s modulus (MPa)" (stiffness), "Yield / E (%)" (when it starts to bend permanently) and "Hardening / E (%)" (how much it stiffens as it bends). The last two show only when Response is Elastoplastic.
@@ -154,6 +157,20 @@ Merged from chunk 1 (the "bendability thing") and chunk 2, section 7.
 - **His words:** "The carbon fiber, the bond. Okay, wait, that's the bond strength. I meant the fracture energy should be higher."
 - **Block level:** Slows me down. He caught it himself this time.
 - **Change type:** Interface/wording.
+
+### 18. Hard to tell from the time estimate whether he's "succeeded"
+
+- **His words:** "estimating at two minutes for seven, estimating at two minutes for five, estimating at twenty-one seconds for one, estimating at twenty-one seconds for two ... I guess you can tell how it balloons, but ... it is really actually hard to tell if you've succeeded."
+- **Block level:** Unclear.
+- **Change type:** Not known yet.
+- **Unclear:** what "succeeded" means here. It may be about picking a long enough duration (finding 15) or about the estimate itself (finding 16). Not merged until he says.
+
+### 19. Run message about "CPU lane" and "element weight"
+
+- **His words (reading the message aloud):** "one CPU lane, two latent dispatch needs at least 5,000 element weight on the lighter lane. And this lane, this assembly is 1448."
+- **Block level:** Unclear.
+- **Change type:** Interface/wording.
+- **Unclear:** he read it out without saying whether it made sense. Filed because it's the same kind of technical wording as finding 2.
 
 ### 4. View options don't show much
 
@@ -202,5 +219,6 @@ None yet.
 Kept out of the list because they aren't problems or requests:
 
 - Praise: "Fit assembly as a button works well." Results: "Ooh, ooh, this is good." Run times: "It took 115 seconds. That's not bad." Direction: "This is definitely evolving towards the product ... that I'm looking at for Impact Lab." Excitement: "I'm actually excited to see what comes out of this for once."
+- The live estimate, which he approves of: "it's updated for measure speed while it runs, so that's what's the most important."
 - Hardware use, which he approves of: "It's cranking my GPU. It's cranking my CPU. And if it were any other way, I would be pissed the fuck off right now."
-- Setup narration, tangents (dictation length, self-directed humour), and an interruption about another task.
+- Setup narration, tangents (dictation length, self-directed humour, where his ideas come from), and an interruption about another task.
