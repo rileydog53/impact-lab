@@ -1,0 +1,91 @@
+name: CI
+# Free GitHub-hosted macOS runners (macos-15, Apple silicon, 3 vCPU / 7 GB) are free only for PUBLIC repos.
+# While the repo is private this runs only by hand (workflow_dispatch). Uncomment push/pull_request once public.
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: ${{ matrix.name }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: build + replay + materials
+            cmds: |
+              ImpactCheck --legacy-replay check docs/legacy-replay-baseline.txt
+              ImpactCheck --assembly-replay
+              ImpactCheck --materials
+              ImpactCheck --metal-profiles
+          - name: fracture guard + spall + bulk viscosity
+            cmds: |
+              ImpactCheck --fracture-guard
+              ImpactCheck --spall
+              ImpactCheck --bulk-viscosity
+              ImpactCheck --plasticity
+          - name: locking + laminate
+            cmds: |
+              ImpactCheck --locking
+              ImpactCheck --layered-bodies quick
+          - name: lab examples + gravity
+            cmds: |
+              ImpactCheck --lab-examples
+              ImpactCheck --supports-gravity
+              ImpactCheck --workshop-improvements
+          - name: regression suite
+            cmds: |
+              REGRESSION
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            .build-regression
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**') }}
+          restore-keys: spm-${{ runner.os }}-
+      - name: Toolchain
+        run: swift --version
+      - name: Build (release)
+        run: swift build -c release 2>&1 | tee build.log
+      - name: Run checks
+        timeout-minutes: 35
+        run: |
+          mkdir -p ci-out
+          export PATH="$PWD/.build/release:$PATH"
+          status=0
+          while IFS= read -r cmd; do
+            [ -z "$cmd" ] && continue
+            log="ci-out/$(echo "$cmd" | tr -c 'A-Za-z0-9' '_' | cut -c1-60).log"
+            echo "::group::$cmd"
+            start=$(date +%s)
+            if [ "$cmd" = REGRESSION ]; then
+              python3 tests/regression/run.py --out ci-out/regression > "$log" 2>&1 || status=1
+            else
+              $cmd > "$log" 2>&1 || status=1
+            fi
+            echo "$cmd: $(( $(date +%s) - start )) s" | tee -a ci-out/timings.txt
+            tail -40 "$log"
+            echo "::endgroup::"
+          done <<< "${{ matrix.cmds }}"
+          cat ci-out/timings.txt >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ strategy.job-index }}
+          path: |
+            build.log
+            ci-out/
+            **/*.csv
+            !.build/**
+          if-no-files-found: ignore
