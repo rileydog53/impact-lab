@@ -126,7 +126,10 @@ public struct AssemblyEnergy: Sendable {
     public internal(set) var cohesive = 0.0
     /// Gravitational potential energy relative to the starting positions (J per metre of depth).
     public internal(set) var gravitational = 0.0
-    public var total: Double { kinetic + elastic + contact + connection + hardening + plastic + fracture + cohesive + gravitational }
+    /// Work done against artificial bulk viscosity so far (J per metre of depth): numerical dissipation, not a
+    /// material property. Always 0 when the scene leaves bulk viscosity off.
+    public internal(set) var viscous = 0.0
+    public var total: Double { kinetic + elastic + contact + connection + hardening + plastic + fracture + cohesive + gravitational + viscous }
 }
 
 public struct FragmentContactReading: Sendable {
@@ -181,6 +184,8 @@ public struct AssemblySimulation: Sendable {
     /// Largest gravitational work released so far on accepted steps (J/m): how far the potential
     /// energy has dropped below its starting value. Part of the energy scale in `EnergyAcceptance`.
     public private(set) var peakGravitationalRelease = 0.0
+    /// Largest fraction of critical damping that artificial bulk viscosity reached in any element on an accepted step.
+    public private(set) var peakViscousDamping = 0.0
     package private(set) var rejectedEnergy: AssemblyEnergy?
     package private(set) var rejectedPenetration: Double?
     package private(set) var rejectedContactDomains: SIMD4<Int>?
@@ -512,7 +517,14 @@ public struct AssemblySimulation: Sendable {
             return Simulation.squaredFrequency(of: bodies[i], contact: surfaces[i], allowance: allowance[i], springs: springs[i])
         }
         let frequency = squared.max() ?? 1e8
-        dt = min(stepLimit, stepScale * 0.8 / frequency.squareRoot())
+        // Artificial bulk viscosity damps the highest mode, which shortens the stable step by √(1 + ξ²) − ξ;
+        // the linear part of ξ is known now, the quadratic part is checked on every step.
+        dt = min(stepLimit, stepScale * 0.8 / frequency.squareRoot() * (scene.bulkViscosity?.startingStepFactor ?? 1))
+        if let model = scene.bulkViscosity {
+            for i in steps.indices where !steps[i].fixture {
+                steps[i].viscous = ViscousState(model: model, dt: dt, elements: steps[i].strain.count)
+            }
+        }
         // Reporting only: which stiffness sets the step. The stages repeat the bound
         // with terms added one at a time; dt itself comes from the line above.
         timestep = TimestepDiagnosis(scene: scene, bodies: bodies, squared: squared, dt: dt, stepScale: stepScale,
@@ -810,6 +822,21 @@ public struct AssemblySimulation: Sendable {
                 work?.kernel.elements += timing.elements
             }
         }
+        var trialViscousDamping = 0.0
+        if let model = scene.bulkViscosity {
+            var work = 0.0
+            for step in steps {
+                guard let viscous = step.viscous else { continue }
+                work += viscous.trialWork
+                trialViscousDamping = max(trialViscousDamping, viscous.trialDamping)
+            }
+            trial.viscous = energy.viscous + work
+            guard BulkViscosity.stepFactor(damping: trialViscousDamping)
+                    >= BulkViscosity.allowedStepShrink * model.startingStepFactor else {
+                failure = "Artificial bulk viscosity needs a shorter step here. Lower its quadratic coefficient, or slow the impact."
+                return false
+            }
+        }
         var active: [SIMD2<Int>] = []
         var nextNormal: [SIMD2<Int>: Double] = [:]
         var penetration = 0.0, penetrationDepth = 0.0
@@ -990,6 +1017,7 @@ public struct AssemblySimulation: Sendable {
         fractures = nextFractures
         maxima = nextMaxima
         peakGravitationalRelease = max(peakGravitationalRelease, -trial.gravitational)
+        peakViscousDamping = max(peakViscousDamping, trialViscousDamping)
         time += dt
         if !fragmentLoads.isEmpty || !openFragmentContacts.isEmpty { recordFragmentLoads(fragmentLoads) }
         energy = trial

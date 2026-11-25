@@ -215,6 +215,9 @@ public struct AssemblyStudy: Sendable {
         var header = ["case", "triangles", "dt_s", "time_s", "initial_energy_J_per_m", "kinetic_J_per_m",
                       "elastic_J_per_m", "hardening_J_per_m", "plastic_dissipation_J_per_m", "penalty_contact_J_per_m",
                       "connection_J_per_m", "cohesive_face_J_per_m", "fracture_dissipation_J_per_m", "residual_J_per_m"]
+        // Only scenes with bulk viscosity get the extra column, so earlier exports keep their layout.
+        let viscous = scene.bulkViscosity != nil
+        if viscous { header.append("bulk_viscosity_J_per_m") }
         header += scene.parts.enumerated().map { "body_\($0.offset + 1) \($0.element.name) mesh_factor" }
         for (i, gauge) in (scene.gauges ?? []).enumerated() {
             header += ["x_m", "y_m", "vx_m_per_s", "vy_m_per_s", "green_strain_xx", "pressure_Pa", "mises_Pa",
@@ -241,6 +244,7 @@ public struct AssemblyStudy: Sendable {
                 var row = [quoted(item.label), String(item.triangles), String(item.dt), String(sample.time)]
                 row += [initial, e.kinetic, e.elastic, e.hardening, e.plastic, e.contact, e.connection, e.cohesive,
                         e.fracture, sample.residual].map { String($0) }
+                if viscous { row.append(String(e.viscous)) }
                 row += item.bodyRefinements.map { String($0.rawValue) }
                 for g in sample.gauges {
                     row += [g.position.x, g.position.y, g.velocity.x, g.velocity.y, g.strain, g.pressure, g.equivalentStress,

@@ -43,7 +43,7 @@ public struct AssemblyReplayFrame: Sendable {
     public var recoverableEnergy: Double {
         energies.elastic + energies.hardening + energies.contact + energies.connection + energies.cohesive
     }
-    public var dissipatedEnergy: Double { energies.plastic + energies.fracture }
+    public var dissipatedEnergy: Double { energies.plastic + energies.fracture + energies.viscous }
 }
 
 public struct AssemblyReplayEvent: Identifiable, Sendable {

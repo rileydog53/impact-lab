@@ -1025,6 +1025,19 @@ struct AssemblyEditor: View {
                 numeric("Duration (ms)", value: experiment.scene.duration, range: AssemblyScene.durationRange, scale: 1000) { value in
                     experiment.edit { $0.duration = value }
                 }
+                Toggle("Artificial bulk viscosity (shock smoothing)", isOn: Binding(get: { experiment.scene.bulkViscosity != nil }, set: { on in
+                    experiment.edit(on ? "Turn On Bulk Viscosity" : "Turn Off Bulk Viscosity") { $0.bulkViscosity = on ? .standard : nil }
+                })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
+                if let viscosity = experiment.scene.bulkViscosity {
+                    numeric("Linear coefficient b1", value: viscosity.linear, range: BulkViscosity.linearRange, scale: 1) { value in
+                        experiment.edit { $0.bulkViscosity?.linear = value }
+                    }
+                    numeric("Quadratic coefficient b2", value: viscosity.quadratic, range: BulkViscosity.quadraticRange, scale: 1) { value in
+                        experiment.edit { $0.bulkViscosity?.quadratic = value }
+                    }
+                    Text("A numerical pressure added only while an element is being compressed, as in production impact codes (defaults 0.06 and 1.2, from the Abaqus manual). It keeps stress-wave fronts a few elements wide instead of ringing. The energy it removes is shown as its own line; it is not a material property.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 Toggle("Gravity", isOn: Binding(get: { (experiment.scene.gravity ?? 0) > 0 }, set: { on in
                     experiment.edit(on ? "Turn On Gravity" : "Turn Off Gravity") { $0.gravity = on ? AssemblyScene.standardGravity : nil }
                 })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
