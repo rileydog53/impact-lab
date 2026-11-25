@@ -4,7 +4,7 @@ import ImpactPhysics
 
 /// Headless runner: runs one saved assembly scene without the GUI and writes machine-readable results.
 ///
-///   ImpactCheck run SCENE.json --out DIR [--timeout SECONDS]
+///   ImpactCheck run SCENE.json --out DIR [--timeout SECONDS] [--vtk]
 ///
 /// It uses exactly the same path as the legacy-replay gate (AssemblyScene.open, AssemblyRun,
 /// AssemblyReplay, replayFingerprint), so its fingerprint is comparable bit for bit with
@@ -16,21 +16,24 @@ import ImpactPhysics
 ///   gauges.csv      every gauge reading per frame (only when the scene has gauges)
 ///   contacts.csv    every reported contact per frame (only when contacts occurred)
 ///   links.csv       every connection reading per frame (only when the scene has connections)
+///   fields.pvd, vtk/  raw per-frame fields for ParaView (only with --vtk; see VTKExport.swift)
 ///
 /// Exit status: 0 finished, 2 scene rejected or solver guard stopped the run, 3 timeout, 64 usage error.
 /// A manifest is written in every case except a usage error, so a failed run still says why.
 func headlessRun(_ arguments: [String]) -> Never {
     func usage(_ message: String) -> Never {
-        FileHandle.standardError.write(Data("\(message)\nUsage: ImpactCheck run SCENE.json --out DIR [--timeout SECONDS]\n".utf8))
+        FileHandle.standardError.write(Data("\(message)\nUsage: ImpactCheck run SCENE.json --out DIR [--timeout SECONDS] [--vtk]\n".utf8))
         exit(64)
     }
-    var scenePath: String?, outPath: String?, timeout: Double?
+    var scenePath: String?, outPath: String?, timeout: Double?, vtk = false
     var i = 0
     while i < arguments.count {
         switch arguments[i] {
         case "--out":
             guard i + 1 < arguments.count else { usage("--out needs a directory") }
             outPath = arguments[i + 1]; i += 2
+        case "--vtk":
+            vtk = true; i += 1
         case "--timeout":
             guard i + 1 < arguments.count, let t = Double(arguments[i + 1]), t > 0 else { usage("--timeout needs a positive number of seconds") }
             timeout = t; i += 2
@@ -119,7 +122,7 @@ func headlessRun(_ arguments: [String]) -> Never {
     manifest["final_energy_J_per_m"] = energyRecord(last.energies)
     manifest["events"] = replay.events.map { ["label": $0.label, "time_s": $0.time] as [String: Any] }
 
-    do { manifest["files"] = try writeCSVs(replay, scene: scene, to: out) }
+    do { manifest["files"] = try writeCSVs(replay, scene: scene, to: out) + (vtk ? VTKExport.write(replay, to: out) : []) }
     catch { finish("write-failed", 2, message: error.localizedDescription) }
 
     if timedOut { finish("timeout", 3, message: "Stopped after \(timeout!) s wall time at t = \(last.time) s") }
