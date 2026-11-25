@@ -115,7 +115,7 @@
         "velocity": { "$ref": "#/$defs/point", "default": [0, 0], "description": "Initial uniform velocity [vx, vy], m/s, each −150 to 150." },
         "wall": { "type": "number", "default": 0.012, "description": "Enclosure wall thickness, m; 0.005 m to 0.4 × the smaller size." },
         "refinement": { "$ref": "#/$defs/resolution", "description": "This body's mesh level, overriding meshResolution." },
-        "support": { "enum": ["fixed", "clampLeft", "clampRight", "clampBottom", "clampTop", "Fixed support", "Clamp left edge", "Clamp right edge", "Clamp bottom edge", "Clamp top edge"], "description": "fixed: rigid, immovable bench or fixture (width up to 1.0 m). clamp…: that local edge is held. Supported bodies start at rest and cannot fracture." },
+        "support": { "enum": ["fixed", "clampLeft", "clampRight", "clampBottom", "clampTop", "Fixed support", "Clamp left edge", "Clamp right edge", "Clamp bottom edge", "Clamp top edge"], "description": "fixed: rigid, immovable bench or fixture (width up to 1.0 m). clamp…: that local edge is held. Supported bodies start at rest. A fixed support cannot fracture; a clamped body can, and a crack reaching the held edge stays held on both sides." },
         "material": { "$ref": "#/$defs/material" },
         "plasticity": { "$ref": "#/$defs/plasticity" },
         "fracture": {
