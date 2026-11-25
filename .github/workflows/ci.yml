@@ -118,6 +118,16 @@ jobs:
           echo "ImpactCheck --plasticity: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
           tail -40 "ci-out/ImpactCheck___plasticity.log"
           exit $status
+      - name: "fracture: ImpactCheck --outline-fracture quick"
+        if: always() && steps.prep.outcome == 'success'
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          start=$(date +%s); status=0
+          ImpactCheck --outline-fracture quick > "ci-out/ImpactCheck___outline_fracture_quick.log" 2>&1 || status=$?
+          echo "ImpactCheck --outline-fracture quick: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
+          tail -40 "ci-out/ImpactCheck___outline_fracture_quick.log"
+          exit $status
       - name: "locking + laminate: ImpactCheck --locking"
         if: always() && steps.prep.outcome == 'success'
         timeout-minutes: 40
@@ -177,6 +187,36 @@ jobs:
           ImpactCheck --test-machine > "ci-out/ImpactCheck___test_machine.log" 2>&1 || status=$?
           echo "ImpactCheck --test-machine: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
           tail -40 "ci-out/ImpactCheck___test_machine.log"
+          exit $status
+      - name: "test machine + plate impact: ImpactCheck --plate-impact"
+        if: always() && steps.prep.outcome == 'success'
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          start=$(date +%s); status=0
+          ImpactCheck --plate-impact > "ci-out/ImpactCheck___plate_impact.log" 2>&1 || status=$?
+          echo "ImpactCheck --plate-impact: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
+          tail -40 "ci-out/ImpactCheck___plate_impact.log"
+          exit $status
+      - name: "test machine + plate impact: ImpactCheck --taylor-trend"
+        if: always() && steps.prep.outcome == 'success'
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          start=$(date +%s); status=0
+          ImpactCheck --taylor-trend > "ci-out/ImpactCheck___taylor_trend.log" 2>&1 || status=$?
+          echo "ImpactCheck --taylor-trend: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
+          tail -40 "ci-out/ImpactCheck___taylor_trend.log"
+          exit $status
+      - name: "test machine + plate impact: ImpactCheck --bend-rig quick"
+        if: always() && steps.prep.outcome == 'success'
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          start=$(date +%s); status=0
+          ImpactCheck --bend-rig quick > "ci-out/ImpactCheck___bend_rig_quick.log" 2>&1 || status=$?
+          echo "ImpactCheck --bend-rig quick: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
+          tail -40 "ci-out/ImpactCheck___bend_rig_quick.log"
           exit $status
       - name: "test machine + scene documents: ImpactCheck --scene-documents"
         if: always() && steps.prep.outcome == 'success'

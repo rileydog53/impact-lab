@@ -630,7 +630,9 @@ extension AssemblyScene {
             plasticity(part.plasticity, path + ".plasticity")
             if let settings = part.fracture {
                 if part.shape == .round { result.append("\(path).fracture is not available for round bodies.") }
-                if part.shape == .outline { result.append("\(path).fracture is not available for outline bodies yet (crack paths on generated meshes are not yet verified).") }
+                if part.shape == .outline && settings.meshPattern != nil {
+                    result.append("\(path).fracture.meshPattern applies to block meshes only; an outline body uses its generated mesh.")
+                }
                 fracture(settings, path + ".fracture", metal: part.material.provenance != nil)
             }
             if let notch = part.notch {

@@ -50,9 +50,6 @@ extension AssemblyPart {
 
     /// Why Material fracture cannot be enabled, or nil when it can (whether or not it is currently on).
     public var fractureUnavailableReason: String? {
-        if shape == .outline {
-            return "Outline bodies cannot fracture yet: the crack model was verified only on the structured block meshes, and crack paths on generated meshes need their own verification first (planned next)."
-        }
         if shape == .round {
             return "Round bodies cannot fracture: they use an elliptical mesh with no grid of element faces for cracks to open along. Use a rectangular block."
         }

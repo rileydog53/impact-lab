@@ -51,7 +51,7 @@ Prototype: `Sources/ImpactGeometry/Mesher.swift`, about 650 lines, no dependenci
 
 The output follows the existing FEM's conventions exactly: counter-clockwise triangles, boundary edges listed in the direction of their triangle (the gauge locator and contact code rely on this). The adapter is three lines using the existing `Mesh(reference:triangles:boundary:)` initializer, shown in `Sources/MeshCheck/main.swift`. Production integration (not done, needs approval) would be: an optional `outline` on `AssemblyPart`; `makeBody` calls the mesher only when it is present; clamps use tagged edges instead of bounding-box sides; region materials become `elementMaterials`; interior lines become `interfaceLines`.
 
-Not yet compatible: fracture. The verified crack model inserts cracks along element edges and was verified on the structured aligned/staggered patterns, so crack paths on generated meshes need their own verification (it belongs after the fracture verification in section 25.5) and fracture should stay unavailable on outline bodies until then.
+Fracture: the crack model inserts cracks along element edges and was first verified on the structured aligned/staggered patterns. Its check on generated meshes (first crack load, no-crack identity, energy and crack-face bookkeeping) was added on 2026-11-25, see [`OUTLINE_FRACTURE.md`](OUTLINE_FRACTURE.md). Allowing it on outline bodies is a solver behaviour change that needs Joseph's approval.
 
 ## 6. Quality checks
 
@@ -149,7 +149,7 @@ What a person can do now (Workshop, **Add Body** and **Arrange** menus, inspecto
 
 How it plugs in: `AssemblyPart.makeBody` asks the ImpactGeometry mesher for an outline body's triangles (`BodyOutline.swift`, cached, deterministic) and hands the solver an ordinary `Mesh`. Blocks, enclosures and round bodies keep their structured meshes, so every earlier scene replays bit for bit. Nothing in the force calculation, contact or time stepping changed.
 
-Not done yet: fracture on outline bodies (switched off with an explanation until crack paths on generated meshes are verified, which is the next approved step), arcs and corner rounding, region materials and named edge sets, local mesh grading, a cross-check against Triangle or Gmsh as separate programs (decision 3 allows it; neither is installed yet).
+Fracture on outline bodies: checked on 2026-11-25 (`ImpactCheck --outline-fracture`, see [`OUTLINE_FRACTURE.md`](OUTLINE_FRACTURE.md)), pending Joseph's approval to switch it on. Not done yet: arcs and corner rounding, region materials and named edge sets, local mesh grading, a cross-check against Triangle or Gmsh as separate programs (decision 3 allows it; neither is installed yet).
 
 Cost finding (measured, cantilever below): at the default edge length an outline body took 1.8× the time steps and 2.6× the wall time of the structured block of the same size, because its smallest triangles are smaller. The run-cost estimate tracks this (27 s estimated vs 37 s measured, the same 0.74 ratio as for the block). The default is therefore not cost-matched, contrary to the hypothesis in section 9; a coarser default would be cheaper but less accurate. Left as is for Joseph to judge in use.
 

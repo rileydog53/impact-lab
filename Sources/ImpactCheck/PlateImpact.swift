@@ -20,16 +20,29 @@ struct PlateImpact {
     var plastic = false
     var viscosity: BulkViscosity?
     var targetFracture: MaterialFractureSettings?
+    /// A custom material and flow curve in place of `profile` (the LASL check's 2024-like aluminium).
+    var custom: (material: Material, hardening: HardeningTable)?
+    var material: Material { custom?.material ?? profile.material }
+
+    private func apply(to part: inout AssemblyPart) {
+        if let custom {
+            part.material = custom.material
+            part.plasticity = ImpactPlasticity(response: plastic ? .elastoplastic : .elastic)
+            part.plasticity.table = custom.hardening
+        } else {
+            profile.apply(to: &part, elasticOnly: !plastic)
+        }
+    }
 
     var scene: AssemblyScene {
         var scene = AssemblyScene()
         var s = AssemblyPart("Striker plate", size: Point(striker, height))
         s.center = Point(-gap / 2 - striker / 2, 0)
         s.velocity = Point(speed, 0)
-        profile.apply(to: &s, elasticOnly: !plastic)
+        apply(to: &s)
         var t = AssemblyPart("Target plate", size: Point(target, height))
         t.center = Point(gap / 2 + target / 2, 0)
-        profile.apply(to: &t, elasticOnly: !plastic)
+        apply(to: &t)
         t.fracture = targetFracture
         scene.parts = [s, t]
         scene.meshResolution = refinement
@@ -41,12 +54,12 @@ struct PlateImpact {
     /// Element columns through a plate of this thickness (the block mesher's rule).
     func columns(_ thickness: Double) -> Int { max(3, Int((thickness / 0.009).rounded())) * refinement.rawValue }
     var cell: Double { target / Double(columns(target)) }
-    var waveSpeed: Double { profile.material.waveSpeed }
+    var waveSpeed: Double { material.waveSpeed }
     /// Peak stress of the 1D elastic wave, ρ c v / 2 (equal impedance, interface speed v/2).
-    var elasticStress: Double { profile.material.density * waveSpeed * speed / 2 }
+    var elasticStress: Double { material.density * waveSpeed * speed / 2 }
     /// Pressure that goes with σxx in uniaxial strain: σyy = σzz = ν/(1−ν) σxx, so p = σxx (1+ν) / (3(1−ν)).
     var elasticPressure: Double {
-        let nu = profile.material.poisson
+        let nu = material.poisson
         return elasticStress * (1 + nu) / (3 * (1 - nu))
     }
 }

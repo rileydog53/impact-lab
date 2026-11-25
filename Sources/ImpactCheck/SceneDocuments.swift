@@ -105,7 +105,8 @@ func sceneDocumentsCheck(examples directory: URL) throws {
         (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0.03], [0.03, 0], [0, 0.03]]}}]}"#, "crosses or touches itself"),
         (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0]]}}]}"#, "parts[0] \"A\".outline"),
         (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0], [0, 0.03]], "mesh": 0.001}}]}"#, "unknown setting"),
-        (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0], [0, 0.03]]}, "fracture": {}}]}"#, "not available for outline bodies"),
+        // Outline bodies can fracture since the outline fracture check (2026-11-25); only the block mesh pattern is refused.
+        (#"{"parts": [{"name": "A", "outline": {"outer": [[0, 0], [0.03, 0], [0, 0.03]]}, "fracture": {"meshPattern": "staggered"}}]}"#, "applies to block meshes only"),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05], "material": "titanium"}]}"#, "unknown material profile \"titanium\""),
         (#"{"parts": [{"name": "A", "size": [0.05, 0.05]}], "connections": [{"first": "A", "second": "Z"}]}"#, "no body named or with id \"Z\""),
         (#"{"parts": [{"name": "A", "size": "big"}]}"#, "expected a pair of numbers"),
