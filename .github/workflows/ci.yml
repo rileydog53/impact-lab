@@ -2,6 +2,11 @@ name: CI
 # Free GitHub-hosted macOS runners (macos-15, Apple silicon, 3 vCPU / 7 GB) are free only for PUBLIC repos.
 on:
   workflow_dispatch:
+    inputs:
+      mac:
+        description: Run on Joseph's Mac runner (testing)
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -23,278 +28,63 @@ jobs:
     name: build and checks
     # Joseph's Mac (label impactlab-mac) takes pushes and PRs from this repo's own branches,
     # only while the repo variable IMPACTLAB_MAC is 'on'. Fork PRs and everything else stay on GitHub-hosted macOS.
-    runs-on: ${{ (vars.IMPACTLAB_MAC == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","impactlab-mac"]') || 'macos-15' }}
+    runs-on: ${{ ((inputs.mac || vars.IMPACTLAB_MAC == 'on') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","impactlab-mac"]') || 'macos-15' }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Choose test tier
+        id: tier
+        # docs: only docs/text changed -> no build. quick: only the app UI (Sources/ImpactLab, which no check depends on)
+        # plus docs -> build + quick checks. Anything else, every push to main and manual runs -> full suite.
+        shell: bash
+        run: |
+          tier=full
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
+            nondoc=$(echo "$files" | grep -Ev '^(docs/|research/|reports/)|\.md$|^LICENSE' || true)
+            if [ -z "$nondoc" ]; then tier=docs
+            elif [ -z "$(echo "$nondoc" | grep -v '^Sources/ImpactLab/' || true)" ]; then tier=quick; fi
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"; echo "Test tier: $tier" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/cache@v4
         # The Mac has little disk; skip the build cache there.
-        if: runner.environment == 'github-hosted'
+        if: runner.environment == 'github-hosted' && steps.tier.outputs.tier != 'docs'
         with:
           path: .build
           key: spm-build-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**') }}
           restore-keys: spm-build-${{ runner.os }}-
+      - name: Keep build cache between Mac jobs
+        if: runner.environment != 'github-hosted' && steps.tier.outputs.tier != 'docs'
+        run: |
+          mkdir -p "$HOME/actions-runner/spm-cache"
+          rm -rf .build && ln -s "$HOME/actions-runner/spm-cache" .build
       - name: Toolchain
         run: swift --version
       - name: Build (release)
         id: build
+        if: steps.tier.outputs.tier != 'docs'
         # shell: bash turns on pipefail, so a failed compile fails this step instead of passing through tee.
         shell: bash
         run: swift build -c release 2>&1 | tee build.log
       - name: Prepare tools
         id: prep
+        if: steps.tier.outputs.tier != 'docs'
         # ImpactRegression also goes where tests/regression/run.py looks for it, so --skip-build works.
         run: |
           mkdir -p ci-out .build-regression/release
           cp .build/release/ImpactRegression .build-regression/release/ImpactRegression
           echo "$PWD/.build/release" >> "$GITHUB_PATH"
-      - name: "build + replay + materials: ImpactCheck --legacy-replay check docs/legacy-replay-baseline.txt"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
+      - name: "All checks (scripts/ci-checks.sh; CI_PARALLEL at a time, logs in ci-out/)"
+        if: steps.prep.outcome == 'success'
+        timeout-minutes: 120
         shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --legacy-replay check docs/legacy-replay-baseline.txt > "ci-out/ImpactCheck___legacy_replay_check_docs_legacy_replay_baselin.log" 2>&1 || status=$?
-          echo "ImpactCheck --legacy-replay check docs/legacy-replay-baseline.txt: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___legacy_replay_check_docs_legacy_replay_baselin.log"
-          exit $status
-      - name: "build + replay + materials: ImpactCheck --assembly-replay"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --assembly-replay > "ci-out/ImpactCheck___assembly_replay.log" 2>&1 || status=$?
-          echo "ImpactCheck --assembly-replay: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___assembly_replay.log"
-          exit $status
-      - name: "build + replay + materials: ImpactCheck --materials"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --materials > "ci-out/ImpactCheck___materials.log" 2>&1 || status=$?
-          echo "ImpactCheck --materials: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___materials.log"
-          exit $status
-      - name: "build + replay + materials: ImpactCheck --metal-profiles"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --metal-profiles > "ci-out/ImpactCheck___metal_profiles.log" 2>&1 || status=$?
-          echo "ImpactCheck --metal-profiles: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___metal_profiles.log"
-          exit $status
-      - name: "fracture guard + spall + bulk viscosity: ImpactCheck --fracture-guard"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --fracture-guard > "ci-out/ImpactCheck___fracture_guard.log" 2>&1 || status=$?
-          echo "ImpactCheck --fracture-guard: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___fracture_guard.log"
-          exit $status
-      - name: "fracture guard + spall + bulk viscosity: ImpactCheck --spall"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --spall > "ci-out/ImpactCheck___spall.log" 2>&1 || status=$?
-          echo "ImpactCheck --spall: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___spall.log"
-          exit $status
-      - name: "fracture guard + spall + bulk viscosity: ImpactCheck --bulk-viscosity"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --bulk-viscosity > "ci-out/ImpactCheck___bulk_viscosity.log" 2>&1 || status=$?
-          echo "ImpactCheck --bulk-viscosity: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___bulk_viscosity.log"
-          exit $status
-      - name: "fracture guard + spall + bulk viscosity: ImpactCheck --plasticity"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --plasticity > "ci-out/ImpactCheck___plasticity.log" 2>&1 || status=$?
-          echo "ImpactCheck --plasticity: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___plasticity.log"
-          exit $status
-      - name: "presets: ImpactCheck --showcases"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --showcases > "ci-out/ImpactCheck___showcases.log" 2>&1 || status=$?
-          echo "ImpactCheck --showcases: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___showcases.log"
-          exit $status
-      - name: "fracture: ImpactCheck --outline-fracture quick"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --outline-fracture quick > "ci-out/ImpactCheck___outline_fracture_quick.log" 2>&1 || status=$?
-          echo "ImpactCheck --outline-fracture quick: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___outline_fracture_quick.log"
-          exit $status
-      - name: "locking + laminate: ImpactCheck --locking"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --locking > "ci-out/ImpactCheck___locking.log" 2>&1 || status=$?
-          echo "ImpactCheck --locking: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___locking.log"
-          exit $status
-      - name: "locking + laminate: ImpactCheck --layered-bodies quick"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --layered-bodies quick > "ci-out/ImpactCheck___layered_bodies_quick.log" 2>&1 || status=$?
-          echo "ImpactCheck --layered-bodies quick: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___layered_bodies_quick.log"
-          exit $status
-      - name: "lab examples + gravity: ImpactCheck --lab-examples"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --lab-examples > "ci-out/ImpactCheck___lab_examples.log" 2>&1 || status=$?
-          echo "ImpactCheck --lab-examples: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___lab_examples.log"
-          exit $status
-      - name: "lab examples + gravity: ImpactCheck --supports-gravity"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --supports-gravity > "ci-out/ImpactCheck___supports_gravity.log" 2>&1 || status=$?
-          echo "ImpactCheck --supports-gravity: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___supports_gravity.log"
-          exit $status
-      - name: "lab examples + gravity: ImpactCheck --workshop-improvements"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --workshop-improvements > "ci-out/ImpactCheck___workshop_improvements.log" 2>&1 || status=$?
-          echo "ImpactCheck --workshop-improvements: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___workshop_improvements.log"
-          exit $status
-      - name: "test machine + scene documents: ImpactCheck --test-machine"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --test-machine > "ci-out/ImpactCheck___test_machine.log" 2>&1 || status=$?
-          echo "ImpactCheck --test-machine: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___test_machine.log"
-          exit $status
-      - name: "test machine + plate impact: ImpactCheck --plate-impact"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --plate-impact > "ci-out/ImpactCheck___plate_impact.log" 2>&1 || status=$?
-          echo "ImpactCheck --plate-impact: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___plate_impact.log"
-          exit $status
-      - name: "test machine + plate impact: ImpactCheck --taylor-trend"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --taylor-trend > "ci-out/ImpactCheck___taylor_trend.log" 2>&1 || status=$?
-          echo "ImpactCheck --taylor-trend: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___taylor_trend.log"
-          exit $status
-      - name: "test machine + plate impact: ImpactCheck --bend-rig quick"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --bend-rig quick > "ci-out/ImpactCheck___bend_rig_quick.log" 2>&1 || status=$?
-          echo "ImpactCheck --bend-rig quick: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___bend_rig_quick.log"
-          exit $status
-      - name: "test machine + scene documents: ImpactCheck --scene-documents"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck --scene-documents > "ci-out/ImpactCheck___scene_documents.log" 2>&1 || status=$?
-          echo "ImpactCheck --scene-documents: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck___scene_documents.log"
-          exit $status
-      - name: "headless runner: ImpactCheck run docs/scene-examples/linked-chain.json"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600 > "ci-out/ImpactCheck_run_docs_scene_examples_linked_chain_json___out_.log" 2>&1 || status=$?
-          echo "ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck_run_docs_scene_examples_linked_chain_json___out_.log"
-          exit $status
-      - name: "headless runner: ImpactCheck run docs/scene-examples/metal-plate-impact.json"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/metal-plate-impact --timeout 600 > "ci-out/ImpactCheck_run_docs_scene_examples_metal_plate_impact_json_.log" 2>&1 || status=$?
-          echo "ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/metal-plate-impact --timeout 600: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck_run_docs_scene_examples_metal_plate_impact_json_.log"
-          exit $status
-      - name: "headless runner: ImpactCheck run docs/showcase/brittle-tile-fracture.json"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600 > "ci-out/ImpactCheck_run_docs_showcase_brittle_tile_fracture_json___o.log" 2>&1 || status=$?
-          echo "ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/ImpactCheck_run_docs_showcase_brittle_tile_fracture_json___o.log"
-          exit $status
-      - name: "headless runner: VTK export check"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/vtk-metal-plate-impact --timeout 600 --vtk
-          python3 tests/vtk/check_vtk.py ci-out/headless/vtk-metal-plate-impact
-      - name: "regression suite: python3 tests/regression/run.py"
-        if: always() && steps.prep.outcome == 'success'
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          start=$(date +%s); status=0
-          python3 tests/regression/run.py --out ci-out/regression --skip-build > "ci-out/python3_tests_regression_run_py___out_ci_out_regression___sk.log" 2>&1 || status=$?
-          echo "python3 tests/regression/run.py --out ci-out/regression --skip-build: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
-          tail -40 "ci-out/python3_tests_regression_run_py___out_ci_out_regression___sk.log"
-          exit $status
+        env:
+          # Joseph's Mac (10 cores, passively cooled): 3 at a time. GitHub-hosted: one at a time, as before.
+          CI_TIER: ${{ steps.tier.outputs.tier }}
+          CI_PARALLEL: ${{ runner.environment == 'github-hosted' && '1' || '3' }}
+        run: scripts/ci-checks.sh
       - name: Timings
         if: always()
         run: '[ -f ci-out/timings.txt ] && cat ci-out/timings.txt >> "$GITHUB_STEP_SUMMARY" || true'
