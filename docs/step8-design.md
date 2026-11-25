@@ -4,6 +4,8 @@ Written 25 November 2026 as a read-only design audit of `main` at `d17e841` (aft
 
 Nothing was built or run. This cloud machine has no Swift, and the code needs Apple's `simd` and CoreGraphics. Every number below is read from the code, worked by hand or in a short Python script (formulas copied from the code), or taken from a cited source. No solver file was changed.
 
+Revised the same day after Joey's answers to the three questions: step 8's fracture half targets clamped bodies, the main high-speed check is plate-on-plate impact against LASL shock data, and the fracture check now is the clamped cantilever, with the notched three-point bend as a follow-up. See "Decisions" at the end.
+
 How claims are marked:
 
 - **[code]** read directly from the Swift source on `main`, with file and line.
@@ -17,11 +19,11 @@ How claims are marked:
 
 | Part | Conclusion |
 |---|---|
-| 1. Fracture on supported bodies | Only **clamped** bodies are blocked. A body **resting on** a fixed support (a bench, two rollers) can already have fracture; the PR 4 drop-on-bench check runs exactly that. The block is one validation line, and it is there for a real reason: when a crack splits a node on a clamped edge, the new copy of that node is not on the clamp list, so part of the clamped edge would silently come free. The smallest safe change is to remove that line for clamps only and carry the clamp over to every copy of a held node after each split, about five lines in `AssemblySimulation.swift`. Fixed (rigid) supports stay unbreakable. |
+| 1. Fracture on clamped bodies | The block is one validation line, and it is there for a real reason: when a crack splits a node on a clamped edge, the new copy of that node is not on the clamp list, so part of the clamped edge would silently come free. The smallest safe change is to remove that line for clamps only and carry the clamp over to every copy of a held node after each split, about five lines in `AssemblySimulation.swift`. Fixed (rigid) supports stay unbreakable. Bodies **resting on** a fixed support are allowed to fracture and the crack test runs on them every step, but **no recorded run has shown a crack there yet**: both PR 4 runs inserted 0 cracks. A one-run Mac check is proposed to confirm it. |
 | 2. Above 150 m/s | The cap is not one physics threshold. **Strain-rate hardening in steel already matters at ordinary impact speeds** (about +17% flow stress at 50 m/s, +19 to +24% at 150 m/s), while 6061-T6 is nearly rate-insensitive. The **pressure–volume** model is within about 1% of shock data at 150 m/s and drifts to 5% near 450 m/s (steel) and 600 m/s (aluminium beyond its existing offset). **Adiabatic heating** gives 30–60 K local rises at 150 m/s, and over 10% softening from roughly 220–300 m/s (steel) and 340–450 m/s (aluminium). **Element distortion** did not stop copper at 150 m/s; scaling that result suggests steel is safe to about 220 m/s and aluminium to about 340 m/s, but this must be measured. |
-| 3. Benchmarks | Fracture: the ASTM E399 single-edge notched three-point bend, with a worked prediction (9.58 kN per metre of depth for the beam proposed). It needs a narrow notch the app does not have yet, and it does not exercise clamps, so a clamped cantilever check is added as an option. High speed: the Taylor test as asked, with published test conditions, **but the code is plane strain and a Taylor test is a cylinder**, so it cannot be compared number for number. A symmetric plate impact against published shock data fits the code exactly and is offered as the alternative. Both choices are Joey's. |
+| 3. Benchmarks | High speed, main check: **symmetric plate-on-plate impact against LASL shock data (Marsh 1980)**, reusing `PlateImpact.swift`; predicted plateau 1.13, 3.94 and 8.35 GPa at 150, 500 and 1,000 m/s for 2024 aluminium. High speed, trend only: the Taylor test, labelled **plane strain, not a round-bar match**. Fracture, now: the **clamped cantilever**, first crack at the root near 1.5 kN/m, which tests the Part 1 fix directly. Fracture, follow-up: the notched three-point bend (ASTM E399 SE(B)), 9.58 kN/m peak; it needs a narrower notch than the editor allows today. |
 
-Two places where the spec and the code disagree are flagged, not substituted: "resting on a support" is already allowed (the real block is clamps), and the Taylor cylinder is axisymmetric while the code is plane strain. See "Questions for Joey" at the end.
+The first version flagged two places where the spec and the code disagreed, and Joey has decided both: the fracture work targets clamps, and the Taylor test is kept only as a plane-strain trend check because the code cannot model a round bar.
 
 ---
 
@@ -42,7 +44,14 @@ if fracture != nil { return "Supports cannot be combined with fracture yet (crac
 - A `.fixed` body is never calculated as a deforming body: `drift`, `assemble` and `kick` return early [code, `Physics.swift` lines 314, 327, 374]. Cracking it means nothing, so keeping fracture off there is correct, not a limitation. The advisory already says so [code, `AssemblyAdvisories.swift` line 64].
 - A clamped body is an ordinary deforming body with a list of held node indices, `BodyStep.clamped` [code, `Physics.swift` line 290]. The list is built once at the start of the run from the reference mesh [code, `AssemblySimulation.swift` lines 412–414, `AssemblyScene.swift` `clampedNodes` line 283]. Held nodes are reset to their position after every drift and their velocity is zeroed after every kick [code, `Physics.swift` lines 315 and 381].
 
-**Resting on a support is already allowed.** `supportConflict` only looks at the body that has the support. A free body with fracture sitting on a `.fixed` bench, or a beam on two fixed rollers, passes validation. The PR 4 check `ImpactCheck --fracture-guard` drops a fracturing block onto a `.fixed` bench [code, `Sources/ImpactCheck/FractureGuard.swift` line 14], and that check was reported passing on Joey's Mac before PR 4 merged. The supplied scene `docs/scene-examples/notched-beam-fracture.json` is a fracturing beam on two support bodies (those are free elastic bodies in that file, not `.fixed`).
+**Resting on a support: allowed, but not yet shown to crack.** Checked in the code, not assumed:
+
+- `supportConflict` only looks at the body that has the support [code, `AssemblyScene.swift` line 188]. A free body with fracture sitting on a `.fixed` bench, or a beam on two fixed rollers, passes validation.
+- The crack test runs on every body that has fracture, every step, with no check for supports or contact: `nextFractures[i]!.insert(position:piola:mesh:)` is called for each body with fracture [code, `AssemblySimulation.swift` lines 857–862]. It reads `trialPiola`, the stress after all of the step's forces, so the load from a fixed bench or roller is included. The only switch that turns it off is `insertionEnabled`, a test-only argument that defaults to true [code, same file lines 376 and 400].
+- So the code path is there. But **a crack on a support has not been demonstrated.** The PR 4 check `ImpactCheck --fracture-guard` drops a fracturing block onto a `.fixed` bench [code, `Sources/ImpactCheck/FractureGuard.swift` line 14]. It requires only that the run finishes; it prints the number of cracks but does not require any [code, same file lines 38 and 90]. The PR 4 review runs on Joey's Mac reported 0 cracks for both the drop and the three-point-bend scene [record: PR 4 reviews].
+- The likely reason is strength, not a block. The default crack strength is 3% of the body's E [code, `MaterialFractureSettings.strengthFraction` 0.030]. In the three-point-bend lab scene (`docs/lab-examples/three-point-bend.json`: E 10 MPa, bar 0.3 × 0.025 m, rollers 260 mm apart) that is 0.3 MPa, while the bending stress from the bar's own weight plus the 30 mm weight is of order 20 kPa [calc, rough].
+
+**Proposed confirming check (Mac, one run, not done here).** Run the three-point-bend lab scene with fracture on and an absolute crack strength of 1e4 Pa (the bottom of `absoluteStrengthRange`). Expect the first crack at the bottom face near midspan. Make it pass or fail by requiring `insertedEdges > 0` and that the first cracked face lies in the middle third of the span. A second run at the default strength should still show 0 cracks, which confirms the strength explanation. Neither run touches the solver.
 
 **Why the clamp case was blocked.** When a crack opens, `MaterialFracture.insert` duplicates nodes. It keeps every old node at its old index and appends the new copies at the end, returning `sources`, a map from each new node to the old node it came from [code, `MaterialFracture.swift` lines 354–365, `sources = Array(mesh.reference.indices)` then `sources.append(parent)`]. `BodyStep.splitNodes` rebuilds the body from that map [code, `Physics.swift` lines 340–371]. But nothing updates `clamped` [code, `AssemblySimulation.swift` line 866 is the only call]. So if a crack reaches a held node:
 
@@ -182,7 +191,7 @@ Constants: steel cₚ 452 J/kg·K, T_melt 1811 K, m 1.00 (1006 steel) [source, J
 
 [calc]
 
-Turning strain into speed: the repo's own FEM run of copper at 150 m/s reached 168% peak plastic strain, and 27% at 50 m/s [code/record: `docs/MPM_PROTOTYPE.md` table]. Scaling by ρv²/σ (12% flow stress) [calc, rough]: copper at 150 m/s has 0.89; steel reaches that at about 223 m/s and 6061 at about 337 m/s. At 150 m/s steel sits at 0.40 and 6061 at 0.18, between the two copper runs, so local peaks of roughly 30–90% strain, 30–60 K, 2–5% softening. Over 10% local softening needs strain above about 1.3 (steel) or 1.0 (6061), so from roughly 220–300 m/s for steel and 340–450 m/s for aluminium. These speed ranges are estimates from one geometry and should be replaced by the sweep in Part 3.
+Turning strain into speed: the repo's own FEM run of copper at 150 m/s reached 168% peak plastic strain, and 27% at 50 m/s [code/record: `docs/MPM_PROTOTYPE.md` table]. Scaling by ρv²/σ (12% flow stress) [calc, rough]: copper at 150 m/s has 0.89; steel reaches that at about 223 m/s and 6061 at about 337 m/s. At 150 m/s steel sits at 0.40 and 6061 at 0.18, between the two copper runs, so local peaks of roughly 30–90% strain, 30–60 K, 2–5% softening. Over 10% local softening needs strain above about 1.3 (steel) or 1.0 (6061), so from roughly 220–300 m/s for steel and 340–450 m/s for aluminium. These speed ranges are estimates from one geometry and should be replaced by the test-only sweep proposed under "One warning, proposed shape".
 
 Heating and rate hardening push in opposite directions, and the app has neither, so the two errors partly cancel in steel at moderate speeds [recall]. Heating also drives adiabatic shear bands in steels; a model without heating cannot form them, and if it did they would be one element wide and mesh-dependent [recall].
 
@@ -204,7 +213,65 @@ A single advisory in the existing `AssemblyAdvisories.swift` style (never blocki
 
 ## Part 3. Benchmarks
 
-### Fracture: supported three-point bend (ASTM E399 SE(B))
+Chosen by Joey: plate impact is the main high-speed check, Taylor is a loose trend check, the clamped cantilever is the fracture check now, and the notched three-point bend follows later.
+
+### High speed, main check: symmetric plate-on-plate impact against LASL shock data
+
+**Why this one.** A flat plate hitting an equal plate is one-dimensional strain in its middle, which a plane-strain code represents exactly, and the repo already has the setup (`Sources/ImpactCheck/PlateImpact.swift`, used by the step 4 and 5 checks). Until the release waves from the edges arrive, the pressure in the middle of the contact sits on a flat plateau whose value follows from the shock fit alone.
+
+**Reference.** Published Hugoniot data, Marsh (ed.), LASL Shock Hugoniot Data, 1980 [source, Table II impedance standards, [copy](https://ancient.hydro.nsc.ru/chem/biblio/lasl_shock.pdf)]. For 2024 aluminium: ρ₀ 2.785 g/cm³, c₀ 5.328 km/s, s 1.338. For a symmetric impact at speed v, the particle speed is v/2 and the plateau pressure is P = ρ₀·(c₀ + s·v/2)·(v/2) [calc, standard jump condition]:
+
+| Impact speed | Particle speed | Plateau pressure (2024 Al, LASL fit) |
+|---|---|---|
+| 150 m/s | 75 m/s | 1.13 GPa |
+| 300 m/s | 150 m/s | 2.31 GPa |
+| 500 m/s | 250 m/s | 3.94 GPa |
+| 1,000 m/s | 500 m/s | 8.35 GPa |
+
+[calc from the source fit]
+
+For steel and 6061 the LASL pages were not read this audit; the fits in Part 2 (304 stainless c₀ 4.57, s 1.49; 6061 c₀ 5.35, s 1.34) are [recall] and should be checked against LASL pp. 212 and 182 before they set a pass value. The 2024 row is the one confirmed number set, so the first run should use a 2024-like aluminium profile (E and ν set so that K matches ρ₀c₀², about 79 GPa).
+
+**What to measure.** The plateau pressure at the middle of the contact, averaged over the flat part of the pressure history before edge release arrives, plus the shock speed from the arrival time at two depths. Run at 150, 300, 500 and 1,000 m/s, elastic-plastic, on two meshes.
+
+**Pass criteria to fix before the first run** (suggested): within 2% of the fit at 150 m/s; the gap at higher speed reported, not failed, because Part 2 predicts it (about −1% at 150, −4% at 500 and −8% at 1,000 m/s for an aluminium whose bulk modulus matches c₀); the two meshes agree within 1%. The measured gap then becomes the number in the pressure–volume line of the warning. This check does not test rate hardening or heating, which the code does not have yet.
+
+### High speed, trend check only: Taylor impact (plane strain, not a round-bar match)
+
+**Label for the check and its output:** "Taylor-style trend check, plane strain. Not comparable with round-bar Taylor test results."
+
+**What it is:** a flat-ended cylinder hits a rigid wall; its final length and mushroomed face width test strength at high rate [source: Taylor 1948, Proc. R. Soc. London A 194, 289–299, cited in the [LS-DYNA verification manual VM-027](https://ansyshelp.ansys.com/public/views/secured/corp/v261/en/lsdyna_vm/vm-lsdyna-solve-027.html)].
+
+**Published test conditions** [source: Banerjee, "Validation of the material point method and plasticity with Taylor impact tests", Tables 1–2, [arXiv](https://arxiv.org/pdf/1201.2476)]:
+
+- OFHC copper: L₀ 25.4 mm, D₀ 7.62 mm at 130, 146 and 190 m/s (Johnson and Cook 1983); 23.47 mm at 210 m/s (Wilkins and Guinan 1973).
+- 6061-T6: L₀ 23.47 mm, D₀ 7.62 mm at 373 and 603 m/s; L₀ 46.94 mm at 275 and 484 m/s (Wilkins and Guinan 1973). Also 30 × 6 mm at 200 and 358 m/s (Gust 1982).
+- 4340 steel (Rc 30): 25.4 × 7.62 mm at 208 m/s, 12.7 mm at 282 m/s, 8.1 mm at 343 m/s (Johnson and Cook 1983). This row was read from a summary of the paper, not verbatim.
+- The copper 190 m/s case is the one used by both LS-DYNA (VM-027) and Ansys (VM-EXD-MECH-003, 2D axisymmetric) [source].
+
+**Reference numbers not yet confirmed.** The experimental final lengths and face diameters are printed only in figures in the papers above, which this audit could not read. They need to be taken from Johnson and Cook 1983 Fig. 9–10 or Wilkins and Guinan 1973 (J. Appl. Phys. 44, 1200) [recall for the Wilkins–Guinan citation].
+
+**Why it is only a trend check.** Impact Lab is 2D plane strain, so it models an infinitely deep slab hitting a wall, not a round bar. A slab's face can only spread sideways in one direction, so it shortens differently from a cylinder of the same material and speed. The published cylinder lengths cannot be pass or fail values for this code, and an axisymmetric mode would be needed for a real match.
+
+**What it can check.** The direction and rough size of trends: final length falls as speed rises and as yield strength falls, steadily, with no jump where the mesh starts to fail; and the slab's final length sits in the same broad range as the 1D Taylor estimate from ρv²/σ [recall: Taylor 1948; Wilkins and Guinan 1973]. Suggested runs: a 25.4 mm long, 7.62 mm thick slab at 130, 146 and 190 m/s in a copper profile, and 6061 at 200, 275 and 373 m/s. Suggested pass: final length decreases monotonically with speed and stays within about 25% of the 1D estimate. That tolerance is a guess, not a published number.
+
+### Fracture, now: clamped cantilever
+
+**Why this one.** It exercises exactly the Part 1 change: a crack that starts at a clamped edge splits clamped nodes, and the copies must stay held.
+
+**Setup.** Reuse the clamped beam of `Sources/ImpactCheck/SupportsGravity.swift` [code, line 115, `.clampLeft`], with fracture on and a tip load that rises slowly. Suggested case: length L 200 mm, depth h 20 mm, the illustrative material from the follow-up below (E 1.0 GPa, ν 0.2, strength 4.5 MPa, fracture energy 100 J/m²), so the cohesive length is 5.1 mm; the finer mesh needs at least three elements across it [recall: Turon et al. 2007].
+
+**Reference.** Beam theory per metre of depth: root bending stress σ = 6PL/h² [recall, textbook beam theory]. The first crack should start at the top fibre at the root when σ reaches the strength, at P ≈ **1.5 kN/m** [calc: 4.5e6 × 0.02² / (6 × 0.2)]. The clamp corner is a stress singularity [recall: Williams 1952], so on finer meshes the first crack will start somewhat earlier; the check should report the first-crack load on two meshes rather than require an exact match.
+
+**Pass criteria** (suggested):
+
+- every copy of every clamped node stays at zero displacement for the whole run, including after cracks reach the clamped edge;
+- the support reaction balances the tip load within 1% while the beam is still uncracked;
+- the first crack starts at the root, on the tension face;
+- the first-crack load is at or below 1.5 kN/m and moves toward it on the coarser mesh, not away;
+- `--legacy-replay check` is unchanged, since no saved scene has a clamped fracturing body.
+
+### Fracture, follow-up: notched three-point bend (ASTM E399 SE(B))
 
 **The textbook result** [source: ASTM E399-12, Annex A3, [copy](https://sites.utexas.edu/taleff/files/2019/10/astm_e399_12.pdf)]: span S = 4W (A3.1.1); K = P·S / (B·W^{3/2}) · f(a/W) (Eq. A3.1, plain-sided specimen); "for a/W = 0.500, f(a/W) = 2.66" (Note A3.1); the expression is accurate within 1% for 0.2 ≤ a/W ≤ 1 with S/W = 4 (Note A3.2); test crack size 0.45W to 0.55W (7.2.1).
 
@@ -219,37 +286,17 @@ f(a/W) = 3√(a/W)·[1.99 − (a/W)(1 − a/W)(2.15 − 3.93(a/W) + 2.7(a/W)²)]
 
 **Criteria to fix before the first run** (suggested): crack starts at the notch tip; peak load below the LEFM value and moving toward it on a larger beam (cohesive cracks at modest W/l_ch give lower peaks than LEFM, which is the large-size limit [recall: Bažant and Planas 1998, "Fracture and Size Effect in Concrete and Other Quasibrittle Materials"]); fracture work within 10% of 5.0 J/m; kinetic energy under 1% of stored energy at peak load (quasi-static); two meshes with at least 3 elements across l_ch on the finer one [recall: cohesive zones need about 3 or more elements, Turon et al. 2007].
 
-**Gaps to know about:**
+**What it needs first.** Joey noted that the geometry editor can already cut notches. It can, but only a V-notch whose width is at least 12% of the block's length [code, `AssemblyScene.swift` lines 49–51, `widthFraction` 0.12 to 0.36], and whose depth is at most 45% of the height (`depthFraction` up to 0.45). On a 400 mm beam the narrowest notch is 48 mm wide, which is a blunt notch, not a crack, and the E399 formula does not apply to it. The depth limit is fine, since E399 accepts a/W from 0.45. So the cheap addition is a narrower width limit, or a separate thin-slot option, for blocks; outline bodies are not an alternative yet because they cannot fracture [code, `AssemblyAdvisories.swift` line 54]. This is a small geometry change, not a solver change, and it fits Joey's "cheap to add later".
 
-- **The app has no narrow notch.** `Notch` is a V-notch whose width is at least 12% of the block's length [code, `AssemblyScene.swift` line 50]. On a 400 mm beam that is a 48 mm wide notch, which is a blunt notch, not a crack, and the formula does not apply. This benchmark needs either a narrow slot (a small geometry addition) or an outline body with a slot, and outline bodies cannot fracture yet [code, `AssemblyAdvisories.swift` line 54].
-- **It does not test the Part 1 change.** The rollers are separate `.fixed` bodies, which already work.
-
-**Optional second check that does test Part 1: clamped cantilever.** Reuse the clamped beam of `Sources/ImpactCheck/SupportsGravity.swift` (line 115, `.clampLeft`), with fracture on and a slow tip load. Beam theory per metre of depth: root bending stress σ = 6PL/h² [recall, textbook beam theory]. With the material above, L 200 mm and h 20 mm, the first crack should start at the root at P ≈ **1.5 kN/m** [calc], earlier on finer meshes because of the corner singularity. Pass criteria would be: every copy of every clamped node stays at zero displacement through the whole run; the support reaction balances the tip load; the crack starts at the root; legacy replay unchanged.
-
-### High speed: Taylor impact test (as asked), with a caveat
-
-**What it is:** a flat-ended cylinder hits a rigid wall; its final length and mushroomed face width test strength at high rate [source: Taylor 1948, Proc. R. Soc. London A 194, 289–299, cited in the [LS-DYNA verification manual VM-027](https://ansyshelp.ansys.com/public/views/secured/corp/v261/en/lsdyna_vm/vm-lsdyna-solve-027.html)].
-
-**Published test conditions** [source: Banerjee, "Validation of the material point method and plasticity with Taylor impact tests", Tables 1–2, [arXiv](https://arxiv.org/pdf/1201.2476)]:
-
-- OFHC copper: L₀ 25.4 mm, D₀ 7.62 mm at 130, 146 and 190 m/s (Johnson and Cook 1983); 23.47 mm at 210 m/s (Wilkins and Guinan 1973).
-- 6061-T6: L₀ 23.47 mm, D₀ 7.62 mm at 373 and 603 m/s; L₀ 46.94 mm at 275 and 484 m/s (Wilkins and Guinan 1973). Also 30 × 6 mm at 200 and 358 m/s (Gust 1982).
-- 4340 steel (Rc 30): 25.4 × 7.62 mm at 208 m/s, 12.7 mm at 282 m/s, 8.1 mm at 343 m/s (Johnson and Cook 1983). This row was read from a summary of the paper, not verbatim.
-- The copper 190 m/s case is the one used by both LS-DYNA (VM-027) and Ansys (VM-EXD-MECH-003, 2D axisymmetric) [source].
-
-**Reference numbers not yet confirmed.** The experimental final lengths and face diameters are printed only in figures in the papers above, which this audit could not read. They need to be taken from Johnson and Cook 1983 Fig. 9–10 or Wilkins and Guinan 1973 (J. Appl. Phys. 44, 1200) [recall for the Wilkins–Guinan citation].
-
-**The caveat: plane strain is not a cylinder.** Impact Lab is 2D plane strain, so it models an infinitely deep slab, not a round bar. A slab's face can only spread sideways in one direction, so it shortens differently from a cylinder of the same material and speed. The cylinder numbers cannot be used as pass or fail values for this code. What can be compared is the 1D Taylor estimate of final length from yield strength (Taylor 1948; Wilkins and Guinan 1973), which depends mainly on ρv²/σ and length [recall], loosely and with a wide tolerance. Using the Taylor test properly would need an axisymmetric mode, which the solver does not have.
-
-**Alternative that fits the code exactly: symmetric plate impact against shock data.** A flat plate hitting an equal plate is one-dimensional strain in its middle, which a plane-strain code represents exactly, and the repo already has this setup (`Sources/ImpactCheck/PlateImpact.swift`, used by the step 4 and 5 checks). The reference is published Hugoniot data: for 2024 aluminium (LASL standard above) the predicted plateau pressure is 1.13 GPa at 150 m/s, 3.94 GPa at 500 m/s and 8.35 GPa at 1,000 m/s [calc from the source fit]. Run elastic-plastic at 150, 300, 500 and 1,000 m/s, compare the plateau with the fit, and the gap measures exactly the pressure–volume error in Part 2. It would not test rate hardening or heating, which the code does not have yet anyway.
+**It does not test the Part 1 change.** The rollers are separate `.fixed` bodies, which already pass validation.
 
 ---
 
-## Questions for Joey
+## Decisions (Joey, 25 November 2026)
 
-1. **Supported or held?** Bodies resting on supports can already fracture. Should step 8's fracture half target clamped (held) bodies, as written above? Fixed supports would stay unbreakable.
-2. **High-speed benchmark:** keep the Taylor test as asked, knowing the code can only compare with it loosely, or use the symmetric plate impact against shock data, which the code can match exactly? Both can be done; the choice changes what "pass" means.
-3. **Fracture benchmark:** the three-point bend needs a narrow notch the app does not have. Add one as part of step 8, or use the clamped cantilever check for now?
+1. **Supported or held:** the fracture half targets clamped (fixed-edge) bodies. Rigid `.fixed` supports stay unbreakable. That bodies resting on supports already crack was to be confirmed in the code: the code path is confirmed, a crack is not yet shown, and a Mac check is proposed in Part 1.
+2. **High-speed benchmark:** plate-on-plate impact against LASL shock data (Marsh 1980) is the main check. The Taylor test stays only as a loose trend check, labelled plane strain, not a round-bar match.
+3. **Fracture benchmark:** the clamped cantilever now, because it tests the clamp fix. The notched three-point bend is a follow-up.
 
 ## What this audit did not do
 
