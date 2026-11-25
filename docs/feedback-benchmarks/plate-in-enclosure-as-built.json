@@ -1,7 +1,7 @@
 {
  "description": "Rebuilt from Joseph's feedback (finding 1 and 26, 2026-11-25); his saved file was not found. A plate inside a hollow enclosure moves left at 20 m/s into the carbon-skinned aluminium panel, clamped at its base. The spring he used between plate and enclosure is left out. AS HE BUILT IT: the plate at the old editor maximum (4 MPa, 2500 kg/m3, rubber-soft) and the enclosure on the old default demo material with the lowest crack resistance (0.5 J/m2).",
  "duration": 0.0004,
- "meshResolution": "x2",
+ "meshResolution": "fine",
  "bulkViscosity": true,
  "monitor": "Hollow Enclosure 2",
  "parts": [

@@ -1,7 +1,7 @@
 {
  "description": "Rebuilt from Joseph's feedback (finding 1 and 26, 2026-11-25); his saved file was not found. A plate inside a hollow enclosure moves left at 20 m/s into the carbon-skinned aluminium panel, clamped at its base. The spring he used between plate and enclosure is left out. WITH REAL MATERIALS: a steel plate (bends for good) inside an aluminium enclosure that can crack (handbook estimate).",
  "duration": 0.0004,
- "meshResolution": "x2",
+ "meshResolution": "fine",
  "bulkViscosity": true,
  "monitor": "Hollow Enclosure 2",
  "parts": [
