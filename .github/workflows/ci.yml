@@ -15,11 +15,15 @@ jobs:
   # Each check step uses if: always() so one failure does not hide the rest; any failure fails the job.
   ci:
     name: build and checks
-    runs-on: macos-15
+    # Joseph's Mac (label impactlab-mac) takes pushes and PRs from this repo's own branches,
+    # only while the repo variable IMPACTLAB_MAC is 'on'. Fork PRs and everything else stay on GitHub-hosted macOS.
+    runs-on: ${{ (vars.IMPACTLAB_MAC == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","impactlab-mac"]') || 'macos-15' }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
+        # The Mac has little disk; skip the build cache there.
+        if: runner.environment == 'github-hosted'
         with:
           path: .build
           key: spm-build-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**') }}
