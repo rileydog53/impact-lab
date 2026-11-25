@@ -24,8 +24,12 @@ public struct Material: Codable, Equatable, Sendable {
             && Self.assemblyPoissonRange.contains(poisson) && (provenance?.isValid ?? true)
     }
 
-    var shear: Double { young / (2 * (1 + poisson)) }
-    var lambda: Double { young * poisson / ((1 + poisson) * (1 - 2 * poisson)) }
+    var shear: Double { Self.shear(young: young, poisson: poisson) }
+    var lambda: Double { Self.lambda(young: young, poisson: poisson) }
+    @inline(__always) static func shear(young: Double, poisson: Double) -> Double { young / (2 * (1 + poisson)) }
+    @inline(__always) static func lambda(young: Double, poisson: Double) -> Double {
+        young * poisson / ((1 + poisson) * (1 - 2 * poisson))
+    }
     public var waveSpeed: Double { sqrt((lambda + 2 * shear) / density) }
 }
 
@@ -843,11 +847,20 @@ public struct Simulation: Sendable {
         var energy = ElementEnergy()
         var plasticArea = 0.0
         let recordsTraction = !piola.isEmpty
+        // Read only the two needed fields per element. Copying a whole `Material`
+        // (its optional provenance holds a URL) in this loop dominated the step time.
+        let materials = body.elementMaterials
         for (i, e) in body.mesh.elements.enumerated() {
             let started = timing.mark()
-            let material = body.elementMaterials?[i]
-            let mu = material?.shear ?? uniformMu
-            let lambda = material?.lambda ?? uniformLambda
+            let mu, lambda: Double
+            if let materials {
+                let young = materials[i].young, poisson = materials[i].poisson
+                mu = Material.shear(young: young, poisson: poisson)
+                lambda = Material.lambda(young: young, poisson: poisson)
+            } else {
+                mu = uniformMu
+                lambda = uniformLambda
+            }
             let u = position[e.b] - position[e.a]
             let v = position[e.c] - position[e.a]
             let fx = u * e.g1.x + v * e.g2.x
@@ -890,7 +903,7 @@ public struct Simulation: Sendable {
                 let rate = log(j / jOld) / viscous!.dt
                 var q = 0.0
                 if rate < 0 {
-                    let elementMaterial = material ?? body.material
+                    let elementMaterial = materials?[i] ?? body.material
                     let length = (e.area * j).squareRoot()
                     let waveSpeed = elementMaterial.waveSpeed
                     // Current density ρ0 / J.
