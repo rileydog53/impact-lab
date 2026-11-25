@@ -40,6 +40,11 @@ jobs:
               ImpactCheck --lab-examples
               ImpactCheck --supports-gravity
               ImpactCheck --workshop-improvements
+          - name: headless runner
+            cmds: |
+              ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600
+              ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/metal-plate-impact --timeout 600
+              ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600
           - name: regression suite
             cmds: |
               REGRESSION

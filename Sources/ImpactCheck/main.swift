@@ -100,6 +100,10 @@ func patchCheck() {
 // The sibling- and detachment-contact replays reproduce specific 0.8 crack
 // trajectories to test contact handoff, so they keep the element-mean
 // insertion criterion that generated those trajectories.
+if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == "run" {
+    headlessRun(Array(CommandLine.arguments.dropFirst(2)))
+}
+
 if ["--legacy-insertion", "--sibling-contact", "--detachment-contact"].contains(where: CommandLine.arguments.contains) {
     MaterialFracture.recoveredInsertionStress = false
 }
