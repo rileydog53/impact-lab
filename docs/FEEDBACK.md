@@ -9,55 +9,161 @@ Finding numbers are permanent. New chunks add new numbers, so a number always po
 **Block level** (how much it stops Joey from using the lab):
 
 - **Blocking**: he can't do what he set out to do.
-- **Slows me down**: he can work around it, but it costs time or trust.
+- **Slows me down**: he can work around it, but it costs time or runs.
 - **Minor**: an annoyance, doesn't stop the work.
 - **Unclear**: the feedback doesn't say.
 
 **Change type:**
 
 - **Physics/solver**: the fix needs a change to how the simulation computes things.
-- **Interface/wording**: the fix is in the app's screens, labels or help text only.
+- **Interface/wording**: the fix is in the app's screens, labels, help text or bookkeeping only.
 - **Not known yet**: can't tell from the feedback alone.
 
-Anything that isn't Joey's own words is labeled as a description or a repo note.
+Anything that isn't Joey's own words is labeled as a description or a repo note. Repo notes are Claude's reading of the code, not checked against his saved scene files.
 
 ## Chunk log
 
 | Chunk | Date | What it covered |
 |---|---|---|
 | 1 | 2026-11-25 | Plate inside an enclosure bends instead of punching through; the "bendability" setting has no name he knows |
+| 1b | 2026-11-25 | Screenshot of that run; view options; the ParaView export |
+| 2 | 2026-11-25 | Live testing, sections 1 to 16: setting up the carbon-skinned aluminium panel run |
+| 3 | 2026-11-25 | Live testing part 2, sections 17 to 30: results, a clamped panel, runs that ended before contact |
+
+## What he was testing (context, his words)
+
+- Chunk 1: "The internal volume is a high density, high strength, no fracture. Low mesh, the external enclosure has fracture turned on more dense mesh, and the internal should penetrate through it and break into the plating."
+- Chunk 2: "How a high fracture energy material can protect a high cohesive strength material that has a lower fracture energy." He set the carbon fibre layer's fracture energy to 2150 against 1300 for the aluminium, and said "I don't know if that's how carbon fiber really works. I don't really care, it's just an experiment."
+- Chunk 3: a steel ball made more oblate, the panel clamped on its top edge, then speed and duration raised.
 
 ## Findings by block level
 
 | # | Finding | Category | Block level | Change type |
 |---|---|---|---|---|
 | 1 | Strong plate bends like a crayon instead of punching through | Bug | Blocking | Not known yet |
-| 2 | Doesn't know the name of the "bendability" setting | Confusing wording | Slows me down | Interface/wording |
+| 2 | Material settings need plain words | Confusing wording | Blocking | Interface/wording |
+| 15 | No warning that a run ends before the bodies touch | Missing feature | Slows me down | Interface/wording |
+| 3 | Doesn't know what the ParaView export is | Confusing wording | Slows me down | Interface/wording |
+| 5 | Can't tell how to keep the steel ball from fracturing | Confusing wording | Slows me down | Interface/wording |
+| 14 | Can't clamp two edges of one body | Missing feature | Slows me down | Physics/solver (likely) |
+| 11 | Bond strength and fracture energy are easy to mix up | Confusing wording | Slows me down | Interface/wording |
+| 7 | Extra fine mesh "seemed to not change anything" | Bug | Unclear | Not known yet |
+| 6 | Wishes the steel ball's fracture could be turned on | Missing feature | Unclear | Not known yet |
+| 4 | View options: "none of them show much meaning" | Confusing wording | Unclear | Not known yet |
+| 12 | Interior mesh choice: which one is normal | Confusing wording | Unclear | Not known yet |
+| 13 | "I was getting desperate" | Frustration | Unclear | Not known yet |
+| 9 | Can't resize the view panel against the data panel | Missing feature | Minor | Interface/wording |
+| 16 | Log run times to improve time estimates | Missing feature | Minor | Interface/wording |
+| 8 | Background grid lines are confusing | Confusing wording | Minor | Interface/wording |
+| 10 | The ball's mesh looked far too dense at first | Concern | Minor | Interface/wording |
 
 ## Bugs
 
 ### 1. A strong, no-fracture plate bends instead of punching through the enclosure and panel
 
 - **His words:** "it bends like a fucking crayon, even though I've maxed out the bendability thing"
-- **What he set up (his words):** "The internal volume is a high density, high strength, no fracture. Low mesh, the external enclosure has fracture turned on more dense mesh, and the internal should penetrate through it and break into the plating."
-- **What he expected:** the inner plate goes through the enclosure and breaks into the panel.
+- **What he expected (his words):** "the internal should penetrate through it and break into the plating."
 - **What happened (description of his screenshot, not his words):** "Rectangular Plate 3" (blue, fracture off, coarse mesh) sits inside "Hollow Enclosure 2" (brown, finer-meshed shell), moving left toward a "Carbon-skinned aluminium panel" fixed at its base. The plate bent into a curved banana shape inside the enclosure, and the enclosure wrapped and smeared around it. Nothing went into the panel, only a contact point on its face. Dashed outlines show the original shapes.
 - **Block level:** Blocking. This is the experiment he was trying to run.
-- **Change type:** Not known yet. It could be the solver, the material limits, or the setup. See the repo note below.
-- **Repo note (Claude's reading of the code, not Joey's words, not checked against his scene file):** in the body Material settings, "Young’s modulus (MPa)" can only be set between 0.5 and 4 MPa, which is rubber-soft. If the plate used those editor numbers rather than a Material Library profile, "maxed out" would still be very bendy. This is a lead to check, not a conclusion.
+- **Change type:** Not known yet. It could be the solver, the material limits, or the setup.
+- **Repo note:** in the body Material settings, "Young’s modulus (MPa)" can only be set between 0.5 and 4 MPa, which is rubber-soft. If the plate used those editor numbers rather than a Material Library profile, "maxed out" would still be very bendy. A lead to check, not a conclusion.
+
+### 7. Extra fine mesh seemed to change nothing
+
+- **His words:** "It's going to use an extra fine mesh. That seemed to not change anything."
+- **Block level:** Unclear. He kept going and set finer levels after it.
+- **Change type:** Not known yet.
+- **Unclear:** whether he means the mesh on screen didn't change, or the result didn't.
 
 ## Missing features
 
-None yet.
+### 15. No warning or estimate when a run will end before the bodies meaningfully touch
+
+Merged from chunk 3, sections 21, 25 and 27.
+
+- **His words:** "Oh, because it never made contact. That's hilarious." and "I think I might have set the simulation time step to end before any significant contact really."
+- **What he asked for (his words):** "an estimate of like when the bodies will impact if available, or like a warning that says, Hey, like you've selected this time step ... it does not appear that any meaningful simulation will actually occur"
+- He wants it shown while he types the duration: "something above it".
+- **Block level:** Slows me down. Two of his runs ended before or at first contact.
+- **Change type:** Interface/wording. It reads the setup before a run; the solver itself doesn't change.
+
+### 14. Can't clamp two edges of one body
+
+- **His words:** "what if we have it be supported, clamp the top edge? Is there any way to clamp both?"
+- **Block level:** Slows me down. He settled for one clamped edge.
+- **Change type:** Physics/solver (likely).
+- **Repo note:** Support is a single choice per body today (Fixed support, or clamp left, right, bottom or top edge), so two clamped edges would need a new kind of boundary condition, not only a new menu item.
+
+### 6. Wishes the steel ball's fracture could be turned on
+
+- **His words:** "Oh, no sourced fracture estimate. Well, I wish I could turn it on."
+- **Block level:** Unclear. In the same breath he wanted the ball not to fracture (see finding 5).
+- **Change type:** Not known yet.
+- **Repo note:** the editor doesn't offer the fracture switch on round bodies or on profiles with no sourced estimate.
+
+### 9. Can't resize the view panel against the data panel
+
+- **His words:** "I should be able to kind of adjust the relative size of like the upper and lower panels ... which would be ideal, but that's okay."
+- **Block level:** Minor ("but that's okay").
+- **Change type:** Interface/wording.
+
+### 16. Log run times so the time estimate gets better
+
+- **His words:** "there should be some way that it logs calculation times and then builds a database so that it can provide more accurate estimates going forward. Not a massive problem."
+- Context (his words): "Estimate around 67 seconds ... Already done, only 32 seconds."
+- **Block level:** Minor ("Not a massive problem").
+- **Change type:** Interface/wording.
 
 ## Confusing wording
 
-### 2. He doesn't know what the "bendability" setting is called
+### 2. Material settings need plain words
 
-- **His words:** "I've maxed out the bendability thing, and I don't know what to call that"
-- **Block level:** Slows me down. He can't name the setting, so he can't tell whether he changed the right one.
+Merged from chunk 1 (the "bendability thing") and chunk 2, section 7.
+
+- **His words:** "I've maxed out the bendability thing, and I don't know what to call that" and "I don't know what linear coefficient or quadratic coefficients are. Like, we need plain words, like how hard it is to break, how much it resists pulling, or how much it resists bending."
+- **Block level:** Blocking. He can't tell whether he changed the setting he meant to.
 - **Change type:** Interface/wording.
-- **Repo note (Claude's reading, not Joey's words):** **Unclear** which control he means. The body Material settings have three that change how a body bends or gives: "Young’s modulus (MPa)" (stiffness), "Yield / E (%)" (when it starts to bend permanently) and "Hardening / E (%)" (how much it stiffens as it bends). The last two only show when Response is set to Elastoplastic. He said more on this "will be coming in the feedback", so this stays open until that chunk arrives.
+- **Repo note:** "Linear coefficient b1" and "Quadratic coefficient b2" belong to the "Artificial bulk viscosity (shock smoothing)" setting. **Unclear** which control is the "bendability thing". Body Material settings have three candidates: "Young’s modulus (MPa)" (stiffness), "Yield / E (%)" (when it starts to bend permanently) and "Hardening / E (%)" (how much it stiffens as it bends). The last two show only when Response is Elastoplastic.
+
+### 3. He doesn't know what the ParaView export is
+
+- **His words:** "Let me export the results for para view. I don't know what that means."
+- **Block level:** Slows me down.
+- **Change type:** Interface/wording.
+- **Note:** the file he exported (a .pvd) is only an index of 60 frames from 0 to 5 ms. The frame files it points to weren't sent, so it holds no results by itself.
+
+### 5. Can't tell how to keep the steel ball from fracturing
+
+- **His words:** "So, for the steel ball, we're not going to let it fracture. How do I do that? It seems like I can't do that."
+- **Block level:** Slows me down.
+- **Change type:** Interface/wording.
+- **Repo note:** fracture looks to be already off for this ball and can't be switched on. The message he saw only talks about a missing sourced estimate, so it doesn't say plainly "this body will not fracture".
+
+### 11. Bond strength and fracture energy are easy to mix up
+
+- **His words:** "The carbon fiber, the bond. Okay, wait, that's the bond strength. I meant the fracture energy should be higher."
+- **Block level:** Slows me down. He caught it himself this time.
+- **Change type:** Interface/wording.
+
+### 4. View options don't show much
+
+- **His words:** "none of them show much meaning crack separation with high detail with the body velocity"
+- **Block level:** Unclear.
+- **Change type:** Not known yet.
+- **Unclear:** dictation was rough. It may mean the result views showed little, or something else.
+
+### 12. Interior mesh choice: which one is the normal one
+
+- **His words:** "Oh, okay, it's kind of a okay, okay, that's the normal one, okay."
+- **Block level:** Unclear.
+- **Change type:** Not known yet.
+- **Unclear:** he may have just been finding his way; nothing here says it was a problem.
+
+### 8. Background grid lines are confusing
+
+- **His words:** "Oh, I'm getting confused with the grid lines in the background. LOL."
+- **Block level:** Minor.
+- **Change type:** Interface/wording.
 
 ## Ideas
 
@@ -65,8 +171,26 @@ None yet.
 
 ## Frustrations
 
-None yet. Finding 1 carries clear frustration, but it's filed once, as a bug, rather than twice.
+### 13. "I was getting desperate"
+
+- **His words:** "I was getting desperate because I was like, man, fuck does this shit fucking mean?"
+- **Block level:** Unclear.
+- **Change type:** Not known yet.
+- **Unclear:** which part of the lab this was about. Finding 1 also carries clear frustration but is filed once, as a bug.
 
 ## Concerns
 
-None yet.
+### 10. The ball's mesh looked far too dense at first
+
+- **His words:** "that ball, it just has a crazy, crazy, crazy, crazy, crazy amount of triangles for a ball. Am I insane?"
+- He then found the cause himself (his words): "Oh, oh, okay, assembly mesh is X4. Okay, that's appropriate for a simulation like this." He set it to Standard: "That was easy."
+- **Block level:** Minor. Resolved by him.
+- **Change type:** Interface/wording.
+
+## Not filed
+
+Kept out of the list because they aren't problems or requests:
+
+- Praise: "Fit assembly as a button works well." Results: "Ooh, ooh, this is good." Run times: "It took 115 seconds. That's not bad." Direction: "This is definitely evolving towards the product ... that I'm looking at for Impact Lab." Excitement: "I'm actually excited to see what comes out of this for once."
+- Hardware use, which he approves of: "It's cranking my GPU. It's cranking my CPU. And if it were any other way, I would be pissed the fuck off right now."
+- Setup narration, tangents (dictation length, self-directed humour), and an interruption about another task.
