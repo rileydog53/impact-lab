@@ -213,7 +213,7 @@ struct AssemblyEditor: View {
             Text("Workshop limits").font(.headline)
             Text("Bodies may translate and rotate. A body can be a fixed support (a rigid bench, floor or roller that never moves) or have one edge clamped. A deformable support is an ordinary free block that can move and deform under load. Pinned points, rigid joints and partial constraints are unavailable.")
             Text("Gravity can be switched on in Simulation settings; it pulls every free body downward (−Y). No other applied loads, pressures or friction exist; contact is frictionless.")
-            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies, bonded blocks and supported bodies cannot fracture; each body's list entry says \"fracture on\", \"fracture off\" or \"fracture n/a\", and hovering explains why.")
+            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies, outline bodies and fixed supports cannot fracture (a clamped body can); each body's list entry says \"fracture on\", \"fracture off\" or \"fracture n/a\", and hovering explains why.")
             Text("Outline bodies can have any polygon shape with holes: draw one, insert an outline shape, convert a structured body, or Cut and Join two bodies (polygon operations by Clipper2, Angus Johnson, Boost licence). They are meshed by a quality triangle mesher (Ruppert/Shewchuk refinement). Round bodies use an elliptical mesh. Outline bodies cannot fracture yet. Curved edges, imported outlines, arbitrary cracks, and nested groups are unavailable.")
             Text("Limits and their causes").font(.subheadline.weight(.semibold))
             ForEach(AssemblyScene.limits, id: \.name) { limit in
@@ -1095,15 +1095,18 @@ struct AssemblyEditor: View {
                 experiment.updatePart(part.id, action: "Set Support") { body in
                     body.support = support
                     if support != nil { body.velocity = .zero }
-                    if support == .fixed { body.plasticity.response = .elastic }
+                    if support == .fixed {
+                        body.plasticity.response = .elastic
+                        body.fracture = nil
+                    }
                 }
             })) {
                 Text("Free body").tag(nil as AssemblyPart.Support?)
-                ForEach(AssemblyPart.Support.allCases.filter { part.shape != .round || $0 == .fixed }, id: \.self) {
+                ForEach(AssemblyPart.Support.allCases.filter { (part.shape != .round || $0 == .fixed) && (part.fracture == nil || !$0.isFixture) }, id: \.self) {
                     Text($0.rawValue).tag(Optional($0))
                 }
             }
-            .disabled(!experiment.canEdit || part.fracture != nil)
+            .disabled(!experiment.canEdit)
             Group {
                 switch part.support {
                 case nil:
@@ -1116,9 +1119,10 @@ struct AssemblyEditor: View {
             }
             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if part.fracture != nil {
-                Text("Supports are unavailable while Material fracture is on (crack insertion would move held nodes).")
-                    .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
-            } else if let conflict = part.supportConflict {
+                Text("With Material fracture on, only a clamped edge is available: a fixed support is rigid and cannot crack. A crack that reaches the clamped edge stays held on both sides.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let conflict = part.supportConflict {
                 Text(conflict).font(.caption).foregroundStyle(assemblyAmber)
             }
             if part.support != nil, let index = experiment.selectedIndex, experiment.simulation.time > 0 {

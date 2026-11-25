@@ -1,19 +1,53 @@
 name: CI
 # Free GitHub-hosted macOS runners (macos-15, Apple silicon, 3 vCPU / 7 GB) are free only for PUBLIC repos.
-# While the repo is private this runs only by hand (workflow_dispatch). Uncomment push/pull_request once public.
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
-  # pull_request:
+  push:
+    branches: [main]
+  pull_request:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Build the Swift package once per run; the check jobs below reuse the built tools instead of each rebuilding.
+  build:
+    name: build (release)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-build-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**') }}
+          restore-keys: spm-build-${{ runner.os }}-
+      - name: Toolchain
+        run: swift --version
+      - name: Build (release)
+        # shell: bash turns on pipefail, so a failed compile fails this step instead of passing through tee.
+        shell: bash
+        run: swift build -c release 2>&1 | tee build.log
+      - name: Pack built tools
+        # tar keeps the executable bit, which artifact upload would drop.
+        run: tar -czf impact-tools.tgz -C .build/release ImpactCheck ImpactRegression
+      - uses: actions/upload-artifact@v4
+        with:
+          name: impact-tools
+          path: impact-tools.tgz
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
   suite:
     name: ${{ matrix.name }}
+    needs: build
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -41,22 +75,31 @@ jobs:
               ImpactCheck --lab-examples
               ImpactCheck --supports-gravity
               ImpactCheck --workshop-improvements
+          - name: test machine + scene documents
+            cmds: |
+              ImpactCheck --test-machine
+              ImpactCheck --scene-documents
+          - name: headless runner
+            cmds: |
+              ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600
+              ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/metal-plate-impact --timeout 600
+              ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600
           - name: regression suite
             cmds: |
               REGRESSION
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: |
-            .build
-            .build-regression
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**') }}
-          restore-keys: spm-${{ runner.os }}-
-      - name: Toolchain
-        run: swift --version
-      - name: Build (release)
-        run: swift build -c release 2>&1 | tee build.log
+          name: impact-tools
+      - name: Unpack built tools
+        # ImpactCheck goes where PATH points below; ImpactRegression also goes where tests/regression/run.py
+        # looks for it, so the regression suite runs with --skip-build instead of compiling a second time.
+        run: |
+          mkdir -p .build/release .build-regression/release
+          tar -xzf impact-tools.tgz -C .build/release
+          cp .build/release/ImpactRegression .build-regression/release/ImpactRegression
+          rm impact-tools.tgz
       - name: Run checks
         timeout-minutes: 35
         run: |
@@ -69,7 +112,7 @@ jobs:
             echo "::group::$cmd"
             start=$(date +%s)
             if [ "$cmd" = REGRESSION ]; then
-              python3 tests/regression/run.py --out ci-out/regression > "$log" 2>&1 || status=1
+              python3 tests/regression/run.py --out ci-out/regression --skip-build > "$log" 2>&1 || status=1
             else
               $cmd > "$log" 2>&1 || status=1
             fi
@@ -84,7 +127,6 @@ jobs:
         with:
           name: logs-${{ strategy.job-index }}
           path: |
-            build.log
             ci-out/
             **/*.csv
             !.build/**

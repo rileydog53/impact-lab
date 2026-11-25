@@ -158,6 +158,60 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         public var isFixture: Bool { self == .fixed }
     }
 
+    /// A moving grip (a virtual test machine's crosshead): every node on one straight edge follows a prescribed
+    /// rigid translation. The edge starts at rest and its velocity rises smoothly to `velocity` over `ramp`
+    /// seconds (half a cosine), then stays constant. The force the grip exerts and the work it does are
+    /// recorded. nil leaves the body exactly as before grips existed (test machine milestone, 2026-11-25).
+    public struct Grip: Codable, Equatable, Sendable {
+        public enum Edge: String, CaseIterable, Codable, Sendable {
+            case left, right, bottom, top
+            var support: Support {
+                switch self {
+                case .left: .clampLeft
+                case .right: .clampRight
+                case .bottom: .clampBottom
+                case .top: .clampTop
+                }
+            }
+            var opposite: Edge {
+                switch self {
+                case .left: .right
+                case .right: .left
+                case .bottom: .top
+                case .top: .bottom
+                }
+            }
+        }
+
+        public var edge: Edge
+        /// Crosshead velocity after the ramp, m/s, in the scene frame.
+        public var velocity: Point
+        /// Seconds over which the velocity rises from zero to `velocity`.
+        public var ramp: Double
+
+        public static let speedRange = 0.0...10.0
+        public static let rampRange = 1e-7...10.0
+
+        public init(edge: Edge, velocity: Point, ramp: Double) {
+            self.edge = edge
+            self.velocity = velocity
+            self.ramp = ramp
+        }
+
+        var isValid: Bool {
+            velocity.x.isFinite && velocity.y.isFinite && Self.speedRange.contains(simd_length(velocity))
+                && Self.rampRange.contains(ramp)
+        }
+
+        /// Prescribed motion at time `t`: displacement from the start, velocity and acceleration.
+        package func motion(at t: Double) -> (displacement: Point, velocity: Point, acceleration: Point) {
+            guard t < ramp else { return ((t - ramp / 2) * velocity, velocity, .zero) }
+            let phase = Double.pi * t / ramp
+            return ((t / 2 - ramp / (2 * .pi) * sin(phase)) * velocity, (1 - cos(phase)) / 2 * velocity,
+                    Double.pi / (2 * ramp) * sin(phase) * velocity)
+        }
+    }
+
     public static let velocityRange = -150.0...150.0
     /// The range every scene before 2026-11-24 was saved under (25 to 300 mm). Kept as a reference for the
     /// advisory notes; it no longer limits anything (Joseph's decision 2, Google Doc section 28).
@@ -188,6 +242,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public var bondedLayer: BondedLayer?
     /// nil keeps every node free, exactly as in scenes saved before supports existed.
     public var support: Support?
+    /// nil for every body saved before grips existed.
+    public var grip: Grip?
     /// The body's geometry when `shape` is `.outline`: outer boundary and holes in the body frame. Its bounding
     /// box is stretched to `size` and centred on `center`. nil for the legacy shapes.
     public var outline: BodyOutline?
@@ -206,8 +262,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public var supportConflict: String? {
         guard let support else { return nil }
         if velocity != .zero { return "A supported body starts at rest; set its velocity to zero." }
-        if fracture != nil { return "Supports cannot be combined with fracture yet (crack insertion would move the held nodes)." }
         if support.isFixture {
+            if fracture != nil { return "A fixed support is rigid and never deforms, so it cannot crack; remove fracture or clamp an edge instead." }
             if plasticity.response != .elastic || bondedLayer?.hasPlasticity == true {
                 return "A fixed support is rigid, so plasticity has no effect; set the response to Elastic."
             }
@@ -217,12 +273,25 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
         return nil
     }
 
+    /// Why the grip cannot be used with the body's other settings, or nil when it can.
+    public var gripConflict: String? {
+        guard let grip else { return nil }
+        if velocity != .zero { return "A gripped body starts at rest; set its velocity to zero (the grip sets the speed)." }
+        if shape == .round { return "Round bodies have no straight edge to grip; use a block, enclosure or outline." }
+        if support == .fixed { return "A fixed support never moves, so it cannot also be gripped." }
+        if let support, support != grip.edge.opposite.support {
+            return "Clamp the edge opposite the grip (\(grip.edge.opposite.rawValue)), so the two never share a node."
+        }
+        if !grip.isValid { return "Grip speed must be at most 10 m/s and its ramp between 0.1 µs and 10 s." }
+        return nil
+    }
+
     var isValid: Bool { isValid(resolution: .standard) }
 
     /// `resolution` is the mesh this body is actually calculated on (its own override, else the assembly mesh).
     func isValid(resolution: AssemblyScene.Resolution) -> Bool {
         widthRange(resolution: resolution).contains(size.x) && sizeRange(resolution: resolution).contains(size.y)
-            && supportConflict == nil
+            && supportConflict == nil && gripConflict == nil
             && Self.centerRange.contains(center.x) && Self.centerRange.contains(center.y)
             && (-360...360).contains(angle)
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)

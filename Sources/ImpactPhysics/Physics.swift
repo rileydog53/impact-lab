@@ -272,6 +272,17 @@ package struct ElementPiola: Sendable {
     }
 }
 
+/// A grip's nodes, where each started, and the prescribed motion at the start and end of the current step.
+struct GripState: Sendable {
+    typealias Motion = (displacement: Point, velocity: Point, acceleration: Point)
+    var nodes: [Int]
+    var start: [Point]
+    var before: Motion = (.zero, .zero, .zero)
+    var after: Motion = (.zero, .zero, .zero)
+    /// Work the grip did on the body during the last trial step (J per metre of depth).
+    var stepWork = 0.0
+}
+
 struct BodyStep: Sendable {
     var body: Body
     var strain: [Double]
@@ -290,6 +301,8 @@ struct BodyStep: Sendable {
     var clamped: [Int] = []
     /// Artificial bulk viscosity state, nil when the scene leaves it off (then no viscous arithmetic runs).
     var viscous: ViscousState?
+    /// A moving grip on one edge, nil for every body without one (then none of the grip lines run).
+    var grip: GripState?
 
     init(_ body: Body, j2: J2Model? = nil, recordsTraction: Bool = false, elementJ2: [J2Model?]? = nil) {
         self.body = body
@@ -312,7 +325,10 @@ struct BodyStep: Sendable {
 
     mutating func drift(_ dt: Double) -> Bool {
         if fixture { return true }
-        defer { for i in clamped { nextPosition[i] = body.position[i] } }
+        defer {
+            for i in clamped { nextPosition[i] = body.position[i] }
+            if let grip { for (k, i) in grip.nodes.enumerated() { nextPosition[i] = grip.start[k] + grip.after.displacement } }
+        }
         for i in body.mass.indices {
             let acceleration = (internalForce[i] + appliedForce[i]) / body.mass[i]
             let position = body.position[i] + dt * (body.velocity[i] + 0.5 * dt * acceleration)
@@ -357,6 +373,16 @@ struct BodyStep: Sendable {
                     velocity: .zero, measuresVerticalStrain: former.measuresVerticalStrain,
                     elementMaterials: former.elementMaterials, velocityPerturbation: sources.map { former.velocity[$0] })
         nextPosition = sources.map { nextPosition[$0] }
+        // A held node that splits stays held on both sides of the new crack (layered plan step 8).
+        if !clamped.isEmpty {
+            let held = Set(clamped)
+            clamped = sources.indices.filter { held.contains(sources[$0]) }
+        }
+        if let old = grip {
+            let slot = Dictionary(uniqueKeysWithValues: old.nodes.enumerated().map { ($1, $0) })
+            grip!.nodes = sources.indices.filter { slot[sources[$0]] != nil }
+            grip!.start = grip!.nodes.map { old.start[slot[sources[$0]]!] }
+        }
         internalForce = sources.enumerated().map { i, old in internalForce[old] * (body.mass[i] / former.mass[old]) }
         appliedForce = sources.enumerated().map { i, old in appliedForce[old] * (body.mass[i] / former.mass[old]) }
         let after = balance(body, nextPosition, internalForce, appliedForce)
@@ -379,7 +405,24 @@ struct BodyStep: Sendable {
             nextVelocity[i] = velocity
         }
         for i in clamped { nextVelocity[i] = .zero }
+        if let grip {
+            // The reaction includes the inertia of the gripped nodes, as in `guideVelocitiesAndWork`.
+            var work = 0.0
+            for i in grip.nodes {
+                nextVelocity[i] = grip.after.velocity
+                let oldReaction = body.mass[i] * grip.before.acceleration - (internalForce[i] + appliedForce[i])
+                let newReaction = body.mass[i] * grip.after.acceleration - (nextInternal[i] + nextApplied[i])
+                work += 0.5 * simd_dot(oldReaction + newReaction, nextPosition[i] - body.position[i])
+            }
+            self.grip!.stepWork = work
+        }
         return true
+    }
+
+    /// Force the grip exerts on the body (N per metre of depth), including the inertia of the gripped nodes.
+    var gripReaction: Point {
+        guard let grip else { return .zero }
+        return grip.nodes.reduce(.zero) { $0 + body.mass[$1] * grip.after.acceleration - internalForce[$1] - appliedForce[$1] }
     }
 
     /// Force the support exerts on the body (N per metre of depth): it balances every other force on the held nodes.

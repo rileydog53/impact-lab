@@ -59,10 +59,8 @@ extension AssemblyPart {
         if bondedLayer != nil && notch != nil {
             return "A bonded-layer block cannot also have a V-notch. Remove the notch to let the layers crack and delaminate."
         }
-        if let support {
-            return support.isFixture
-                ? "A fixed support is rigid and never calculated as a deforming body, so it cannot fracture."
-                : "A clamped body cannot fracture yet: inserting a crack would move the held nodes. Remove the clamp to allow fracture."
+        if support?.isFixture == true {
+            return "A fixed support is rigid and never calculated as a deforming body, so it cannot fracture. Clamp an edge instead to hold it and let it crack."
         }
         if fracture == nil, let provenance = material.provenance,
            let profile = MaterialProfile.references.first(where: { $0.id == provenance.id }),

@@ -16,14 +16,17 @@ public enum EnergyAcceptance {
     /// Absolute floor (J/m) for runs whose scale is zero.
     public static let floor = 1e-9
 
-    /// Energy scale in J/m: starting energy plus the largest gravitational work released so far.
-    public static func scale(initialEnergy: Double, gravitationalRelease: Double) -> Double {
-        initialEnergy + max(0, gravitationalRelease)
+    /// Energy scale in J/m: starting energy plus the largest gravitational work released so far, plus the largest
+    /// work moving grips have put in so far (0 without grips, which leaves the scale exactly as before grips).
+    public static func scale(initialEnergy: Double, gravitationalRelease: Double, gripWork: Double = 0) -> Double {
+        initialEnergy + max(0, gravitationalRelease) + max(0, gripWork)
     }
 
     /// True when `residual` (current ledger total minus the starting energy, J/m) is within budget.
-    public static func accepts(residual: Double, initialEnergy: Double, gravitationalRelease: Double) -> Bool {
-        abs(residual) <= max(floor, fraction * scale(initialEnergy: initialEnergy, gravitationalRelease: gravitationalRelease))
+    public static func accepts(residual: Double, initialEnergy: Double, gravitationalRelease: Double,
+                               gripWork: Double = 0) -> Bool {
+        abs(residual) <= max(floor, fraction * scale(initialEnergy: initialEnergy, gravitationalRelease: gravitationalRelease,
+                                                     gripWork: gripWork))
     }
 
     /// The rule used before 24 Nov 2026, kept only so the regression check can show what it decided.
