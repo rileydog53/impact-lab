@@ -343,6 +343,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--locking") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--test-machine") {
+    try testMachineCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--speed-limit") {
     try speedLimitCheck()
     exit(EXIT_SUCCESS)

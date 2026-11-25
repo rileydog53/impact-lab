@@ -40,6 +40,10 @@ jobs:
               ImpactCheck --lab-examples
               ImpactCheck --supports-gravity
               ImpactCheck --workshop-improvements
+          - name: test machine + scene documents
+            cmds: |
+              ImpactCheck --test-machine
+              ImpactCheck --scene-documents
           - name: headless runner
             cmds: |
               ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600

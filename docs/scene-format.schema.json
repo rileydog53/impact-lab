@@ -116,6 +116,15 @@
         "wall": { "type": "number", "default": 0.012, "description": "Enclosure wall thickness, m; 0.005 m to 0.4 × the smaller size." },
         "refinement": { "$ref": "#/$defs/resolution", "description": "This body's mesh level, overriding meshResolution." },
         "support": { "enum": ["fixed", "clampLeft", "clampRight", "clampBottom", "clampTop", "Fixed support", "Clamp left edge", "Clamp right edge", "Clamp bottom edge", "Clamp top edge"], "description": "fixed: rigid, immovable bench or fixture (width up to 1.0 m). clamp…: that local edge is held. Supported bodies start at rest. A fixed support cannot fracture; a clamped body can, and a crack reaching the held edge stays held on both sides." },
+        "grip": {
+          "type": "object", "additionalProperties": false, "required": ["edge", "velocity", "ramp"],
+          "description": "A moving grip, the crosshead of a virtual test machine: every node on that local edge follows a rigid translation. The velocity rises from zero over ramp seconds (half a cosine), then stays constant. The grip force and the work it does are recorded. The body starts at rest; it cannot be a fixed support or round, and a clamp must be on the opposite edge.",
+          "properties": {
+            "edge": { "enum": ["left", "right", "bottom", "top"] },
+            "velocity": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Crosshead velocity [vx, vy] in m/s after the ramp; speed at most 10 m/s." },
+            "ramp": { "type": "number", "minimum": 1e-7, "maximum": 10, "description": "Seconds to reach the crosshead velocity from rest." }
+          }
+        },
         "material": { "$ref": "#/$defs/material" },
         "plasticity": { "$ref": "#/$defs/plasticity" },
         "fracture": {
