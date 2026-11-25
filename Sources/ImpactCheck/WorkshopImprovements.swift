@@ -121,11 +121,16 @@ func workshopImprovementsCheck() throws {
     require(bonded.fractureStatus == .off, "bonded block without fracture: off")
     bonded.fracture = MaterialFractureSettings()
     require(bonded.fractureStatus == .on, "bonded block with fracture: on")
+    // Clamped bodies can crack since the layered target plan, step 8 (PR 14, merged 2026-11-25), so they report
+    // off/on like a plain block. Fixed supports still cannot.
     var clamped = AssemblyPart("Clamped", size: Point(0.1, 0.03))
     clamped.support = .clampLeft
+    require(clamped.fractureStatus == .off, "clamped block without fracture: off")
+    clamped.fracture = MaterialFractureSettings()
+    require(clamped.fractureStatus == .on, "clamped block with fracture: on")
     var fixed = AssemblyPart("Fixed", size: Point(0.2, 0.03))
     fixed.support = .fixed
-    for part in [round, clamped, fixed] {
+    for part in [round, fixed] {
         guard case let .unavailable(reason) = part.fractureStatus else { require(false, "\(part.name) should be n/a"); continue }
         require(part.fractureStatus.tag == "fracture n/a" && reason.count > 40, "\(part.name) explains why: \(reason)")
         print("  \(part.name): \(part.fractureStatus.tag) — \(reason)")
