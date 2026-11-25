@@ -345,6 +345,17 @@ if let index = CommandLine.arguments.firstIndex(of: "--locking") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--speed-limit") {
+    try speedLimitCheck()
+    exit(EXIT_SUCCESS)
+}
+
+if CommandLine.arguments.dropFirst().contains("--clamped-fracture") {
+    try clampedFractureCheck()
+    try restingFractureCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--spall") {
     try spallCheck()
     exit(EXIT_SUCCESS)
