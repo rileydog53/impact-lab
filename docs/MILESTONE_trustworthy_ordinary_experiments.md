@@ -26,12 +26,12 @@ Turn Impact Lab from an impact tool into a small virtual materials-testing labor
 | Check | Reference | Pass |
 |---|---|---|
 | Elastic slope in tension and compression | Input E (plane-strain modulus stated) | within 2% |
-| 0.2%-offset yield (J2 metal) | Input yield | within 2%, offset method written down |
+| 0.2%-offset yield (J2 metal) | The same 0.2% offset applied to a plane-strain reference curve: first yield at σ0/√(1−ν+ν²), slope E′ = E/(1−ν²) | within 2%, offset method written down |
 | Reaction force vs gauge force | Section force balance | within 2% in quasi-static regime |
 | Grip work vs ledger | Strain energy + dissipation + kinetic | residual within 0.5% of grip work |
 | Rate independence | Halve loading speed | slope and yield change under 2% (confirms quasi-static) |
 | Mesh refinement | Two refinements | reported with predeclared tolerance; not tuned |
-| Bend, displacement-controlled | Euler-Bernoulli / Timoshenko beam | cantilever sag 1.2180 mm within 3%, roller sag 1.0885 mm within 2% (existing gates) |
+| Bend, displacement-controlled | Timoshenko beam | grip reaction force at the prescribed deflection within 3% of Timoshenko; the force-driven sags (cantilever 1.2180 mm within 3%, roller 1.0885 mm within 2%) stay as separate regressions (existing gates) |
 | Drop energy | mgh scale | 0.5% budget, denominator declared in advance |
 
 Reference literature: ASTM E8/E8M (tension), E9 (compression), E111 (modulus), Timoshenko beam theory, section 27 benchmarks. Material values stay literature-based and illustrative; agreement with theory is not experimental validation, and plane strain is not a round bar.
