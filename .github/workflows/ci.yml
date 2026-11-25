@@ -218,6 +218,13 @@ jobs:
           echo "ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
           tail -40 "ci-out/ImpactCheck_run_docs_showcase_brittle_tile_fracture_json___o.log"
           exit $status
+      - name: "headless runner: VTK export check"
+        if: always() && steps.prep.outcome == 'success'
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/vtk-metal-plate-impact --timeout 600 --vtk
+          python3 tests/vtk/check_vtk.py ci-out/headless/vtk-metal-plate-impact
       - name: "regression suite: python3 tests/regression/run.py"
         if: always() && steps.prep.outcome == 'success'
         timeout-minutes: 40
