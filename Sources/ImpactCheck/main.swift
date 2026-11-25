@@ -343,6 +343,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--locking") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--outline-fracture") {
+    try outlineFractureCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--bend-rig") {
     try bendRigCheck()
     exit(EXIT_SUCCESS)

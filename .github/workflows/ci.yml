@@ -23,12 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: test machine + plate impact + scene documents
+          - name: test machine + plate impact + scene documents + outline fracture
             cmds: |
               ImpactCheck --test-machine
               ImpactCheck --plate-impact
               ImpactCheck --taylor-trend
               ImpactCheck --scene-documents
+              ImpactCheck --outline-fracture quick
           - name: bend rig (quick)
             cmds: |
               ImpactCheck --bend-rig quick

@@ -129,7 +129,7 @@
         "plasticity": { "$ref": "#/$defs/plasticity" },
         "fracture": {
           "type": "object", "additionalProperties": false,
-          "description": "Illustrative cohesive cracking. Blocks and enclosures with a custom (non-profile) material only.",
+          "description": "Illustrative cohesive cracking. Blocks, enclosures and outline bodies (meshPattern is for blocks only); a custom (non-profile) material, or a profile with an absolute strength.",
           "properties": {
             "strengthFraction": { "type": "number", "minimum": 0.005, "maximum": 0.08, "default": 0.03, "description": "Tensile strength as a fraction of Young's modulus." },
             "strength": { "type": "number", "minimum": 10000, "maximum": 4000000000, "description": "Cohesive strength in pascals. Replaces strengthFraction (give one, not both); energy is then required and may be up to 1000000 J/m²." },
