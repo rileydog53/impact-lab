@@ -55,6 +55,13 @@ package struct J2Model: Sendable {
         self.table = table
     }
 
+    /// Plastic work per reference volume (J/m³) at accumulated equivalent plastic strain `alpha`, using the
+    /// solver's own energy convention: initial yield × alpha (modelled dissipation) plus the stored hardening
+    /// energy. Read-only display helper; the time step never calls it.
+    package func plasticWork(at alpha: Double) -> Double {
+        (yieldStress ?? 0) * alpha + (table?.storedEnergy(at: alpha) ?? 0.5 * hardening * alpha * alpha)
+    }
+
     /// True when both models give the same response (used to share one model per bonded region).
     func sameParameters(as other: J2Model) -> Bool {
         shear == other.shear && bulk == other.bulk && yieldStress == other.yieldStress && hardening == other.hardening
