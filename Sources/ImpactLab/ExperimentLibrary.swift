@@ -8,14 +8,62 @@ struct ExperimentLibrary: View {
     @State private var boundary = AssemblyExperimentPreset.inclinedPlate.defaultBoundary
     @State private var resolution = AssemblyExperimentPreset.inclinedPlate.defaultResolution
 
+    /// A ready-made showcase when one is selected; nil shows the controlled-experiment presets.
+    @State private var showcase: ShowcasePreset? = .notchedAcrylicBeam
+
     var body: some View {
-        let draft = selection.scene(boundary: boundary, resolution: resolution)
         VStack(alignment: .leading, spacing: 16) {
             Text("Experiment library").font(.title2.weight(.semibold))
             HStack(alignment: .top, spacing: 16) {
-                presets
-                    .frame(width: 195)
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Ready-made showcases").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    showcases
+                    Text("Controlled experiments").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    presets
+                }
+                .frame(width: 215)
+                if let showcase { showcaseDetail(showcase) } else { presetDetail }
+            }
+        }
+        .padding(21)
+        .frame(width: 780)
+    }
+
+    @ViewBuilder private func showcaseDetail(_ preset: ShowcasePreset) -> some View {
+        let built = Result { try preset.scene() }
+        VStack(alignment: .leading, spacing: 10) {
+            Text(preset.rawValue).font(.title3.weight(.semibold))
+            Text(preset.description).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            switch built {
+            case .success(let scene):
+                ExperimentSchematic(scene: scene)
+                    .frame(height: 218)
+                    .accessibilityLabel("Initial geometry and loading")
+            case .failure(let error):
+                Text("This showcase could not be built: \(String(describing: error))").font(.caption).foregroundStyle(.red)
+            }
+            Text(preset.limitations).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Press Calculate after loading. Everything you see is computed by the solver; you can edit any value in the workshop.")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Divider()
+            HStack {
+                Text("Loading replaces the current assembly.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Load showcase") { if case .success(let scene) = built { load(scene, preset.rawValue) } }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled((try? built.get()) == nil)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var presetDetail: some View {
+        let draft = selection.scene(boundary: boundary, resolution: resolution)
+        return VStack(alignment: .leading, spacing: 10) {
                     Text(selection.rawValue).font(.title3.weight(.semibold))
                     Text(selection.description).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -36,9 +84,7 @@ struct ExperimentLibrary: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Use coarse meshes to preview the setup. Check the readings in a mesh and timestep study before drawing quantitative conclusions.")
                         .font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            Spacer(minLength: 0)
             Divider()
             HStack {
                 Text("Loading replaces the current assembly.").font(.caption).foregroundStyle(.secondary)
@@ -48,28 +94,41 @@ struct ExperimentLibrary: View {
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
         }
-        .padding(21)
-        .frame(width: 740)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var showcases: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(ShowcasePreset.allCases) { preset in
+                listButton(preset.rawValue, icon: preset.icon, selected: showcase == preset) { showcase = preset }
+            }
+        }
+        .padding(5)
+        .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func listButton(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.callout.weight(selected ? .semibold : .regular))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .background(selected ? assemblyMint.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var presets: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(AssemblyExperimentPreset.allCases) { preset in
-                Button {
+                listButton(preset.rawValue, icon: preset.icon, selected: showcase == nil && selection == preset) {
+                    showcase = nil
                     selection = preset
                     boundary = preset.defaultBoundary
                     resolution = preset.defaultResolution
-                } label: {
-                    Label(preset.rawValue, systemImage: preset.icon)
-                        .font(.callout.weight(selection == preset ? .semibold : .regular))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 9).padding(.vertical, 10)
-                        .contentShape(Rectangle())
-                        .background(selection == preset ? assemblyMint.opacity(0.16) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 7))
                 }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selection == preset ? .isSelected : [])
             }
         }
         .padding(5)
@@ -123,6 +182,10 @@ struct ExperimentSchematic: View {
                 var outline = Path()
                 outline.addLines(outlines[index].map(screen))
                 outline.closeSubpath()
+                for hole in holes(part) {
+                    outline.addLines(hole.map(screen))
+                    outline.closeSubpath()
+                }
                 if part.shape == .enclosure {
                     outline.addLines(corners(part, halfSize: part.size / 2 - Point(repeating: part.wall)).map(screen))
                     outline.closeSubpath()
@@ -170,9 +233,33 @@ struct ExperimentSchematic: View {
         .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 9))
     }
 
+    /// The drawn shape: an outline body's polygon, an ellipse for a round body, else the rectangle.
     private func corners(_ part: AssemblyPart, halfSize: Point) -> [Point] {
-        [Point(-halfSize.x, -halfSize.y), Point(halfSize.x, -halfSize.y),
+        if part.shape == .outline, let shape = part.outline {
+            return local(shape.outer, shape, part).map { world($0, part) }
+        }
+        if part.shape == .round {
+            return (0..<32).map { i in
+                let t = Double(i) / 32 * 2 * .pi
+                return world(Point(halfSize.x * cos(t), halfSize.y * sin(t)), part)
+            }
+        }
+        return [Point(-halfSize.x, -halfSize.y), Point(halfSize.x, -halfSize.y),
          Point(halfSize.x, halfSize.y), Point(-halfSize.x, halfSize.y)].map { world($0, part) }
+    }
+
+    private func holes(_ part: AssemblyPart) -> [[Point]] {
+        guard part.shape == .outline, let shape = part.outline else { return [] }
+        return shape.holes.map { local($0, shape, part).map { world($0, part) } }
+    }
+
+    /// Outline points re-centred on their box and stretched to the body's size, as the mesher places them.
+    private func local(_ ring: [Point], _ shape: BodyOutline, _ part: AssemblyPart) -> [Point] {
+        let (lo, hi) = shape.bounds
+        let mid = (lo + hi) / 2, span = hi - lo
+        return ring.map { p in
+            Point(span.x > 0 ? (p.x - mid.x) * part.size.x / span.x : 0, span.y > 0 ? (p.y - mid.y) * part.size.y / span.y : 0)
+        }
     }
 
     private func world(_ point: Point, _ part: AssemblyPart) -> Point {
