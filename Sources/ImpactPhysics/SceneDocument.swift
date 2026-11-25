@@ -113,7 +113,7 @@ enum SceneDocument {
 
     /// Settings people often expect but the solver cannot represent.
     static let unsupported: [String: String] = {
-        let constraint = "use support: \"fixed\" (a rigid, immovable bench or fixture) or \"clampLeft\", \"clampRight\", \"clampBottom\", \"clampTop\" (one edge held); pinned points and partial constraints are not supported"
+        let constraint = "use support: \"fixed\" (a rigid, immovable bench or fixture) or \"clampLeft\", \"clampRight\", \"clampBottom\", \"clampTop\" (one edge held), or grip { edge, velocity, ramp } (one edge moved at a set speed); pinned points and partial constraints are not supported"
         var map: [String: String] = [:]
         for key in ["fixed", "anchored", "pinned", "clamped", "constraint", "constraints", "boundaryCondition", "boundaryConditions", "static"] {
             map[key] = constraint
@@ -318,7 +318,7 @@ enum SceneDocument {
             guard let part = object(raw, path) else { return [:] }
             if let name = part["name"] as? String { path += " \"\(name)\"" }
             keys(part, path, allowed: ["id", "name", "shape", "center", "size", "wall", "angle", "velocity", "material",
-                                       "plasticity", "fracture", "refinement", "notch", "bondedLayer", "support", "outline", "description"])
+                                       "plasticity", "fracture", "refinement", "notch", "bondedLayer", "support", "grip", "outline", "description"])
             var out: Object = ["id": id]
             if let name = string(part["name"], path + ".name") { out["name"] = name }
             else { fail(path + ".name", "every body needs a name"); out["name"] = "" }
@@ -374,6 +374,17 @@ enum SceneDocument {
                     "bench": "Fixed support", "ground": "Fixed support", "clampleft": "Clamp left edge", "clampleftedge": "Clamp left edge",
                     "clampright": "Clamp right edge", "clamprightedge": "Clamp right edge", "clampbottom": "Clamp bottom edge",
                     "clampbottomedge": "Clamp bottom edge", "clamptop": "Clamp top edge", "clamptopedge": "Clamp top edge"])
+            }
+            if let grip = object(part["grip"], path + ".grip") {
+                let gripPath = path + ".grip"
+                keys(grip, gripPath, allowed: ["edge", "velocity", "ramp"])
+                if grip["edge"] == nil { fail(gripPath + ".edge", "name the gripped edge: left, right, bottom or top") }
+                if grip["velocity"] == nil { fail(gripPath + ".velocity", "give the crosshead velocity [vx, vy] in m/s") }
+                if grip["ramp"] == nil { fail(gripPath + ".ramp", "give the time in seconds over which the grip speeds up from rest") }
+                out["grip"] = ["edge": grip["edge"].flatMap { choice($0, gripPath + ".edge", ["left": "left", "right": "right",
+                                    "bottom": "bottom", "top": "top"]) } ?? "right",
+                               "velocity": point(grip["velocity"], gripPath + ".velocity") ?? [0, 0],
+                               "ramp": number(grip["ramp"], gripPath + ".ramp") ?? 0]
             }
             if let notch = object(part["notch"], path + ".notch") {
                 keys(notch, path + ".notch", allowed: ["centerFraction", "widthFraction", "depthFraction"])
@@ -589,6 +600,7 @@ extension AssemblyScene {
             range(part.size.x, part.widthRange(resolution: mesh), path + ".size[0] (width)", " m")
             range(part.size.y, part.sizeRange(resolution: mesh), path + ".size[1] (height)", " m")
             if let conflict = part.supportConflict { result.append("\(path).support: \(conflict)") }
+            if let conflict = part.gripConflict { result.append("\(path).grip: \(conflict)") }
             range(part.center.x, AssemblyPart.centerRange, path + ".center[0]", " m")
             range(part.center.y, AssemblyPart.centerRange, path + ".center[1]", " m")
             for issue in part.outlineIssues { result.append("\(path).outline: \(issue)") }

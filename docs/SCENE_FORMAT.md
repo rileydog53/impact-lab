@@ -65,6 +65,7 @@ The timestep is not a setting. The solver chooses the largest stable step from t
 | `fracture` (real units) | `{ "strength": 3.1e8, "energy": 10877 }`: strength in pascals, energy in J/m² up to 1000000, both required. Allowed on library metal profiles. Optional `energySource` `{status, citation, url, caution}` records where an estimated energy came from. Files that use `strengthFraction` behave exactly as before. | off |
 | `notch` | V-notch on a block's local bottom edge: `{ "depthFraction": 0.2, "widthFraction": 0.2, "centerFraction": 0 }` | none |
 | `support` | `fixed` (rigid bench, floor, roller or fixture: never moves or deforms, ignores gravity, its material sets only contact stiffness) or `clampLeft`, `clampRight`, `clampBottom`, `clampTop` (that local edge is held, the rest deforms). Supported bodies start at rest. A clamped body can use fracture (a crack that reaches the held edge stays held on both sides); a fixed support cannot; fixed supports are elastic and may be up to 1.0 m wide. | free |
+| `grip` | `{ "edge": "right", "velocity": [0.4, 0], "ramp": 0.0002 }`: a moving grip, the crosshead of a virtual test machine. Every node on that local edge (`left`, `right`, `bottom`, `top`) moves together; the velocity (m/s, at most 10) is reached smoothly over `ramp` seconds and then held. The grip force, its displacement and the work it does are recorded, and the work enters the energy ledger. The body starts at rest; a clamp, if any, must be on the opposite edge. `ImpactCheck --test-machine` checks tension and compression coupons against theory. | none |
 | `bondedLayer` | Bonded second (and `third`) material along the block: `{ "interfaceFraction": 0.5, "material": …, "third": { "interfaceFraction": 0.75, "material": … } }`. Each layer may also take `plasticity`, `fracture` and `bond`, see [Layered blocks](#layered-blocks). | none |
 
 Bodies must start at least slightly apart. If two bodies overlap or touch, the scene still opens so you can fix it in the workshop, but **Calculate** explains the problem and stays disabled until you do.
@@ -137,7 +138,7 @@ Impact Lab rejects these with an explanation instead of silently ignoring them:
 
 | If you write… | Why it is rejected |
 |---|---|
-| `fixed`, `pinned`, `clamped`, `constraints` … | Use `support` instead (see Body settings). Pinned points and partial constraints are not available. |
+| `fixed`, `pinned`, `clamped`, `constraints` … | Use `support` (a held edge) or `grip` (an edge moved at a set speed) instead (see Body settings). Pinned points and partial constraints are not available. |
 | `force`, `load`, `pressure`, `bodyForce` … | No applied loads or body forces other than `gravity`. Motion comes from initial velocities, gravity, contact and connections. |
 | `restLength`, `pretension` | Use a spring's `preload`. |
 | `friction`, `restitution` | Contact is frictionless penalty contact. Rebound is computed, not prescribed. |
