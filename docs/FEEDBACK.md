@@ -29,6 +29,7 @@ Anything that isn't Joey's own words is labeled as a description or a repo note.
 | 1b | 2026-11-25 | Screenshot of that run; view options; the ParaView export |
 | 2 | 2026-11-25 | Live testing, sections 1 to 16: setting up the carbon-skinned aluminium panel run |
 | 3 | 2026-11-25 | Live testing part 2, sections 17 to 30: results, a clamped panel, runs that ended before contact |
+| 4 | 2026-11-25 | The ParaView export can't be sent as one file |
 
 ## What he was testing (context, his words)
 
@@ -43,6 +44,7 @@ Anything that isn't Joey's own words is labeled as a description or a repo note.
 | 1 | Strong plate bends like a crayon instead of punching through | Bug | Blocking | Not known yet |
 | 2 | Material settings need plain words | Confusing wording | Blocking | Interface/wording |
 | 15 | No warning that a run ends before the bodies touch | Missing feature | Slows me down | Interface/wording |
+| 17 | ParaView export can't be shared easily | Bug | Slows me down | Interface/wording |
 | 3 | Doesn't know what the ParaView export is | Confusing wording | Slows me down | Interface/wording |
 | 5 | Can't tell how to keep the steel ball from fracturing | Confusing wording | Slows me down | Interface/wording |
 | 14 | Can't clamp two edges of one body | Missing feature | Slows me down | Physics/solver (likely) |
@@ -67,6 +69,14 @@ Anything that isn't Joey's own words is labeled as a description or a repo note.
 - **Block level:** Blocking. This is the experiment he was trying to run.
 - **Change type:** Not known yet. It could be the solver, the material limits, or the setup.
 - **Repo note:** in the body Material settings, "Young’s modulus (MPa)" can only be set between 0.5 and 4 MPa, which is rubber-soft. If the plate used those editor numbers rather than a Material Library profile, "maxed out" would still be very bendy. A lead to check, not a conclusion.
+
+### 17. The ParaView export can't be shared easily
+
+- **His words:** "well, then that's a bug to report. The fact that we can't do that easily."
+- **What happened (description, not his words):** the export writes one file per frame (60 for this run) plus a .pvd index. He tried to send the run, but could attach only 16 files and no zip, so the full run couldn't be sent.
+- **Block level:** Slows me down. He couldn't hand over a whole run.
+- **Change type:** Interface/wording. It's about how the export is packaged; the solver doesn't change.
+- **Related:** finding 3 (he doesn't know what the export is for).
 
 ### 7. Extra fine mesh seemed to change nothing
 
