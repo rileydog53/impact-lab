@@ -59,7 +59,7 @@ struct AssemblyFieldComparison: View {
             HStack {
                 Text("Requested time \(replayTime(time))")
                 Spacer()
-                Text("Shared spatial scale · True geometry · Nearest recorded frames")
+                Text("\(AssemblyField.layerLabel(smooth: false)) · Shared spatial scale · True geometry · Nearest recorded frames")
             }.font(.caption).foregroundStyle(.secondary)
             Text(field.definition).font(.caption).foregroundStyle(.secondary)
         }
@@ -120,7 +120,7 @@ struct AssemblyFieldComparison: View {
                 .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 7))
                 .accessibilityLabel("\(title) computed geometry at \(replayTime(frame.time))")
             Text("Kinetic \(frame.energies.kinetic, specifier: "%.5g") J/m · Recoverable \(frame.recoverableEnergy, specifier: "%.5g") J/m")
-            Text("Plastic \(frame.energies.plastic, specifier: "%.5g") J/m · Fracture \(frame.energies.fracture, specifier: "%.5g") J/m")
+            Text("Modelled plastic dissipation \(frame.energies.plastic, specifier: "%.5g") J/m · Fracture \(frame.energies.fracture, specifier: "%.5g") J/m")
             if let p = monitored(comparison.scene), let i = comparison.scene.parts.firstIndex(where: { $0.id == p.id }) {
                 let body = frame.bodies[i]
                 let values = field == .separation ? body.cracks.map(\.separation) : field.values(body)

@@ -663,9 +663,13 @@ struct AssemblyLab: View {
         HStack(spacing: 9) {
             if smoothFields { SmoothFieldLegend(field: field, limit: fieldLimit) }
             else { AssemblyFieldLegend(field: field, limit: fieldLimit) }
-            Text(field.provenance + (smoothFields ? ", interpolated display" : "")).foregroundStyle(.secondary)
+            Text(AssemblyField.layerLabel(smooth: smoothFields)).bold()
+                .foregroundStyle(smoothFields ? assemblyAmber : assemblyMint)
+                .help(smoothFields ? "Element values from the solver, interpolated for a continuous look. The smoothing adds no solver resolution."
+                                   : "Element values exactly as the solver recorded them.")
+            Text(field.provenance).foregroundStyle(.secondary)
             if field != .separation, frame.bodies.contains(where: { field.values($0).isEmpty }) {
-                Text(field == .plastic ? "Elastic bodies have no plastic strain, so they keep their own color."
+                Text(field == .plastic || field == .plasticWork ? "Elastic bodies have no plastic history, so they keep their own color."
                                        : "Bodies with no \(field.rawValue.lowercased()) data keep their own color.")
                     .foregroundStyle(.secondary)
                     .help("A body that stays elastic records zero plastic strain, so the plastic-strain scale does not apply to it.")
@@ -803,8 +807,8 @@ struct AssemblyLab: View {
                 GridRow {
                     metric("Elastic", e.elastic, "J/m")
                     metric("Contact", e.contact, "J/m")
-                    metric("Hardening", e.hardening, "J/m")
-                    metric("Plastic", e.plastic, "J/m")
+                    metric("Stored hardening", e.hardening, "J/m")
+                    metric("Modelled plastic dissipation", e.plastic, "J/m")
                 }
                 GridRow {
                     metric("Fracture", e.fracture, "J/m")
@@ -826,6 +830,7 @@ struct AssemblyLab: View {
                     }
                 }
             }.padding(.top, 8)
+            MeasurementHonesty.energyFootnote.padding(.top, 4)
             let contacts = s.firstContactTimes.filter { $0.value <= experiment.displayTime }.sorted { $0.value < $1.value }
             if !contacts.isEmpty {
                 let names = experiment.scene.parts
@@ -876,7 +881,7 @@ struct AssemblyLab: View {
             ("Relative X", "mm", \.values.x), ("Body kinetic", "J/m", \.values.y),
             ("Link energy", "J/m", \.connectionEnergy), ("Material fracture", "J/m", \.materialFracture),
             ("Crack length", "mm", \.crackLength), ("Face separation", "mm", \.crackSeparation),
-            ("Sampled peak stress", "kPa", \.peakStress), ("Plastic dissipation", "J/m", \.plasticDissipation)
+            ("Sampled peak stress", "kPa", \.peakStress), ("Modelled plastic dissipation", "J/m", \.plasticDissipation)
         ]
         let (_, unit, field) = traceSignals[signal]
         let color = signal == 0 ? assemblyMint : assemblyAmber

@@ -17,6 +17,7 @@ enum AssemblyField: String, CaseIterable {
     case minimum = "Minimum principal stress"
     case pressure = "Mean pressure"
     case plastic = "Plastic strain"
+    case plasticWork = "Plastic work density"
     case damage = "Interface damage"
     case separation = "Crack separation"
     case speed = "Material speed"
@@ -32,6 +33,7 @@ enum AssemblyField: String, CaseIterable {
         case .minimum: "Smallest principal Cauchy stress, including the out-of-plane component. Negative is compression."
         case .pressure: "Minus one third of the Cauchy stress trace. Positive is compression."
         case .plastic: "Accumulated equivalent plastic strain from the J2 history. Elastic bodies have no plastic field."
+        case .plasticWork: "Accumulated plastic work per reference volume (J/m³, i.e. J per m² of section per metre depth): initial yield × plastic strain plus stored hardening energy. Not heat; no heat fraction is applied."
         case .damage: "Largest damage of adjacent cohesive faces (0 intact, 1 failed). Permanent layer bonds share nodes."
         case .separation: "Mean distance between matching face nodes, including slip. Failed faces can reclose."
         case .speed: "Magnitude of the mean nodal velocity in each element. Arrows show body mean velocity."
@@ -41,8 +43,16 @@ enum AssemblyField: String, CaseIterable {
     var provenance: String {
         switch self {
         case .strain, .plastic, .damage, .separation: "Solver output"
+        case .plasticWork: "Derived from the solver's plastic history; integrates to the plastic + hardening ledger"
         default: "Derived from the recorded solver state"
         }
+    }
+
+    /// The one honesty label every field view carries. Element values straight from the recorded
+    /// solver state are "Calculated"; the interpolated, continuous-looking rendering of them is an
+    /// illustration of that calculated field, not extra solver resolution.
+    static func layerLabel(smooth: Bool) -> String {
+        smooth ? "Illustration of calculated field" : "Calculated"
     }
 
     func values(_ result: AssemblyReplayBody) -> [Double] {
@@ -53,6 +63,7 @@ enum AssemblyField: String, CaseIterable {
         case .minimum: return result.stress.map(\.minimumPrincipal)
         case .pressure: return result.stress.map(\.pressure)
         case .plastic: return result.plasticStrain
+        case .plasticWork: return result.plasticWork
         case .damage: return result.damage
         case .separation: return []
         case .speed:
@@ -66,6 +77,7 @@ enum AssemblyField: String, CaseIterable {
         case .strain: metal ? 0.01 : 0.08
         case .stress, .maximum, .minimum, .pressure: metal ? 300e6 : 60e3
         case .plastic: metal ? 0.025 : 0.08
+        case .plasticWork: metal ? 10e6 : 5e3
         case .damage: 1
         case .separation: 0.010
         case .speed: metal ? 30 : 1.5
@@ -79,6 +91,9 @@ enum AssemblyField: String, CaseIterable {
             return String(format: "%.3g %@", value / (mpa ? 1e6 : 1000), mpa ? "MPa" : "kPa")
         case .strain, .plastic: return String(format: "%.3g%%", value * 100)
         case .separation: return String(format: "%.3g mm", value * 1000)
+        case .plasticWork:
+            let mega = limit >= 1e6
+            return String(format: "%.3g %@", value / (mega ? 1e6 : 1e3), mega ? "MJ/m³" : "kJ/m³")
         case .speed: return String(format: "%.3g m/s", value)
         case .damage: return String(format: "%.3g", value)
         }

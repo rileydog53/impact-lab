@@ -6,7 +6,10 @@ public struct AssemblyStress: Sendable {
 
 public struct AssemblyReplayBody: Sendable {
     public let body: Body
-    public let strain, plasticStrain, damage: [Double]
+    public let strain, plasticStrain: [Double]
+    /// Accumulated plastic work per reference volume (J/m³); empty for an elastic body. Display only.
+    public let plasticWork: [Double]
+    public let damage: [Double]
     public let stress: [AssemblyStress]
     public let cracks: [CrackFace]
     public let fracture: MaterialFractureReading?
@@ -35,7 +38,7 @@ public struct AssemblyReplayFrame: Sendable {
     var fieldPayloadBytes: Int {
         bodies.reduce(0) { total, item in
             total + (item.body.position.count + item.body.velocity.count) * MemoryLayout<Point>.stride
-                + (item.strain.count + item.plasticStrain.count + item.damage.count) * MemoryLayout<Double>.stride
+                + (item.strain.count + item.plasticStrain.count + item.plasticWork.count + item.damage.count) * MemoryLayout<Double>.stride
                 + item.stress.count * MemoryLayout<AssemblyStress>.stride
         }
     }
