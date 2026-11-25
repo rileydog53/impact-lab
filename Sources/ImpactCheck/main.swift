@@ -330,6 +330,15 @@ if CommandLine.arguments.dropFirst().contains("--layered-examples") {
     exit(EXIT_SUCCESS)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--locking") {
+    let args = CommandLine.arguments
+    if args.indices.contains(index + 1) && args[index + 1] == "probe" { lockingProbe(); exit(EXIT_SUCCESS) }
+    let quick = args.dropFirst(index + 1).contains("quick")
+    let ratio = args.dropFirst(index + 1).compactMap { Double($0) }.first ?? 100
+    lockingCheck(quick: quick, stiffness: ratio)
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--spall") {
     try spallCheck()
     exit(EXIT_SUCCESS)
