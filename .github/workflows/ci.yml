@@ -64,6 +64,8 @@ jobs:
       - name: Toolchain
         run: swift --version
       - name: Build (release)
+        # shell: bash turns on pipefail, so a failed compile fails this step instead of passing through tee.
+        shell: bash
         run: swift build -c release 2>&1 | tee build.log
       - name: Run checks
         timeout-minutes: 35
