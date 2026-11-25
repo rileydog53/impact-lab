@@ -20,7 +20,7 @@ How claims are marked:
 | Part | Conclusion |
 |---|---|
 | 1. Fracture on clamped bodies | The block is one validation line, and it is there for a real reason: when a crack splits a node on a clamped edge, the new copy of that node is not on the clamp list, so part of the clamped edge would silently come free. The smallest safe change is to remove that line for clamps only and carry the clamp over to every copy of a held node after each split, about five lines in `AssemblySimulation.swift`. Fixed (rigid) supports stay unbreakable. Bodies **resting on** a fixed support are allowed to fracture and the crack test runs on them every step, but **no recorded run has shown a crack there yet**: both PR 4 runs inserted 0 cracks. A one-run Mac check is proposed to confirm it. |
-| 2. Above 150 m/s | The cap is not one physics threshold. **Strain-rate hardening in steel already matters at ordinary impact speeds** (about +17% flow stress at 50 m/s, +19 to +24% at 150 m/s), while 6061-T6 is nearly rate-insensitive. The **pressure–volume** model is within about 1% of shock data at 150 m/s and drifts to 5% near 450 m/s (steel) and 600 m/s (aluminium beyond its existing offset). **Adiabatic heating** gives 30–60 K local rises at 150 m/s, and over 10% softening from roughly 220–300 m/s (steel) and 340–450 m/s (aluminium). **Element distortion** did not stop copper at 150 m/s; scaling that result suggests steel is safe to about 220 m/s and aluminium to about 340 m/s, but this must be measured. |
+| 2. Above 150 m/s | The cap is not one physics threshold. **Strain-rate hardening in steel already matters at ordinary impact speeds** (about +17% flow stress at 50 m/s, +19 to +24% at 150 m/s), while 6061-T6 is nearly rate-insensitive. The **pressure–volume** model is within about 1% of shock data at 150 m/s and drifts to 5% near 450 m/s (steel) and 490 m/s (aluminium, beyond its existing offset). **Adiabatic heating** gives 30–60 K local rises at 150 m/s, and over 10% softening from roughly 220–300 m/s (steel) and 340–450 m/s (aluminium). **Element distortion** did not stop copper at 150 m/s; scaling that result suggests steel is safe to about 220 m/s and aluminium to about 340 m/s, but this must be measured. |
 | 3. Benchmarks | High speed, main check: **symmetric plate-on-plate impact against LASL shock data (Marsh 1980)**, reusing `PlateImpact.swift`; predicted plateau 1.13, 3.94 and 8.35 GPa at 150, 500 and 1,000 m/s for 2024 aluminium. High speed, trend only: the Taylor test, labelled **plane strain, not a round-bar match**. Fracture, now: the **clamped cantilever**, first crack at the root near 1.5 kN/m, which tests the Part 1 fix directly. Fracture, follow-up: the notched three-point bend (ASTM E399 SE(B)), 9.58 kN/m peak; it needs a narrower notch than the editor allows today. |
 
 The first version flagged two places where the spec and the code disagreed, and Joey has decided both: the fracture work targets clamps, and the Taylor test is kept only as a plane-strain trend check because the code cannot model a round bar.
@@ -115,7 +115,7 @@ How speed turns into strain rate, pressure and strain [calc, rough]: for a body 
 | Effect | Steel (A36-like) | Aluminium (6061-T6) |
 |---|---|---|
 | Strain-rate hardening (Johnson–Cook) | Already matters below 150 m/s: about +17% at 50 m/s, +19 to +24% at 150 m/s | Small at any speed in reach: about +2% at 150 m/s |
-| Pressure–volume (Mie–Grüneisen) | Within 1% at 150 m/s; −5% near 450 m/s; −13% at 1,000 m/s | Already 13% soft at all speeds (a modulus issue, below); the high-speed part adds −1% at 150, −4% at 500, −8% at 1,000 m/s |
+| Pressure–volume (Mie–Grüneisen) | Within 1% at 150 m/s; −5% near 450 m/s; −13% at 1,000 m/s | Already about 9% soft at all speeds (a modulus issue, below); the high-speed part adds −1% at 150, −5% at 500, −9% at 1,000 m/s |
 | Adiabatic heating | 30–60 K local at 150 m/s (2–4% softening); over 10% from about 220–300 m/s | Similar local rise at 150 m/s; over 10% from about 340–450 m/s |
 | Element distortion | Probably fine to about 220 m/s; must be measured | Probably fine to about 340 m/s; must be measured |
 
@@ -155,8 +155,8 @@ Shock data is usually given as a straight line, shock speed Us = c₀ + s·uₚ,
 Reference fits:
 
 - **2024 aluminium:** ρ₀ 2.785 g/cm³, c₀ 5.328 km/s, s 1.338, Γ 2.00 [source: Marsh (ed.), LASL Shock Hugoniot Data, 1980, Table II impedance standards, [copy](https://ancient.hydro.nsc.ru/chem/biblio/lasl_shock.pdf); third-party copy, columns misaligned in the extracted text].
-- **6061 aluminium:** c₀ 5.35 km/s, s 1.34 [recall; LASL lists 6061 on p. 182, not read].
-- **Steel (304 stainless used as a stand-in for A36):** c₀ 4.57 km/s, s 1.49 [recall; LASL lists 304 on p. 212, not read]. Pure iron is not a good stand-in because of its phase change near 13 GPa [recall].
+- **6061-T6 aluminium:** ρ₀ 2.70 g/cm³, c₀ 5.22 km/s, s 1.37, Γ 2.00 [source, secondary: materials table, slide 30, of J. Borg, "Shock Physics: Material Behavior in Extreme Conditions", APS shock school slides, Marquette, 2025, [PDF](https://www.eng.mu.edu/shockphysics/resources/APS-CCM-June-Student-2025.pdf); the slide does not name its original source. A Sandia slide deck (Kittell, "EOS for Shock", SAND2019-15011PE, [OSTI](https://www.osti.gov/servlets/purl/1646359)) shows the same 5.22 km/s and 1.37 for 6061-T6 in a worked example, but its text was too garbled to quote. LASL lists 6061 on p. 182, still not read]. The first version of this note used c₀ 5.35, s 1.34 from memory; that was wrong and is replaced here.
+- **Steel (stainless used as a stand-in for A36):** c₀ 4.57 km/s, s 1.49, ρ₀ 7.86 g/cm³, Γ 2.2, for **302** stainless [source, secondary: same Borg 2025 slide 30 table, no original source named]. 302 and 304 are near-identical austenitic grades, so this is the closest published row found; a 304-specific fit (LASL p. 212) was still not read. The first version's values from memory, 4.57 and 1.49 for 304, match this 302 row. Pure iron is not a good stand-in because of its phase change near 13 GPa [recall].
 
 The app's pressure at the same compression is −K·ln J / J. Expanding both for small compression η = 1 − J [calc]: the app gives K(η + 1.5η²), the shock fit gives ρ₀c₀²(η + 2sη²). So the app is right at small compression and gets softer as compression grows, because its effective s is about 0.75 against the measured 1.3–1.5.
 
@@ -164,17 +164,17 @@ Symmetric impact, same material, pressure at the Hugoniot's own compression [cal
 
 | Speed | Steel shock fit | App | Gap | 6061 shock fit | App | Gap |
 |---|---|---|---|---|---|---|
-| 50 m/s | 0.90 GPa | 0.91 | +0.8% | 0.36 | 0.32 | −13.1% |
-| 150 m/s | 2.76 | 2.74 | −0.8% | 1.10 | 0.95 | −14.0% |
-| 500 m/s | 9.70 | 9.11 | −6.1% | 3.84 | 3.18 | −17.2% |
-| 1,000 m/s | 20.9 | 18.2 | −12.9% | 8.13 | 6.39 | −21.4% |
+| 50 m/s | 0.90 GPa | 0.91 | +0.8% | 0.36 | 0.32 | −8.7% |
+| 150 m/s | 2.76 | 2.74 | −0.8% | 1.08 | 0.97 | −9.8% |
+| 500 m/s | 9.70 | 9.11 | −6.1% | 3.76 | 3.25 | −13.4% |
+| 1,000 m/s | 20.9 | 18.2 | −12.9% | 7.97 | 6.53 | −18.1% |
 
 Two separate findings:
 
-1. **The high-speed error is small at 150 m/s.** It reaches 5% beyond the low-speed value near 450 m/s for steel and near 600 m/s for aluminium. The thermal (Γ) part of Mie–Grüneisen only matters off the shock curve, on release from high pressure, so it is smaller still at these speeds [recall].
-2. **6061-T6 is about 13% too soft in compression at every speed, today.** The app derives the bulk modulus from E 68.9 GPa and ν 0.33, giving K 67.5 GPa and a bulk sound speed of 5,002 m/s. Shock data implies ρ₀c₀² ≈ 77 GPa (5,350 m/s) [calc]. The profile marks ν as "estimated" [code, `MaterialProfile.swift` line 154]. This is a material-data issue below the cap, not a step 8 issue; it is flagged here because it would show in any high-speed benchmark. Steel's bulk sound speed (4,608 m/s) matches its shock c₀ (4,570 m/s) within 1%.
+1. **The high-speed error is small at 150 m/s.** It reaches 5% beyond the low-speed value near 450 m/s for steel and near 490 m/s for aluminium. The thermal (Γ) part of Mie–Grüneisen only matters off the shock curve, on release from high pressure, so it is smaller still at these speeds [recall].
+2. **6061-T6 is about 9% too soft in compression at every speed, today.** The app derives the bulk modulus from E 68.9 GPa and ν 0.33, giving K 67.5 GPa and a bulk sound speed of 5,002 m/s. The shock fit above implies ρ₀c₀² ≈ 73.6 GPa (5,220 m/s) [calc]. The profile marks ν as "estimated" [code, `MaterialProfile.swift` line 154]. This is a material-data issue below the cap, not a step 8 issue; it is flagged here because it would show in any high-speed benchmark. (The first version said 13%, from the wrong remembered c₀.) Steel's bulk sound speed (4,608 m/s) matches its shock c₀ (4,570 m/s) within 1%.
 
-**Warning text:** "Pressure under strong compression uses a simple elastic law. It is close to measured shock data up to a few hundred m/s, and too soft above about 450 m/s in steel and 600 m/s in aluminium (5% or more)."
+**Warning text:** "Pressure under strong compression uses a simple elastic law. It is close to measured shock data up to a few hundred m/s, and too soft above about 450 m/s in steel and 500 m/s in aluminium (5% or more)."
 
 #### Adiabatic heating
 
@@ -230,11 +230,11 @@ Chosen by Joey: plate impact is the main high-speed check, Taylor is a loose tre
 
 [calc from the source fit]
 
-For steel and 6061 the LASL pages were not read this audit; the fits in Part 2 (304 stainless c₀ 4.57, s 1.49; 6061 c₀ 5.35, s 1.34) are [recall] and should be checked against LASL pp. 212 and 182 before they set a pass value. The 2024 row is the one confirmed number set, so the first run should use a 2024-like aluminium profile (E and ν set so that K matches ρ₀c₀², about 79 GPa).
+For steel and 6061 the LASL pages were still not read. The Part 2 fits (302 stainless c₀ 4.57, s 1.49; 6061-T6 c₀ 5.22, s 1.37) come from a secondary teaching table that names no original source, so they should be checked against LASL pp. 212 and 182 before they set a pass value. The 2024 row is the one number set confirmed against LASL itself, so the first run should use a 2024-like aluminium profile (E and ν set so that K matches ρ₀c₀², about 79 GPa).
 
 **What to measure.** The plateau pressure at the middle of the contact, averaged over the flat part of the pressure history before edge release arrives, plus the shock speed from the arrival time at two depths. Run at 150, 300, 500 and 1,000 m/s, elastic-plastic, on two meshes.
 
-**Pass criteria to fix before the first run** (suggested): within 2% of the fit at 150 m/s; the gap at higher speed reported, not failed, because Part 2 predicts it (about −1% at 150, −4% at 500 and −8% at 1,000 m/s for an aluminium whose bulk modulus matches c₀); the two meshes agree within 1%. The measured gap then becomes the number in the pressure–volume line of the warning. This check does not test rate hardening or heating, which the code does not have yet.
+**Pass criteria to fix before the first run** (suggested): within 2% of the fit at 150 m/s; the gap at higher speed reported, not failed, because Part 2 predicts it (about −1.6% at 150, −3.2% at 300, −5.3% at 500 and −10.1% at 1,000 m/s for 2024 aluminium with its bulk modulus matched to c₀ [calc]); the two meshes agree within 1%. The measured gap then becomes the number in the pressure–volume line of the warning. This check does not test rate hardening or heating, which the code does not have yet.
 
 ### High speed, trend check only: Taylor impact (plane strain, not a round-bar match)
 
@@ -302,5 +302,5 @@ f(a/W) = 3√(a/W)·[1.99 − (a/W)(1 − a/W)(2.15 − 3.93(a/W) + 2.7(a/W)²)]
 
 - Nothing was built or run; no Swift on this machine.
 - No solver or app file was changed. Only this file was added.
-- Not read: LASL pages for 6061 and 304, the Taylor test figures, and the full Hodowany 2000 paper. Those values are marked [recall].
+- Not read: LASL pages for 6061 and 304, the Taylor test figures, and the full Hodowany 2000 paper. The steel and 6061 shock fits now come from a secondary source (see Part 2); other unread values are marked [recall].
 - The speed thresholds for heating and distortion are rough scalings of one repo result, not measurements.
