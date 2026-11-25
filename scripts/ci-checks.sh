@@ -39,6 +39,16 @@ run_one() {
   echo "$status" > "ci-out/status/$name"
   echo "::group::$cmd (exit $status)"; tail -40 "ci-out/$name.log"; echo "::endgroup::"
 }
+# CI_TIER=quick (app-UI-only PRs): only the fast checks, a few minutes in all.
+if [ "${CI_TIER:-full}" = quick ]; then
+  CHECKS=(
+    "ImpactCheck --materials" "ImpactCheck --metal-profiles" "ImpactCheck --fracture-guard"
+    "ImpactCheck --bulk-viscosity" "ImpactCheck --showcases" "ImpactCheck --workshop-improvements"
+    "ImpactCheck --assembly-replay" "ImpactCheck --layered-bodies quick" "ImpactCheck --scene-documents"
+    "ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600"
+  )
+fi
+echo "Tier ${CI_TIER:-full}: ${#CHECKS[@]} checks, $N at a time"
 for c in "${CHECKS[@]}"; do
   while [ "$(jobs -rp | wc -l)" -ge "$N" ]; do sleep 2; done
   run_one "$c" &

@@ -26,15 +26,31 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Choose test tier
+        id: tier
+        # docs: only docs/text changed -> no build. quick: only the app UI (Sources/ImpactLab, which no check depends on)
+        # plus docs -> build + quick checks. Anything else, every push to main and manual runs -> full suite.
+        shell: bash
+        run: |
+          tier=full
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
+            nondoc=$(echo "$files" | grep -Ev '^(docs/|research/|reports/)|\.md$|^LICENSE' || true)
+            if [ -z "$nondoc" ]; then tier=docs
+            elif [ -z "$(echo "$nondoc" | grep -v '^Sources/ImpactLab/' || true)" ]; then tier=quick; fi
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"; echo "Test tier: $tier" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/cache@v4
         # The Mac has little disk; skip the build cache there.
-        if: runner.environment == 'github-hosted'
+        if: runner.environment == 'github-hosted' && steps.tier.outputs.tier != 'docs'
         with:
           path: .build
           key: spm-build-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**') }}
           restore-keys: spm-build-${{ runner.os }}-
       - name: Keep build cache between Mac jobs
-        if: runner.environment != 'github-hosted'
+        if: runner.environment != 'github-hosted' && steps.tier.outputs.tier != 'docs'
         run: |
           mkdir -p "$HOME/actions-runner/spm-cache"
           rm -rf .build && ln -s "$HOME/actions-runner/spm-cache" .build
@@ -42,11 +58,13 @@ jobs:
         run: swift --version
       - name: Build (release)
         id: build
+        if: steps.tier.outputs.tier != 'docs'
         # shell: bash turns on pipefail, so a failed compile fails this step instead of passing through tee.
         shell: bash
         run: swift build -c release 2>&1 | tee build.log
       - name: Prepare tools
         id: prep
+        if: steps.tier.outputs.tier != 'docs'
         # ImpactRegression also goes where tests/regression/run.py looks for it, so --skip-build works.
         run: |
           mkdir -p ci-out .build-regression/release
@@ -58,6 +76,7 @@ jobs:
         shell: bash
         env:
           # Joseph's Mac (10 cores, passively cooled): 3 at a time. GitHub-hosted: one at a time, as before.
+          CI_TIER: ${{ steps.tier.outputs.tier }}
           CI_PARALLEL: ${{ runner.environment == 'github-hosted' && '1' || '3' }}
         run: scripts/ci-checks.sh
       - name: Timings
