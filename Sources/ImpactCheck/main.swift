@@ -272,6 +272,12 @@ if let index = CommandLine.arguments.firstIndex(of: "--smooth-field") {
     exit(EXIT_SUCCESS)
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--perf-bench") {
+    let args = CommandLine.arguments
+    try runPerfBench(steps: args.indices.contains(index + 1) ? Int(args[index + 1]) ?? 4000 : 4000)
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--run-cost") {
     try runCostCheck()
     exit(EXIT_SUCCESS)
