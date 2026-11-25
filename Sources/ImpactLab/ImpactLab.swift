@@ -409,6 +409,7 @@ struct LabView: View {
                         }
                     }
                     HStack(spacing: 8) {
+                        Text("Calculated").bold().help("Element values exactly as the solver recorded them.")
                         Circle().fill(amber).frame(width: 8, height: 8)
                         if showingPlastic {
                             Text("Accumulated plastic strain · 0–8%")
@@ -507,8 +508,8 @@ struct LabView: View {
                 }
                 reading("Peak plastic strain", simulation.peakPlasticStrain * 100, "%", "%.3f")
                 reading("Peak |σzz|", d.peakOutOfPlaneStress / 1000, "kPa", "%.2f")
-                reading("Plastic dissipation", d.plasticDissipation, "J/m", "%.3f")
-                reading("Stored hardening energy", d.hardening, "J/m", "%.3f")
+                reading("Modelled plastic dissipation", d.plasticDissipation, "J/m", "%.3f")
+                reading("Stored hardening", d.hardening, "J/m", "%.3f")
             }
             if let seam = simulation.seamReadings {
                 reading(offAxis ? "Sum of link tension" : "Seam force", seam.force, "N/m", "%+.2f")
@@ -698,7 +699,7 @@ struct LabView: View {
                 }, with: .color(ink.opacity(0.65)))
                 context.draw(Text("25 mm").font(.caption2.monospaced()).foregroundStyle(ink),
                              at: CGPoint(x: x, y: y - 7), anchor: .bottomLeading)
-                let legend = showingPlastic ? "Plastic strain · 0–8%" : "Amber: compression     Mint: tension"
+                let legend = "Calculated · " + (showingPlastic ? "Plastic strain · 0–8%" : "Amber: compression     Mint: tension")
                 context.draw(Text(legend).font(.caption2).foregroundStyle(ink.opacity(0.8)),
                              at: CGPoint(x: size.width - 24, y: y), anchor: .trailing)
             }

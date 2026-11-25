@@ -52,10 +52,10 @@ struct ReplayMeasurements: View {
             [Signal(name: "Kinetic", unit: "J/m", color: .mint, value: { $0.energies.kinetic }),
              Signal(name: "Recoverable", unit: "J/m", color: .blue, value: \.recoverableEnergy),
              Signal(name: "Dissipated", unit: "J/m", color: .orange, value: \.dissipatedEnergy),
-             Signal(name: "Plastic dissipation", unit: "J/m", color: .pink, value: { $0.energies.plastic }),
+             Signal(name: "Modelled plastic dissipation", unit: "J/m", color: .pink, value: { $0.energies.plastic }),
              Signal(name: "Fracture dissipation", unit: "J/m", color: .red, value: { $0.energies.fracture }),
              Signal(name: "Elastic", unit: "J/m", color: .green, value: { $0.energies.elastic }),
-             Signal(name: "Isotropic hardening", unit: "J/m", color: .purple, value: { $0.energies.hardening }),
+             Signal(name: "Stored hardening", unit: "J/m", color: .purple, value: { $0.energies.hardening }),
              Signal(name: "Penalty contact", unit: "J/m", color: .gray, value: { $0.energies.contact }),
              Signal(name: "Stored connection / cohesive", unit: "J/m", color: .yellow,
                     value: { $0.energies.connection + $0.energies.cohesive }),
@@ -160,7 +160,7 @@ struct ReplayMeasurements: View {
 
     private var note: String {
         switch group {
-        case .energy: "Recoverable energy includes elastic, hardening, contact, link and cohesive storage. Dissipated energy is plastic plus fracture. Lines connect recorded values."
+        case .energy: "Recoverable energy includes elastic, hardening, contact, link and cohesive storage. Dissipated energy is modelled plastic dissipation (initial yield × plastic strain, not heat) plus fracture. Stored hardening is the J2 model's hardening-table energy. No temperatures are computed. Calculated; ledger verified by numerical balance checks. Lines connect recorded values."
         case .balance: "Changes are measured against frame zero. The closed assembly has zero external work. Dashed lines mark recorded events."
         case .gauge: "The gauge follows its reference triangle. Position and velocity use the gauge’s material weights. Stress, strain and damage are element values."
         case .contact: "The load sums compressive contributions at the active contacts. Impulse integrates that scalar load over solver steps."
