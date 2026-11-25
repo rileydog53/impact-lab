@@ -325,6 +325,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--layered-bodies") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--bulk-viscosity") {
+    try bulkViscosityCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if CommandLine.arguments.dropFirst().contains("--plasticity") {
     try plasticityCheck()
     try materialImpactCheck()

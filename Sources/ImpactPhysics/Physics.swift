@@ -288,6 +288,8 @@ struct BodyStep: Sendable {
     var fixture = false
     /// Nodes held at their reference position (a clamped edge). Empty for a free body.
     var clamped: [Int] = []
+    /// Artificial bulk viscosity state, nil when the scene leaves it off (then no viscous arithmetic runs).
+    var viscous: ViscousState?
 
     init(_ body: Body, j2: J2Model? = nil, recordsTraction: Bool = false, elementJ2: [J2Model?]? = nil) {
         self.body = body
@@ -324,7 +326,7 @@ struct BodyStep: Sendable {
         // The fixture never deforms, so its internal force and strain stay zero.
         if fixture { return ElementEnergy() }
         return Simulation.assemble(body: body, position: nextPosition, forces: &nextInternal, strain: &nextStrain,
-                            history: &history, piola: &trialPiola, timing: &timing)
+                            history: &history, piola: &trialPiola, timing: &timing, viscous: &viscous)
     }
 
     mutating func assemble() -> ElementEnergy? {
@@ -447,6 +449,7 @@ struct BodyStep: Sendable {
         swap(&appliedForce, &nextApplied)
         swap(&strain, &nextStrain)
         history?.accept()
+        viscous?.accept()
     }
 }
 
@@ -806,28 +809,34 @@ public struct Simulation: Sendable {
     static func assemble(body: Body, position: [Point], forces: inout [Point], strain: inout [Double],
                          history: inout ElementHistory?, piola: inout [ElementPiola]) -> ElementEnergy? {
         var timing: ElementKernelTiming?
+        var viscous: ViscousState?
         return assemble(body: body, position: position, forces: &forces, strain: &strain, history: &history,
-                        piola: &piola, timing: &timing)
+                        piola: &piola, timing: &timing, viscous: &viscous)
     }
 
     static func assemble(body: Body, position: [Point], forces: inout [Point], strain: inout [Double],
                          history: inout ElementHistory?, piola: inout [ElementPiola],
-                         timing: inout ElementKernelTiming?) -> ElementEnergy? {
+                         timing: inout ElementKernelTiming?, viscous: inout ViscousState?) -> ElementEnergy? {
         if var measured = timing {
             let energy = assembleElements(body: body, position: position, forces: &forces, strain: &strain,
-                                          history: &history, piola: &piola, timing: &measured)
+                                          history: &history, piola: &piola, timing: &measured, viscous: &viscous)
             timing = measured
             return energy
         }
         var unmeasured = UnmeasuredElementKernel()
         return assembleElements(body: body, position: position, forces: &forces, strain: &strain,
-                                history: &history, piola: &piola, timing: &unmeasured)
+                                history: &history, piola: &piola, timing: &unmeasured, viscous: &viscous)
     }
 
     private static func assembleElements<Timing: ElementKernelClock>(
         body: Body, position: [Point], forces: inout [Point], strain: inout [Double],
-        history: inout ElementHistory?, piola: inout [ElementPiola], timing: inout Timing
+        history: inout ElementHistory?, piola: inout [ElementPiola], timing: inout Timing,
+        viscous: inout ViscousState?
     ) -> ElementEnergy? {
+        if viscous != nil {
+            viscous!.trialWork = 0
+            viscous!.trialDamping = 0
+        }
         for i in forces.indices { forces[i] = .zero }
         let uniformMu = body.material.shear
         let uniformLambda = body.material.lambda
@@ -849,7 +858,7 @@ public struct Simulation: Sendable {
             let yy = simd_length_squared(fy)
             strain[i] = 0.5 * ((body.measuresVerticalStrain ? yy : xx) - 1)
             let kinematicsEnd = timing.mark()
-            let stress: ElementPiola
+            var stress: ElementPiola
             if let model = history?.model(for: i) {
                 guard let response = model.update(x: fx, y: fy, from: history!.current[i]) else { return nil }
                 history!.next[i] = response.history
@@ -869,6 +878,32 @@ public struct Simulation: Sendable {
                 stress = ElementPiola(mu * fx + pressure * Point(fy.y, -fy.x),
                                       mu * fy + pressure * Point(-fx.y, fx.x))
                 energy.elastic += e.area * (0.5 * mu * (xx + yy - 2 - 2 * logJ) + 0.5 * lambda * logJ * logJ)
+            }
+            if viscous != nil {
+                // Artificial bulk viscosity (BulkViscosity.swift). The rate comes from positions only:
+                // ln(J_{n+1} / J_n) / dt, where (x_{n+1} − x_n) / dt is the half-step velocity of velocity Verlet.
+                let old0 = body.position[e.b] - body.position[e.a]
+                let old1 = body.position[e.c] - body.position[e.a]
+                let jOld = cross2D(old0 * e.g1.x + old1 * e.g2.x, old0 * e.g1.y + old1 * e.g2.y)
+                guard jOld > 0 else { return nil }
+                let model = viscous!.model
+                let rate = log(j / jOld) / viscous!.dt
+                var q = 0.0
+                if rate < 0 {
+                    let elementMaterial = material ?? body.material
+                    let length = (e.area * j).squareRoot()
+                    let waveSpeed = elementMaterial.waveSpeed
+                    // Current density ρ0 / J.
+                    q = elementMaterial.density / j * length
+                        * (model.linear * waveSpeed * -rate + model.quadratic * model.quadratic * length * rate * rate)
+                    // P_q = −q J F^(−T) = −q cofactor(F); the cofactor columns match the pressure term above.
+                    stress = ElementPiola(stress.x - q * Point(fy.y, -fy.x), stress.y - q * Point(-fx.y, fx.x))
+                    viscous!.trialDamping = max(viscous!.trialDamping,
+                                                model.damping(length: length, waveSpeed: waveSpeed, rate: rate))
+                }
+                // Work done against q over the step, trapezoid rule per reference area: A · q̄ · (J_n − J_{n+1}).
+                viscous!.trialWork += e.area * 0.5 * (viscous!.q[i] + q) * (jOld - j)
+                viscous!.next[i] = q
             }
             guard stress.x.x.isFinite && stress.x.y.isFinite && stress.y.x.isFinite && stress.y.y.isFinite else {
                 return nil
