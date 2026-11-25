@@ -10,8 +10,8 @@ Metal plastic flow keeps volume constant. A 3-node triangle has a single, consta
 
 **No for the structured blocks Impact Lab uses by default. Mild for outline (unstructured) bodies.**
 
-- The default `aligned` block pattern behaves like the known non-locking "crossed" mesh, within 4% at every depth, at both refinements, for E/Y = 100 and E/Y = 500.
-- Outline bodies (Delaunay triangles from the PR 6 mesher) read 1–6% stiffer than the crossed mesh on the finer mesh and up to 12% stiffer on the coarse one. That is mild overstiffening that falls with refinement. It is not the runaway load of a locked mesh.
+- The default `aligned` block pattern behaves like the known non-locking "crossed" mesh, within about 4% at every depth, at both refinements, for E/Y = 100 and E/Y = 500.
+- Outline bodies (Delaunay triangles from the PR 6 mesher) read up to 6% stiffer than the crossed mesh on the finer mesh and up to 12% stiffer on the coarse one. That is mild overstiffening that falls with refinement. It is not the runaway load of a locked mesh.
 - A deliberately bad pattern (every diagonal the same way, which Impact Lab does not use) reads 12–23% stiffer and the gap grows with depth. So the test does detect locking when it is there.
 
 The Bonet–Burton averaged-pressure fix is therefore **not needed now**. It is written up below as a ready proposal in case outline bodies of stiff metals are later used for quantitative plastic results.
