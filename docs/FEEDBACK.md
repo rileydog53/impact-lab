@@ -49,6 +49,7 @@ He also asked that this fact be preserved: "The fact that I had to ask ChatGPT f
 | 7 | 2026-11-25 | Sections 55 to 70: repeated "contact overlap" failures, body mesh size, losing the fun |
 | 8 | 2026-11-25 | Sections 71 to 95: more failures, slow-motion workarounds, input limits, not knowing what the material numbers mean, asking ChatGPT |
 | 9 | 2026-11-25 | Sections 96 to 103: "something's not right", advisories on an automatic mesh, slow runs, peak memory again. Code investigation of finding 1 added |
+| 10 | 2026-11-25 | Code investigation of finding 26 (contact overlap) added |
 
 ## What he was testing (context)
 
@@ -114,7 +115,14 @@ Merged from sections 56, 61, 62, 68, 71, 80 and 91.
 - **The message he saw (as he read it out):** "Overlap, contact overlap by more than 10% of an edge. Try slower impact or a different mesh."
 - **Block level:** Blocking. It stopped run after run, at every speed he tried.
 - **Change type:** Physics/solver (likely).
-- **Code investigation:** pending. A separate read-only look at this failure is running; its findings go here when they come in.
+- **Code investigation (a separate read-only look at the code, not his words; the scene wasn't run; he asked for it to be kept here):**
+  - The stop is one hard check (`AssemblySimulation.swift` line 949). It runs only when any body has fracture on, and once it trips the run ends. Nothing retries with a smaller step, because the step is fixed at the start (line 547). So going slower can't fix it.
+  - Overlap is measured against the edge being pushed into (`BoundaryContact.swift` line 168). A coarse enclosure corner pressing into the panel's fine-mesh edges reads as a big percentage even when the real overlap is small.
+  - The push points toward the nearest edge of the other body (`BoundaryContact.swift` line 237). On a thin hollow wall that can be the inside face, which pushes the node through. That fits his "it just lets it go through".
+  - The app never says which two bodies tripped the check, though the program records the pair (line 196). Only the test tools read it.
+  - Guess, not verified: the low cohesive strength enclosure cracks on contact and the new pieces start already overlapping. `docs/PHASE_0_8.md` lines 18 and 28 describe the same 10% stop.
+  - Possible workaround: fracture off on the enclosure, with its mesh size close to the panel's.
+  - Fix types: naming the pair in the message is interface/wording only. Making the run recover instead of stopping is a physics/solver change.
 
 ### 1. A strong plate bends instead of punching through the enclosure and panel
 
