@@ -297,7 +297,7 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
             && Self.velocityRange.contains(velocity.x) && Self.velocityRange.contains(velocity.y)
             && (shape != .enclosure || (0.4 * min(size.x, size.y) >= 0.005 && (0.005...0.4 * min(size.x, size.y)).contains(wall)))
             && material.isValidForAssembly
-            && plasticity.isValid && (fracture.map { shape != .round && shape != .outline && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
+            && plasticity.isValid && (fracture.map { shape != .round && (shape != .outline || $0.meshPattern == nil) && (material.provenance == nil || $0.usesAbsoluteStrength) && $0.isValid } ?? true)
             && outlineIssues.isEmpty
             && !name.isEmpty && name.count <= 48
             && (notch.map { shape == .block && $0.isValid } ?? true)

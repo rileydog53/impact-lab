@@ -213,8 +213,8 @@ struct AssemblyEditor: View {
             Text("Workshop limits").font(.headline)
             Text("Bodies may translate and rotate. A body can be a fixed support (a rigid bench, floor or roller that never moves) or have one edge clamped. A deformable support is an ordinary free block that can move and deform under load. Pinned points, rigid joints and partial constraints are unavailable.")
             Text("Gravity can be switched on in Simulation settings; it pulls every free body downward (−Y). No other applied loads, pressures or friction exist; contact is frictionless.")
-            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies, outline bodies and fixed supports cannot fracture (a clamped body can); each body's list entry says \"fracture on\", \"fracture off\" or \"fracture n/a\", and hovering explains why.")
-            Text("Outline bodies can have any polygon shape with holes: draw one, insert an outline shape, convert a structured body, or Cut and Join two bodies (polygon operations by Clipper2, Angus Johnson, Boost licence). They are meshed by a quality triangle mesher (Ruppert/Shewchuk refinement). Round bodies use an elliptical mesh. Outline bodies cannot fracture yet. Curved edges, imported outlines, arbitrary cracks, and nested groups are unavailable.")
+            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies and fixed supports cannot fracture (a clamped body and an outline body can); each body's list entry says \"fracture on\", \"fracture off\" or \"fracture n/a\", and hovering explains why.")
+            Text("Outline bodies can have any polygon shape with holes: draw one, insert an outline shape, convert a structured body, or Cut and Join two bodies (polygon operations by Clipper2, Angus Johnson, Boost licence). They are meshed by a quality triangle mesher (Ruppert/Shewchuk refinement). Round bodies use an elliptical mesh. Outline bodies can fracture: cracks open along the generated mesh's element edges. Curved edges, imported outlines, arbitrary cracks, and nested groups are unavailable.")
             Text("Limits and their causes").font(.subheadline.weight(.semibold))
             ForEach(AssemblyScene.limits, id: \.name) { limit in
                 VStack(alignment: .leading, spacing: 1) {
@@ -585,7 +585,7 @@ struct AssemblyEditor: View {
                     .disabled(!experiment.canEdit || part.bondedLayer != nil)
                 Text(part.bondedLayer != nil
                      ? "Bonded-layer blocks cannot become outlines yet (region materials are not part of the outline model)."
-                     : "Turns this body into an editable outline with the same shape. The mesh is regenerated, so results will differ slightly from the structured mesh; pin a result first to compare.\(part.fracture != nil ? " Material fracture is switched off, because outline bodies cannot fracture yet." : "")")
+                     : "Turns this body into an editable outline with the same shape. The mesh is regenerated, so results will differ slightly from the structured mesh; pin a result first to compare.\(part.fracture?.meshPattern != nil ? " Material fracture stays on; the staggered interior mesh setting is dropped, because the outline has its own mesh." : "")")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.top, 4)

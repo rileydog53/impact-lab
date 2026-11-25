@@ -118,6 +118,16 @@ jobs:
           echo "ImpactCheck --plasticity: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
           tail -40 "ci-out/ImpactCheck___plasticity.log"
           exit $status
+      - name: "fracture: ImpactCheck --outline-fracture quick"
+        if: always() && steps.prep.outcome == 'success'
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          start=$(date +%s); status=0
+          ImpactCheck --outline-fracture quick > "ci-out/ImpactCheck___outline_fracture_quick.log" 2>&1 || status=$?
+          echo "ImpactCheck --outline-fracture quick: $(( $(date +%s) - start )) s (exit $status)" | tee -a ci-out/timings.txt
+          tail -40 "ci-out/ImpactCheck___outline_fracture_quick.log"
+          exit $status
       - name: "locking + laminate: ImpactCheck --locking"
         if: always() && steps.prep.outcome == 'success'
         timeout-minutes: 40

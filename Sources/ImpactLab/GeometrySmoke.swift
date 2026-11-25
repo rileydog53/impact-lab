@@ -85,7 +85,7 @@ import simd
         let beam = experiment.scene.parts.first { $0.fracture != nil }!
         experiment.convertToOutline(beam.id)
         let converted = experiment.scene.parts.first { $0.id == beam.id }!
-        check("convert", converted.shape == .outline && converted.fracture == nil && converted.notch == nil)
+        check("convert", converted.shape == .outline && converted.fracture?.meshPattern == nil && converted.notch == nil)
         experiment.undo()
         check("undo convert", experiment.scene.parts.first { $0.id == beam.id } == beam)
         // 8. Mesh size changes the mesh; a huge request is refused with a clear reason.

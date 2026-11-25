@@ -111,7 +111,8 @@ extension AssemblyPart {
                                      sin(radians) * offset.x + cos(radians) * offset.y)
         part.notch = nil
         part.bondedLayer = nil
-        part.fracture = nil
+        // Outline bodies can fracture (outline fracture check, 2026-11-25); the block mesh pattern does not apply.
+        part.fracture?.meshPattern = nil
         part.wall = 0.012
         return part
     }
