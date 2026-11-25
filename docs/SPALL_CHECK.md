@@ -34,7 +34,7 @@ All with bulk viscosity on.
 
 Every miss came from the same place: about 25 mm in from the plates' top and bottom edges, which is inside the 2D edge zone, where waves from the free edges have already arrived and the 1D picture does not apply. Hypothesis, not tested: the spot matches how far a shear wave from the plate corners travels by then (about 3.1 km/s × 9.5 µs ≈ 30 mm). These edge cracks are a 2D result of a finite plate. They are not checked against anything here.
 
-## Amended gate (2026-11-25, needs Joseph's acceptance)
+## Amended gate (written after the first run; accepted by Joseph on 2026-11-25)
 
 The same tolerances, judged only inside the 1D zone. Plates are 16δ = 432 mm tall, so that zone is wide (|y| < 135 mm at 3δ/c). "Contact opens" is measured on the centre band of the impact face, as the last moment its faces still touch. A crack face exactly two cells from the plane counts as "within two cells". Edge-zone cracks are still printed. The first run above is still run and printed every time, against its original wording.
 

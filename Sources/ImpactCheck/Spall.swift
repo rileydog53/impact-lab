@@ -27,7 +27,7 @@ import simd
 // bottom edges, inside the 2D edge zone, which the 1D picture does not describe (see docs/SPALL_CHECK.md). That run is
 // kept below, reported against the original wording and not gated.
 //
-// Amended gate (2026-11-25, proposed to Joseph with the PR, not yet accepted by him): the same tolerances, judged
+// Amended gate (written after the first run; accepted by Joseph in the project thread on 2026-11-25): the same tolerances, judged
 // only inside the 1D zone, on plates 16δ tall so that zone is wide (|y| < 135 mm at 3δ/c). "Contact opens" is
 // measured on the centre band of the impact face, as the last instant its faces still touch. A face exactly two
 // cells from the plane counts as within two cells. Edge-zone cracks are reported, never hidden.
