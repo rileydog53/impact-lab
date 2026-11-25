@@ -52,9 +52,39 @@ public struct AssemblyReplayEvent: Identifiable, Sendable {
     public let id: String
 }
 
+/// How densely a replay keeps calculated frames. Every frame in either mode is an accepted solver state; nothing
+/// is interpolated. `.standard` is the original cadence (and what every legacy check records). `.smooth` keeps the
+/// same scheduled frames bit for bit and adds extra calculated frames: an even fill between them, and a dense burst
+/// starting at the exact step of every event and milestone, each under its own memory budget.
+public enum ReplayDensity: Sendable {
+    case standard, smooth
+}
+
 /// Records exact accepted states. Frame storage is bounded approximately by
 /// mesh size. The trace and integration timestep are independent of that budget.
 public struct AssemblyReplay: Sendable {
+    /// Extra memory for the smooth fill and for event bursts, estimated per frame like the scheduled budget.
+    public static let smoothFillBudget = 160 * 1024 * 1024
+    public static let smoothBurstBudget = 96 * 1024 * 1024
+    /// Frames in one burst after an event or milestone, spaced an eighth of the fill spacing apart.
+    public static let framesPerBurst = 48
+
+    private struct Focus: Sendable {
+        let start, end: Double
+        let every: Int
+        var count = 0
+    }
+
+    public let density: ReplayDensity
+    /// Calculated frames kept beyond the scheduled and event frames (smooth fill, bursts, slow-down focus).
+    public private(set) var extraFrames = 0
+    private var fillInterval = Double.infinity
+    private var nextFill = Double.infinity
+    private var burstInterval = 0.0
+    private var burstLeft = 0
+    private var burstCapacity = 0
+    private var nextBurst = Double.infinity
+    private var focusWindow: Focus?
     public private(set) var frames: [AssemblyReplayFrame] = []
     public private(set) var events: [AssemblyReplayEvent] = []
     /// Later material milestones (first crack, first delamination, first interior crack). Kept apart from `events`,
@@ -82,8 +112,9 @@ public struct AssemblyReplay: Sendable {
     private var interiorWatch: [Int: InteriorCrackWatch] = [:]
     private var observedOpenFragments: Set<Int> = []
 
-    public init(_ run: AssemblyRun) {
+    public init(_ run: AssemblyRun, density: ReplayDensity = .standard) {
         let sim = run.simulation
+        self.density = density
         let triangles = (0..<sim.bodyCount).reduce(0) { $0 + sim.body($1).mesh.elements.count }
         names = sim.scene.parts.map(\.name)
         fractureIndices = sim.scene.parts.indices.filter { sim.scene.parts[$0].fracture != nil }
@@ -96,6 +127,15 @@ public struct AssemblyReplay: Sendable {
         next = interval
         gaugeInterval = sim.scene.duration / 2000
         nextGauge = 0
+        if density == .smooth {
+            let fill = min(1200, max(target, Self.smoothFillBudget / estimate))
+            if fill > target {
+                fillInterval = sim.scene.duration / Double(fill)
+                nextFill = fillInterval
+            }
+            burstInterval = max(sim.dt, min(fillInterval, interval) / 8)
+            burstCapacity = min(600, Self.smoothBurstBudget / estimate)
+        }
         append(run)
         sampleGauges(sim)
     }
@@ -113,6 +153,7 @@ public struct AssemblyReplay: Sendable {
         for (pair, force) in live { impulse[pair, default: 0] += 0.5 * sim.dt * force }
         previous = live
         let priorCount = events.count
+        let priorMilestones = milestones.count
         for pair in sim.activeContacts {
             let title = pair.x == pair.y ? "\(names[pair.x]) fragments" : "\(names[pair.x]) / \(names[pair.y])"
             add("First contact · \(title)", key: "pair-\(pair.x)-\(pair.y)", at: sim.time)
@@ -150,13 +191,58 @@ public struct AssemblyReplay: Sendable {
             }
         }
         sampleGauges(sim)
+        var appended = true
         if sim.time >= next {
             next = (floor(sim.time / interval) + 1) * interval
             if next <= sim.time { next += interval }
             append(run)
         } else if events.count != priorCount || run.finished {
             append(run)
+        } else {
+            appended = false
         }
+        // Standard density with no focus stops here, so legacy recordings are unchanged.
+        guard density == .smooth || focusWindow != nil else { return }
+        let newEvent = events.count != priorCount || milestones.count != priorMilestones
+        if wantsExtraFrame(at: sim.time, newEvent: newEvent), !appended {
+            append(run)
+            extraFrames += 1
+        }
+    }
+
+    /// Advances the smooth-fill, burst and focus schedules for this accepted step and says whether it should be kept.
+    /// Called once per step, whether or not the step was already kept, so the schedules don't depend on that.
+    private mutating func wantsExtraFrame(at time: Double, newEvent: Bool) -> Bool {
+        var wanted = false
+        if density == .smooth {
+            if newEvent, burstCapacity > 0 {
+                burstLeft = min(Self.framesPerBurst, burstCapacity)
+                nextBurst = time
+            }
+            if burstLeft > 0, time >= nextBurst {
+                burstLeft -= 1
+                burstCapacity -= 1
+                nextBurst = time + burstInterval
+                wanted = true
+            }
+            if time >= nextFill {
+                nextFill = (floor(time / fillInterval) + 1) * fillInterval
+                if nextFill <= time { nextFill += fillInterval }
+                wanted = true
+            }
+        }
+        if var window = focusWindow, time >= window.start, time <= window.end {
+            if window.count % window.every == 0 { wanted = true }
+            window.count += 1
+            focusWindow = window
+        }
+        return wanted
+    }
+
+    /// Keeps every `every`-th accepted step from `start` to `end` as well, on top of the normal schedule. Used when a
+    /// window is recalculated from a checkpoint to slow it down; the scheduled frames inside it are kept exactly as before.
+    package mutating func focus(from start: Double, to end: Double, every: Int) {
+        focusWindow = Focus(start: start, end: end, every: max(1, every))
     }
 
     public mutating func finish(_ run: AssemblyRun) {

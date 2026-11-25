@@ -52,6 +52,7 @@ struct AssemblyLab: View {
                     indicators
                     trace
                     if experiment.frames.count > 1 { timeline }
+                    if experiment.clip != nil || experiment.slowing || experiment.slowNote != nil { slowMotionBanner }
                     if scenario != nil { scenarioBanner }
                     AssemblyComputationStatus(experiment: experiment)
                     status
@@ -440,21 +441,33 @@ struct AssemblyLab: View {
 
     private var timeline: some View {
         HStack(spacing: 7) {
-            Button("Restart Replay", systemImage: "backward.end.fill") { experiment.seek(to: 0) }
+            Button("Restart Replay", systemImage: "backward.end.fill") { experiment.seek(to: experiment.playbackStart) }
                 .labelStyle(.iconOnly)
             Button("Previous Frame", systemImage: "backward.frame.fill") { experiment.stepFrame(by: -1) }
                 .labelStyle(.iconOnly).disabled(experiment.frameIndex == 0)
             Slider(value: Binding(get: { experiment.displayTime }, set: { experiment.seek(to: $0) }),
-                   in: 0...max(1e-12, experiment.playbackDuration)) { Text("Replay time") }
+                   in: experiment.playbackStart...max(experiment.playbackStart + 1e-12, experiment.playbackDuration)) { Text("Replay time") }
                 .accessibilityValue(replayTime(experiment.displayTime))
             Button("Next Frame", systemImage: "forward.frame.fill") { experiment.stepFrame(by: 1) }
-                .labelStyle(.iconOnly).disabled(experiment.frameIndex == experiment.frames.count - 1)
+                .labelStyle(.iconOnly).disabled(experiment.frameIndex == experiment.playbackFrames.count - 1)
             Text(replayTime(experiment.displayTime)).font(.caption.monospacedDigit()).fixedSize()
             Menu("Events") {
                 ForEach(experiment.replay?.timeline ?? []) { event in
                     Button("\(event.label) · \(replayTime(event.time))") { experiment.seek(to: event.time) }
                 }
             }.fixedSize().disabled(experiment.replay?.timeline.isEmpty != false)
+            if experiment.clip != nil {
+                Button("Whole Run", systemImage: "arrow.uturn.backward") { experiment.exitClip() }
+                    .help("Return to the whole recorded run at this moment")
+            } else {
+                Menu("Slow Down Here") {
+                    ForEach(slowSpans, id: \.self) { span in
+                        Button("Recalculate \(replayTime(span)) around this moment") { experiment.slowDown(span: span) }
+                    }
+                }
+                .fixedSize().disabled(!experiment.canSlowDown)
+                .help("Recalculate a short stretch around the shown moment from a saved checkpoint, keeping far more solver steps, and play it slowly. Every frame is calculated; nothing is interpolated.")
+            }
             Button("Copy Summary", systemImage: "doc.on.clipboard") {
                 guard let replay = experiment.replay else { return }
                 NSPasteboard.general.clearContents()
@@ -462,10 +475,45 @@ struct AssemblyLab: View {
             }
             .labelStyle(.iconOnly)
             .help("Copy a text summary of this run at the frame shown, to paste into chat")
-            .disabled(experiment.replay == nil)
+            .disabled(experiment.replay == nil || experiment.clip != nil)
         }
         .controlSize(.small)
         .disabled(experiment.solving)
+    }
+
+    /// Stretches offered by Slow Down Here, as fractions of the run's length.
+    private var slowSpans: [Double] {
+        let duration = experiment.scene.duration
+        return [duration / 100, duration / 40, duration / 15]
+    }
+
+    private var slowMotionBanner: some View {
+        HStack(spacing: 8) {
+            if experiment.slowing {
+                ProgressView().controlSize(.small)
+                Text("Recalculating this stretch from a saved checkpoint…").foregroundStyle(.secondary)
+                Button("Cancel") { experiment.cancelSlowDown() }
+            } else if let clip = experiment.clip {
+                Text("Calculated").bold().foregroundStyle(assemblyMint)
+                Text("Slowed down: \(replayTime(clip.end - clip.start)) recalculated, "
+                     + (clip.stride == 1 ? "every solver step" : "every \(clip.stride) solver steps")
+                     + " · \(clip.frames.count) frames")
+                if clip.isExact {
+                    Text("Matches the original run at all \(clip.shared) shared frames").foregroundStyle(assemblyMint)
+                        .help("Frames this clip shares with the whole run were compared bit for bit.")
+                } else if clip.shared == 0 {
+                    Text("No shared frames to compare with the original run").foregroundStyle(.secondary)
+                } else {
+                    Text("Differs from the original run at \(clip.shared - clip.reproduced) of \(clip.shared) shared frames")
+                        .foregroundStyle(assemblyAmber)
+                        .help("The recalculation did not reproduce the original run exactly. Treat this clip with caution and report it.")
+                }
+            } else if let note = experiment.slowNote {
+                Text(note).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .font(.caption)
     }
 
     private var status: some View {

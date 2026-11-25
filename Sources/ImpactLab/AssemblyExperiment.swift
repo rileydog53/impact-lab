@@ -26,8 +26,16 @@ struct AssemblyComparison {
     private(set) var solving = false
     private(set) var cancelling = false
     private(set) var computation: AssemblyComputation?
-    @ObservationIgnored private var solveTask: Task<(AssemblyRun, AssemblyReplay, AssemblyComputation), Never>?
+    @ObservationIgnored private var solveTask: Task<(AssemblyRun, AssemblyReplay, SlowMotionRewind, AssemblyComputation), Never>?
     @ObservationIgnored private var solveID: UUID?
+    /// A recalculated, slowed-down stretch of the run being played instead of the whole run, or nil.
+    private(set) var clip: SlowMotionClip?
+    /// True while a stretch is being recalculated for slow motion.
+    private(set) var slowing = false
+    private(set) var slowNote: String?
+    @ObservationIgnored private var rewind: SlowMotionRewind?
+    @ObservationIgnored private var clipTask: Task<SlowMotionClip?, Never>?
+    @ObservationIgnored private var clipID: UUID?
     private var playbackTime = 0.0
     var playbackSpeed = 1.0
     var probeBody: Int?
@@ -76,8 +84,16 @@ struct AssemblyComparison {
     var samples: [TraceSample] { run.samples }
     var relativeMotion: Point { frame?.relativeMotion ?? run.relativeMotion }
     var frames: [AssemblyReplayFrame] { replay?.frames ?? [] }
-    var frame: AssemblyReplayFrame? { replay?.frames[frameIndex] }
-    var playbackDuration: Double { frames.last?.time ?? 0 }
+    /// What the timeline plays: the slowed-down clip when one is shown, otherwise the whole recorded run.
+    var playbackFrames: [AssemblyReplayFrame] { clip?.frames ?? frames }
+    var frame: AssemblyReplayFrame? {
+        guard replay != nil else { return nil }
+        let list = playbackFrames
+        return list.indices.contains(frameIndex) ? list[frameIndex] : nil
+    }
+    var playbackStart: Double { playbackFrames.first?.time ?? 0 }
+    var playbackDuration: Double { playbackFrames.last?.time ?? 0 }
+    var canSlowDown: Bool { rewind != nil && frames.count > 1 && !solving && !slowing }
     var displayTime: Double { frame?.time ?? 0 }
     func displayedBody(_ index: Int) -> Body { frame?.bodies[index].body ?? simulation.body(index) }
     func displayedGauge(_ index: Int) -> AssemblyGaugeReading { frame?.gauges[index] ?? simulation.gaugeReading(index) }
@@ -156,6 +172,7 @@ struct AssemblyComparison {
         cancelling = false
         computation = nil
         replay = nil
+        dropSlowMotion()
         frameIndex = 0
         probeBody = nil
         probeElement = nil
@@ -402,6 +419,10 @@ struct AssemblyComparison {
         previewParts.removeAll()
         let existing = run
         let recording = replay
+        let existingRewind = rewind
+        cancelSlowDown()
+        clip = nil
+        slowNote = nil
         let carriedElapsed = computation?.elapsed ?? 0
         let id = UUID()
         solveID = id
@@ -414,8 +435,9 @@ struct AssemblyComparison {
             solver.measureWork(parallelFEM: true)
             let started = AssemblyProcessSample()
             var previous = started
-            var next = recording ?? AssemblyReplay(solver)
+            var next = recording ?? AssemblyReplay(solver, density: .smooth)
             next.resume()
+            var checkpoints = existingRewind ?? SlowMotionRewind(solver, replay: next)
             func snapshot(_ state: AssemblyComputation.State, process: AssemblyProcessSample,
                           cpu: Double?) -> AssemblyComputation {
                 let simulation = solver.simulation
@@ -428,6 +450,7 @@ struct AssemblyComparison {
             continuation.yield(snapshot(.calculating, process: started, cpu: nil))
             var lastCPU: Double?
             while !Task.isCancelled && solver.step(recording: &next) {
+                checkpoints.capture(solver, next)
                 let now = ProcessInfo.processInfo.systemUptime
                 if now - previous.time >= 0.25 {
                     let process = AssemblyProcessSample()
@@ -451,7 +474,7 @@ struct AssemblyComparison {
             let cpu = process.time - previous.time >= 0.10 || lastCPU == nil
                 ? process.utilization(since: previous) : lastCPU
             continuation.finish()
-            return (solver, next, snapshot(state, process: process, cpu: cpu))
+            return (solver, next, checkpoints, snapshot(state, process: process, cpu: cpu))
         }
         solveTask = worker
         Task { [weak self] in
@@ -459,12 +482,13 @@ struct AssemblyComparison {
                 guard let self, solveID == id else { return }
                 computation = update
             }
-            let (solved, recorded, final) = await worker.value
+            let (solved, recorded, checkpoints, final) = await worker.value
             guard let self, solveID == id else { return }
             solveID = nil
             solveTask = nil
             run = solved
             replay = solved.simulation.time == 0 && solved.simulation.failure == nil ? nil : recorded
+            rewind = replay == nil ? nil : checkpoints
             frameIndex = max(0, (replay?.frames.count ?? 0) - 1)
             computation = final
             solving = false
@@ -490,22 +514,26 @@ struct AssemblyComparison {
         solveTask?.cancel()
     }
 
+    /// Jumps to the frame nearest `time`. A time outside the slowed-down clip returns to the whole run.
     func seek(to time: Double) {
         guard let replay else { return }
         pause()
-        frameIndex = replay.index(at: time)
+        if let shown = clip, time < shown.start || time > shown.end { exitClip() }
+        frameIndex = clip?.index(at: time) ?? replay.index(at: time)
     }
 
     func stepFrame(by increment: Int) {
-        guard !frames.isEmpty else { return }
+        let count = playbackFrames.count
+        guard count > 0 else { return }
         pause()
-        frameIndex = min(frames.count - 1, max(0, frameIndex + increment))
+        frameIndex = min(count - 1, max(0, frameIndex + increment))
     }
 
     func toggle() {
         if running { pause(); return }
-        guard frames.count > 1, !solving else { return }
-        if frameIndex == frames.count - 1 { frameIndex = 0 }
+        let count = playbackFrames.count
+        guard count > 1, !solving else { return }
+        if frameIndex == count - 1 { frameIndex = 0 }
         playbackTime = displayTime
         lastTick = nil
         running = true
@@ -515,10 +543,67 @@ struct AssemblyComparison {
         guard running, let replay else { return }
         defer { if running { lastTick = now } }
         guard let lastTick else { return }
-        // 1× plays the recorded interval in five wall-clock seconds.
-        playbackTime += max(0, now - lastTick) * playbackDuration * playbackSpeed / 5
-        frameIndex = replay.index(at: playbackTime)
+        // 1× plays the shown interval (the whole run, or the slowed-down clip) in five wall-clock seconds.
+        playbackTime += max(0, now - lastTick) * (playbackDuration - playbackStart) * playbackSpeed / 5
+        frameIndex = clip?.index(at: playbackTime) ?? replay.index(at: playbackTime)
         if playbackTime >= playbackDuration { pause() }
+    }
+
+    /// Recalculates `span` seconds of physical time around the shown moment from the nearest earlier checkpoint,
+    /// keeping far more solver steps, and plays that clip instead of the whole run. Every frame is calculated.
+    func slowDown(span: Double) {
+        guard canSlowDown, let checkpoints = rewind, let replay, span > 0 else { return }
+        pause()
+        let center = displayTime
+        let last = replay.frames.last?.time ?? 0
+        let end = min(last, max(checkpoints.earliest, center - 0.25 * span) + span)
+        let start = max(checkpoints.earliest, end - span)
+        guard end > start else { return }
+        let original = replay.frames
+        let id = UUID()
+        clipID = id
+        slowing = true
+        slowNote = nil
+        let task = Task.detached(priority: .userInitiated) {
+            checkpoints.clip(from: start, to: end, original: original) { Task.isCancelled }
+        }
+        clipTask = task
+        Task { [weak self] in
+            let result = await task.value
+            guard let self, clipID == id else { return }
+            clipID = nil
+            clipTask = nil
+            slowing = false
+            guard let result else {
+                slowNote = "This stretch couldn't be recalculated from the saved checkpoints."
+                return
+            }
+            clip = result
+            frameIndex = result.index(at: center)
+        }
+    }
+
+    func cancelSlowDown() {
+        clipTask?.cancel()
+        clipTask = nil
+        clipID = nil
+        slowing = false
+    }
+
+    /// Back to the whole recorded run, at the same moment.
+    func exitClip() {
+        guard clip != nil else { return }
+        let time = displayTime
+        pause()
+        clip = nil
+        frameIndex = replay?.index(at: time) ?? 0
+    }
+
+    private func dropSlowMotion() {
+        cancelSlowDown()
+        clip = nil
+        rewind = nil
+        slowNote = nil
     }
 
     // Used by the existing inspection and verification entry points.
@@ -527,6 +612,7 @@ struct AssemblyComparison {
         pause()
         placingGauge = false
         linkPlacement = nil
+        dropSlowMotion()
         var recorded = replay ?? AssemblyReplay(run)
         recorded.resume()
         while simulation.time < time && run.step() { recorded.record(run) }

@@ -66,4 +66,5 @@ func assemblyReplayCheck() throws {
         }
     }, "Recorded crack faces do not resolve on the replay frame mesh")
     print("Assembly replay: \(replay.frames.count) copper frames; \(other.frames.count) aluminum frames; \(fracture.frames.count) fracture frames. Geometry, stress, gauges, event jumps, contact and energy partition verified.")
+    try smoothReplayCheck()
 }
