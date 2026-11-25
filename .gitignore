@@ -7,3 +7,14 @@ audit/
 .build/
 .build-regression/
 .build-dev/
+
+# local-only files (keep out of the public repo)
+.DS_Store
+.codex/
+agent_audit.py
+auditor.py
+desktop_audit.py
+handoff.py
+docs/cli-wrapper.md
+docs/desktop-hooks.json
+docs/agent-handoff-patch.md
