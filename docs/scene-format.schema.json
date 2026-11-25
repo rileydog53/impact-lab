@@ -125,9 +125,13 @@
             "strengthFraction": { "type": "number", "minimum": 0.005, "maximum": 0.08, "default": 0.03, "description": "Tensile strength as a fraction of Young's modulus." },
             "strength": { "type": "number", "minimum": 10000, "maximum": 4000000000, "description": "Cohesive strength in pascals. Replaces strengthFraction (give one, not both); energy is then required and may be up to 1000000 J/m²." },
             "energySource": { "type": "object", "description": "Citation for an estimated energy: status, citation, url, caution." },
-            "energy": { "type": "number", "minimum": 0.5, "maximum": 50, "default": 7, "description": "Fracture energy, J/m²." },
+            "energy": { "type": "number", "minimum": 0.5, "maximum": 1000000, "default": 7, "description": "Fracture energy, J/m². Up to 50 with strengthFraction, up to 1000000 with strength in Pa." },
             "meshPattern": { "enum": ["Aligned", "Staggered", "aligned", "staggered"] }
-          }
+          },
+          "not": { "required": ["strength", "strengthFraction"] },
+          "if": { "required": ["strength"] },
+          "then": { "required": ["energy"] },
+          "else": { "properties": { "energy": { "maximum": 50 } } }
         },
         "notch": {
           "type": "object", "additionalProperties": false, "description": "V-notch on the local bottom edge of a block.",

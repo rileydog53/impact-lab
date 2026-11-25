@@ -325,6 +325,11 @@ if let index = CommandLine.arguments.firstIndex(of: "--layered-bodies") {
     exit(EXIT_SUCCESS)
 }
 
+if CommandLine.arguments.dropFirst().contains("--layered-examples") {
+    try layeredExamplesCheck()
+    exit(EXIT_SUCCESS)
+}
+
 if let index = CommandLine.arguments.firstIndex(of: "--locking") {
     let args = CommandLine.arguments
     if args.indices.contains(index + 1) && args[index + 1] == "probe" { lockingProbe(); exit(EXIT_SUCCESS) }

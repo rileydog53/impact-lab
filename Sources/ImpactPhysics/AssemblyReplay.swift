@@ -57,6 +57,12 @@ public struct AssemblyReplayEvent: Identifiable, Sendable {
 public struct AssemblyReplay: Sendable {
     public private(set) var frames: [AssemblyReplayFrame] = []
     public private(set) var events: [AssemblyReplayEvent] = []
+    /// Later material milestones (first crack, first delamination, first interior crack). Kept apart from `events`,
+    /// which each sit exactly on a recorded frame and are part of the legacy-replay fingerprint; a milestone jumps to
+    /// the nearest recorded frame and adds none, so scenes recorded before them replay exactly as before.
+    public private(set) var milestones: [AssemblyReplayEvent] = []
+    /// Events and milestones together, in time order, for the Events menu and the timeline ticks.
+    public var timeline: [AssemblyReplayEvent] { (events + milestones).sorted { $0.time < $1.time } }
     /// Gauge readings on a fixed fine cadence, independent of the field frames. Field frames are
     /// thinned by a memory budget (fracture scenes keep fewer), but gauges cost a few bytes each, so
     /// window averages over gauges should not depend on how many field frames fit.
@@ -73,6 +79,7 @@ public struct AssemblyReplay: Sendable {
     private let fractureIndices: [Int]
     private let names: [String]
     private var observedFragmentCount = 0
+    private var interiorWatch: [Int: InteriorCrackWatch] = [:]
     private var observedOpenFragments: Set<Int> = []
 
     public init(_ run: AssemblyRun) {
@@ -80,6 +87,9 @@ public struct AssemblyReplay: Sendable {
         let triangles = (0..<sim.bodyCount).reduce(0) { $0 + sim.body($1).mesh.elements.count }
         names = sim.scene.parts.map(\.name)
         fractureIndices = sim.scene.parts.indices.filter { sim.scene.parts[$0].fracture != nil }
+        for index in fractureIndices {
+            interiorWatch[index] = InteriorCrackWatch(part: sim.scene.parts[index], body: sim.body(index))
+        }
         let estimate = max(1, triangles) * (fractureIndices.isEmpty ? 110 : 320)
         let target = min(160, max(4, (96 * 1024 * 1024) / estimate))
         interval = sim.scene.duration / Double(target)
@@ -109,7 +119,18 @@ public struct AssemblyReplay: Sendable {
         }
         for index in fractureIndices {
             guard let state = sim.fractureReading(index) else { continue }
+            if state.insertedEdges > 0 { add("First crack · \(names[index])", key: "crack-\(index)", at: sim.time, milestone: true) }
             if state.damagedEdges > 0 { add("First interface damage · \(names[index])", key: "damage-\(index)", at: sim.time) }
+            if state.failedBondEdges > 0 { add("First delamination · \(names[index])", key: "delamination-\(index)", at: sim.time, milestone: true) }
+            if var watch = interiorWatch[index], state.insertedEdges > watch.seen {
+                watch.seen = state.insertedEdges
+                if watch.containsInteriorFace(sim.crackFaces(index), mesh: sim.body(index).mesh) {
+                    add("First interior crack (spall-type) · \(names[index])", key: "interior-\(index)", at: sim.time, milestone: true)
+                    interiorWatch[index] = nil
+                } else {
+                    interiorWatch[index] = watch
+                }
+            }
             if state.failedEdges > 0 { add("First failed face · \(names[index])", key: "face-\(index)", at: sim.time) }
             if state.pieces > 1 { add("First detached piece · \(names[index])", key: "piece-\(index)", at: sim.time) }
         }
@@ -169,8 +190,10 @@ public struct AssemblyReplay: Sendable {
         return lower
     }
 
-    private mutating func add(_ label: String, key: String, at time: Double) {
-        if seen.insert(key).inserted { events.append(AssemblyReplayEvent(label: label, time: time, id: key)) }
+    private mutating func add(_ label: String, key: String, at time: Double, milestone: Bool = false) {
+        guard seen.insert(key).inserted else { return }
+        let event = AssemblyReplayEvent(label: label, time: time, id: key)
+        if milestone { milestones.append(event) } else { events.append(event) }
     }
 
     private mutating func append(_ run: AssemblyRun) {
@@ -188,5 +211,39 @@ public struct AssemblyReplay: Sendable {
             contacts: contacts, fragments: s.fragmentContacts)
         fieldPayloadBytes += frame.fieldPayloadBytes
         frames.append(frame)
+    }
+}
+
+
+/// Recognises the first crack that opens inside a body rather than at its surface or on a bond between layers: the
+/// spall-type crack of the layered target plan (a crack inside the material, opened by tension from reflected waves).
+/// Operational definition, not a physical classification: a crack face counts when its midpoint, in the body's
+/// reference shape, is at least two element sizes from the original outer boundary and does not lie on a bond line.
+struct InteriorCrackWatch: Sendable {
+    private let boundary: [(Point, Point)]
+    private let bondLines: [Double]
+    private let margin: Double
+    var seen = 0
+
+    init(part: AssemblyPart, body: Body) {
+        let mesh = body.mesh
+        boundary = mesh.boundary.map { (mesh.reference[$0.a], mesh.reference[$0.b]) }
+        let area = mesh.elements.reduce(0) { $0 + $1.area } / Double(max(1, mesh.elements.count))
+        margin = 2 * (2 * area).squareRoot()
+        bondLines = part.bondedLayer.map { layer in layer.regions.map { ($0.fraction - 0.5) * part.size.x } } ?? []
+    }
+
+    func containsInteriorFace(_ faces: [CrackFace], mesh: Mesh) -> Bool {
+        faces.contains { face in
+            let a = mesh.reference[face.first.a], b = mesh.reference[face.first.b]
+            let m = (a + b) / 2
+            let scale = max(1e-12, simd_length(b - a))
+            if abs(a.x - b.x) < 1e-9 * scale, bondLines.contains(where: { abs($0 - m.x) < 1e-9 * scale + 1e-12 }) { return false }
+            return boundary.allSatisfy { p, q in
+                let d = q - p
+                let t = min(1, max(0, simd_dot(m - p, d) / max(simd_length_squared(d), 1e-30)))
+                return simd_length(m - p - t * d) >= margin
+            }
+        }
     }
 }
