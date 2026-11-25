@@ -618,9 +618,11 @@ struct AssemblyEditor: View {
                         range: MaterialFractureSettings.absoluteEnergyRange, scale: 1) { value in
                     experiment.updatePart(part.id) {
                         // Writing the strength in pascals lifts the old 50 J/m² cap; the same strength replays identically.
-                        $0.fracture?.strength = $0.fracture?.resolvedStrength(young: young)
-                        $0.fracture?.energy = value
-                        $0.fracture?.energySource = nil
+                        guard var next = $0.fracture else { return }
+                        next.strength = next.resolvedStrength(young: young)
+                        next.energy = value
+                        next.energySource = nil
+                        $0.fracture = next
                     }
                 }
             }
