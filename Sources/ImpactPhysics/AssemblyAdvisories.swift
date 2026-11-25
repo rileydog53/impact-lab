@@ -59,11 +59,8 @@ extension AssemblyPart {
         if support?.isFixture == true {
             return "A fixed support is rigid and never calculated as a deforming body, so it cannot fracture. Clamp an edge instead to hold it and let it crack."
         }
-        if fracture == nil, let provenance = material.provenance,
-           let profile = MaterialProfile.references.first(where: { $0.id == provenance.id }),
-           case let .unavailable(reason) = profile.fractureEstimate {
-            return "This material has no sourced fracture estimate. \(reason)"
-        }
+        // A Library material with no sourced crack numbers can still crack with numbers the user types
+        // (Joseph, 2026-11-25); the editor says plainly that those numbers are not from a source.
         return nil
     }
 
@@ -90,7 +87,7 @@ extension AssemblyScene {
         let hasGravity = (gravity ?? 0) > 0
         guard clamped || others || hasGravity else { return nil }
         let cause = clamped ? "it is clamped" : hasGravity ? "gravity acts on it" : "it can be struck or loaded by another body"
-        return "Advisory: this slender body has about \(across) elements across its thickness and \(cause), so it may bend. Bending is usually resolved with roughly 8 or more; fewer tends to make it too stiff. This is a guideline, not a limit: check the result against a finer mesh."
+        return "Note: this thin body has only about \(across) triangles across its thickness and \(cause), so it may bend. Bending usually needs about 8 or more across; with fewer it comes out too stiff. Not a limit: compare with a finer mesh."
     }
 }
 
@@ -104,29 +101,29 @@ extension AssemblyScene {
             let resolved = AssemblyPart.minimumSize(resolution: mesh)
             let small = min(part.size.x, part.size.y)
             if small < resolved - 1e-12 {
-                notes.append(String(format: "Advisory: at %.3g mm this body is smaller than three elements of the %@ mesh (%.3g mm), so its elements are shrunk to fit. That shortens the time step and lengthens the run; see the run-cost estimate. Nothing is blocked.",
+                notes.append(String(format: "Note: at %.3g mm this body is smaller than three elements (triangles) of the %@ mesh (%.3g mm), so its triangles are made smaller to fit. Each calculation step gets shorter and the run takes longer (see the time estimate). Nothing is blocked.",
                                     small * 1000, mesh.label, resolved * 1000))
             }
             if max(part.size.x, part.size.y) > AssemblyPart.sizeRange.upperBound + 1e-12 {
-                notes.append(String(format: "Advisory: at %.4g mm this body is larger than the earlier 300 mm editor limit. Larger bodies carry more triangles at the same mesh; see the run-cost estimate.",
+                notes.append(String(format: "Note: at %.4g mm this body is larger than the old 300 mm editor limit. Bigger bodies have more triangles at the same mesh, so they take longer (see the time estimate).",
                                     max(part.size.x, part.size.y) * 1000))
             }
         }
         if let advice = part.outlineAdvice(resolution: mesh) {
             let h = part.outline!.edgeLength(resolution: mesh)
             if part.outlineQuality(resolution: mesh) == nil {
-                notes.append(String(format: "Mesh: target edge length %.3g mm, roughly %@ triangles (estimate).", h * 1000, advice.estimatedTriangles.formatted()))
+                notes.append(String(format: "Mesh: triangle edges about %.3g mm, roughly %@ triangles (estimate).", h * 1000, advice.estimatedTriangles.formatted()))
             }
             if let thin = advice.thinnestSection {
                 // Rows of near-equilateral triangles across a section of width t: about t / (0.87 h).
                 let rows = thin / (0.866 * h)
                 if rows < 8, part.support != .fixed {
-                    notes.append(String(format: "Advisory: the narrowest section (%.3g mm) has about %.1f triangle rows across it. If it bends, roughly 8 or more are usually needed; fewer tends to make it too stiff (project beam check: 4 rows about 7%% too stiff, 8 rows about 1%%). A guideline, not a limit: a mesh size of %.2g mm gives about 8.",
+                    notes.append(String(format: "Note: the narrowest part (%.3g mm) has about %.1f rows of triangles across it. If it bends, about 8 rows are usually needed; with fewer it comes out too stiff (project beam check: 4 rows about 7%% too stiff, 8 rows about 1%%). Not a limit: a mesh size of %.2g mm gives about 8.",
                                         thin * 1000, rows, thin / (8 * 0.866) * 1000))
                 }
             }
             notes += advice.notes.filter { $0.level == .caution || $0.text.hasPrefix("Re-entrant") }
-                .filter { !$0.text.hasPrefix("The narrowest part") }.map { "Advisory: " + $0.text }
+                .filter { !$0.text.hasPrefix("The narrowest part") }.map { "Note: " + $0.text }
         }
         return notes
     }
@@ -134,7 +131,7 @@ extension AssemblyScene {
     /// Scene-wide advisory notes. Never blocking.
     public var sceneAdvisories: [String] {
         guard parts.count > Self.advisoryParts else { return [] }
-        return ["Advisory: \(parts.count) bodies. Contact is checked between every pair (\((parts.count * (parts.count - 1) / 2).formatted()) pairs), so run time grows quickly with the number of bodies; see the run-cost estimate. The earlier limit was \(Self.advisoryParts); up to \(Self.maximumParts) are accepted."]
+        return ["Note: \(parts.count) bodies. Every pair is checked for touching (\((parts.count * (parts.count - 1) / 2).formatted()) pairs), so the run gets slower quickly as bodies are added (see the time estimate). The old limit was \(Self.advisoryParts); up to \(Self.maximumParts) are accepted."]
     }
 
     public struct Limit: Equatable, Sendable {

@@ -488,8 +488,8 @@ enum SceneDocument {
             } else { return (fallback, nil) }
             guard let profileID else { return (fallback, nil) }
             let key = profileID.lowercased()
-            guard let profile = MaterialProfile.references.first(where: { $0.id == key || $0.name.lowercased() == key }) else {
-                fail(path, "unknown material profile \"\(profileID)\". Available: \(MaterialProfile.references.map(\.id).joined(separator: ", "))")
+            guard let profile = MaterialProfile.library.first(where: { $0.id == key || $0.name.lowercased() == key }) else {
+                fail(path, "unknown material profile \"\(profileID)\". Available: \(MaterialProfile.library.map(\.id).joined(separator: ", "))")
                 return (fallback, nil)
             }
             var part = AssemblyPart("profile")

@@ -83,6 +83,8 @@ enum OutlinePrimitive: String, CaseIterable {
     }
 
     private func add(_ part: AssemblyPart, action: String) -> UUID? {
+        var part = part
+        RealMaterialDefaults.apply(to: &part)
         guard scene.parts.count < AssemblyScene.maximumParts else {
             error = "This assembly already has \(AssemblyScene.maximumParts) bodies, the most the editor accepts."
             return nil

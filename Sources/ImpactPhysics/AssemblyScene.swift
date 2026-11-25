@@ -695,8 +695,8 @@ extension AssemblyPart {
     /// Starting crack settings for a material: the profile's sourced estimate for a reference metal
     /// (nil when it has none), otherwise the illustrative default.
     public static func defaultLayerFracture(for material: Material) -> MaterialFractureSettings? {
-        guard let provenance = material.provenance else { return MaterialFractureSettings() }
-        return MaterialProfile.references.first { $0.id == (provenance.referenceID ?? provenance.id) }?.defaultFracture
+        guard let provenance = material.provenance else { return customStartingFracture(young: material.young) }
+        return MaterialProfile.libraryProfile(for: provenance).map(startingFracture)
     }
 
     /// A starting bond: half the strength and half the toughness of the weaker neighbouring layer,

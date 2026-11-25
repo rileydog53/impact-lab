@@ -80,6 +80,15 @@ struct AssemblyComparison {
     deinit { solveTask?.cancel() }
 
     var scene: AssemblyScene { run.simulation.scene }
+    @ObservationIgnored private var forecastCache: (scene: AssemblyScene, value: [ContactForecast])?
+    /// When bodies will first touch on straight-line paths, before a run; empty once a run has started.
+    var contactForecasts: [ContactForecast] {
+        guard simulation.time == 0 else { return [] }
+        if let cache = forecastCache, cache.scene == scene { return cache.value }
+        let value = simulation.contactForecasts()
+        forecastCache = (scene, value)
+        return value
+    }
     var simulation: AssemblySimulation { run.simulation }
     var samples: [TraceSample] { run.samples }
     var relativeMotion: Point { frame?.relativeMotion ?? run.relativeMotion }

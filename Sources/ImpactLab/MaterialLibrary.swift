@@ -54,7 +54,11 @@ enum MaterialTarget: String, Identifiable {
         profile.apply(to: &applied, elasticOnly: elasticOnly || requiresElastic(in: part))
         let plasticity = applied.plasticity.response == .elastoplastic ? applied.plasticity : nil
         switch self {
-        case .body: profile.apply(to: &part, elasticOnly: elasticOnly || requiresElastic(in: part))
+        case .body:
+            let hadFracture = part.fracture != nil
+            profile.apply(to: &part, elasticOnly: elasticOnly || requiresElastic(in: part))
+            // Cracking stays on when it was on: the profile's sourced numbers if it has them, else a start the user edits.
+            if hadFracture { part.fracture = AssemblyPart.startingFracture(for: profile) }
         case .second:
             part.bondedLayer?.material = profile.material
             part.bondedLayer?.plasticity = plasticity
@@ -95,13 +99,13 @@ struct MaterialLibrary: View {
     }
 
     private var profiles: [MaterialProfile] {
-        MaterialProfile.references + custom + (recovered.map { [$0] } ?? [])
+        MaterialProfile.library + custom + (recovered.map { [$0] } ?? [])
     }
 
     private var filtered: [MaterialProfile] {
         let terms = query.split(whereSeparator: \.isWhitespace)
         return profiles.filter { profile in
-            let text = [profile.name, profile.provenance.family, profile.provenance.condition].joined(separator: " ")
+            let text = [profile.plainName, profile.name, profile.provenance.family, profile.provenance.condition].joined(separator: " ")
             return terms.allSatisfy { text.localizedStandardContains(String($0)) }
         }
     }
@@ -119,7 +123,7 @@ struct MaterialLibrary: View {
                     TextField("Search materials", text: $query)
                         .accessibilityIdentifier("material-search")
                     List(filtered, selection: $selectedID) { profile in
-                        Text(profile.name).tag(profile.id)
+                        Text(profile.plainName).tag(profile.id)
                     }
                     if filtered.isEmpty { Text("No matching materials").font(.caption) }
                 }.frame(width: 225)
@@ -164,35 +168,35 @@ struct MaterialLibrary: View {
 
     private func inspect(_ profile: MaterialProfile) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(profile.name).font(.headline)
+            Text(profile.plainName).font(.headline)
             Text(profile.provenance.condition).foregroundStyle(.secondary)
-            Text("E \(profile.material.young / 1e9, specifier: "%.3g") GPa · ρ \(profile.material.density, specifier: "%.5g") kg/m³ · ν \(profile.material.poisson, specifier: "%.3g")")
-            Toggle("Assign as elastic only", isOn: $elasticOnly)
-                .disabled(target.requiresElastic(in: part))
-            if elasticOnly {
-                Text("Plane-strain compressible neo-Hookean elasticity (v1).")
-                if target.requiresElastic(in: part) {
-                    Text("Bonded regions share nodes and support elastic materials only.").foregroundStyle(.secondary)
-                }
+            MaterialNumbers(material: profile.material)
+            if profile.springsBackOnly {
+                Text("Springs back to its shape (elastic). Breaks at about \(profile.listedStrength / 1e6, specifier: "%.4g") MPa if cracking is on.")
             } else {
-                Text("Plane-strain Hencky elasticity with rate-independent J2 plasticity (v1).")
-                Text("Initial equivalent flow stress \(profile.hardening.points[0].stress / 1e6, specifier: "%.4g") MPa")
-                HardeningPreview(table: profile.hardening)
-                Text("Reported yield or proof stress is used as the initial flow stress. The solver interpolates linearly and holds stress constant past the final point.")
-                    .foregroundStyle(.secondary)
+                Toggle("Springs back only (no permanent bending)", isOn: $elasticOnly)
+                    .disabled(target.requiresElastic(in: part))
+                if elasticOnly {
+                    Text("Springs back to its shape (elastic).")
+                    if target.requiresElastic(in: part) {
+                        Text("A fixed support never bends, so it springs back only.").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Metal: bends for good past a point (J2 plasticity).")
+                    Text("Bends for good at \(profile.hardening.points[0].stress / 1e6, specifier: "%.4g") MPa (yield strength)")
+                    HardeningPreview(table: profile.hardening)
+                    Text("How much harder it gets to bend as it bends further. Past the last point it stays level.")
+                        .foregroundStyle(.secondary)
+                }
             }
             if profile.provenance.isCustom {
-                Text("Custom input. The source describes the parent reference; edits are user-specified.")
+                Text("Your own copy. The source describes the original material, not your edits.")
                     .foregroundStyle(.secondary)
             }
             Text(profile.provenance.evidence)
             Link(profile.provenance.sourceName, destination: profile.provenance.source)
-            Text("Isotropic, room-temperature approximation. Fracture, rate and temperature dependence are unavailable for these profiles.")
+            Text("Same in every direction, at room temperature. Speed of loading and heat do not change it here.")
                 .foregroundStyle(.secondary)
-            if target == .body && part.fracture != nil {
-                Text("Turn off the body's illustrative fracture model before assigning a metal profile.")
-                    .foregroundStyle(assemblyAmber)
-            }
             HStack {
                 Button("Duplicate and Edit") { draft = profile.duplicate() }
                 if custom.contains(where: { $0.id == profile.id }) {
@@ -204,7 +208,7 @@ struct MaterialLibrary: View {
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!canAssign || (target == .body && part.fracture != nil))
+                .disabled(!canAssign)
             }.padding(.top, 4)
         }
         .font(.callout)
@@ -213,28 +217,28 @@ struct MaterialLibrary: View {
 
     private func editProfile(_ profile: MaterialProfile) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("Edit Custom Profile").font(.headline)
+            Text("Edit your copy").font(.headline)
             TextField("Profile name", text: Binding(get: { profile.name }, set: { draft?.material.provenance?.name = $0 }))
                 .accessibilityIdentifier("material-profile-name")
             Grid(alignment: .leading) {
                 GridRow {
-                    Text("Young’s modulus (GPa)")
-                    number("Young’s modulus (GPa)", profile.material.young / 1e9) { draft?.material.young = $0 * 1e9 }
+                    Text("Stiffness (GPa, Young’s modulus)")
+                    number("Stiffness (GPa)", profile.material.young / 1e9) { draft?.material.young = $0 * 1e9 }
                 }
                 GridRow {
-                    Text("Density (kg/m³)")
-                    number("Density (kg/m³)", profile.material.density) { draft?.material.density = $0 }
+                    Text("Weight per size (kg/m³, density)")
+                    number("Weight per size (kg/m³)", profile.material.density) { draft?.material.density = $0 }
                 }
                 GridRow {
-                    Text("Poisson ratio")
-                    number("Poisson ratio", profile.material.poisson) { draft?.material.poisson = $0 }
+                    Text("Squish sideways (Poisson ratio)")
+                    number("Squish sideways", profile.material.poisson) { draft?.material.poisson = $0 }
                 }
             }
-            Text("Flow curve").font(.headline)
+            Text("How it bends for good (flow curve)").font(.headline)
             Grid(alignment: .leading) {
                 GridRow {
-                    Text("Plastic strain (%)")
-                    Text("Flow stress (MPa)")
+                    Text("Bent for good by (%)")
+                    Text("Takes (MPa)")
                     Color.clear.frame(width: 20, height: 1)
                 }
                 ForEach(profile.hardening.points.indices, id: \.self) { index in
@@ -259,7 +263,7 @@ struct MaterialLibrary: View {
                     draft?.hardening.points.append(.init(strain: min(1, last.strain + 0.01), stress: last.stress))
                 }
             }.disabled(profile.hardening.points.count >= 32 || (profile.hardening.points.last?.strain ?? 0) > 0.999999)
-            Text("Start at zero plastic strain. Use increasing strains up to 100% and positive, nondecreasing stresses.")
+            Text("The first row is where it starts to bend for good (0%). Each row below: bent further, takes the same or more.")
                 .foregroundStyle(.secondary)
             if !profile.isValid {
                 Text(invalidReason(profile)).foregroundStyle(assemblyAmber)
@@ -287,13 +291,13 @@ struct MaterialLibrary: View {
         if profile.name.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter a profile name." }
         for i in points.indices.dropFirst() {
             if points[i].strain <= points[i - 1].strain {
-                return "Point \(i + 1): plastic strain must be larger than the point above it."
+                return "Row \(i + 1): the bend must be larger than the row above it."
             }
             if points[i].stress < points[i - 1].stress {
-                return "Point \(i + 1): flow stress must not be lower than the point above it."
+                return "Row \(i + 1): the stress must not be lower than the row above it."
             }
         }
-        return "Enter valid material values. E 0.0005–400 GPa, density 100–25,000 kg/m³, ν −0.9–0.48, flow stress > 0 to 20,000 MPa, strain up to 100%."
+        return "Check the numbers: stiffness 0.0005–400 GPa, weight per size 100–25,000 kg/m³, squish sideways −0.9–0.48, stress above 0 up to 20,000 MPa, bend up to 100%."
     }
 
     private func number(_ label: String, _ value: Double, set: @escaping (Double) -> Void) -> some View {
@@ -314,9 +318,23 @@ struct HardeningPreview: View {
                 .accessibilityLabel("Plastic strain \(100 * point.strain, specifier: "%.3g") percent")
                 .accessibilityValue("\(point.stress / 1e6, specifier: "%.4g") MPa")
         }
-        .chartXAxisLabel("Equivalent plastic strain (%)")
-        .chartYAxisLabel("Kirchhoff flow stress (MPa)")
+        .chartXAxisLabel("Bent for good by (%, plastic strain)")
+        .chartYAxisLabel("Takes (MPa, flow stress)")
         .frame(height: 155)
         .accessibilityLabel("Solver hardening table")
+    }
+}
+
+/// A material's three numbers in plain words, each with an everyday scale so the value means something.
+struct MaterialNumbers: View {
+    let material: ImpactPhysics.Material
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Stiffness \(material.young / 1e9, specifier: "%.3g") GPa · Weight per size \(material.density, specifier: "%.5g") kg/m³ · Squish sideways \(material.poisson, specifier: "%.2g")")
+                .monospacedDigit()
+            Text("For scale: stiffness rubber 0.003 · wood 12 · aluminium 69 · steel 200 GPa; weight water 1000 · aluminium 2700 · steel 7850 kg/m³.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
