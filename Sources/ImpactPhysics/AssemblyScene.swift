@@ -206,8 +206,8 @@ public struct AssemblyPart: Codable, Equatable, Identifiable, Sendable {
     public var supportConflict: String? {
         guard let support else { return nil }
         if velocity != .zero { return "A supported body starts at rest; set its velocity to zero." }
-        if fracture != nil { return "Supports cannot be combined with fracture yet (crack insertion would move the held nodes)." }
         if support.isFixture {
+            if fracture != nil { return "A fixed support is rigid and never deforms, so it cannot crack; remove fracture or clamp an edge instead." }
             if plasticity.response != .elastic || bondedLayer?.hasPlasticity == true {
                 return "A fixed support is rigid, so plasticity has no effect; set the response to Elastic."
             }

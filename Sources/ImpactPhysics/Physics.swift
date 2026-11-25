@@ -357,6 +357,11 @@ struct BodyStep: Sendable {
                     velocity: .zero, measuresVerticalStrain: former.measuresVerticalStrain,
                     elementMaterials: former.elementMaterials, velocityPerturbation: sources.map { former.velocity[$0] })
         nextPosition = sources.map { nextPosition[$0] }
+        // A held node that splits stays held on both sides of the new crack (layered plan step 8).
+        if !clamped.isEmpty {
+            let held = Set(clamped)
+            clamped = sources.indices.filter { held.contains(sources[$0]) }
+        }
         internalForce = sources.enumerated().map { i, old in internalForce[old] * (body.mass[i] / former.mass[old]) }
         appliedForce = sources.enumerated().map { i, old in appliedForce[old] * (body.mass[i] / former.mass[old]) }
         let after = balance(body, nextPosition, internalForce, appliedForce)
