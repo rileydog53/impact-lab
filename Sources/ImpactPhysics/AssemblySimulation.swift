@@ -129,7 +129,10 @@ public struct AssemblyEnergy: Sendable {
     /// Work done against artificial bulk viscosity so far (J per metre of depth): numerical dissipation, not a
     /// material property. Always 0 when the scene leaves bulk viscosity off.
     public internal(set) var viscous = 0.0
-    public var total: Double { kinetic + elastic + contact + connection + hardening + plastic + fracture + cohesive + gravitational + viscous }
+    /// Work done on the bodies by moving grips so far (J per metre of depth). The ledger total subtracts it, so the
+    /// total stays at the starting energy. Always 0 in a scene without grips.
+    public internal(set) var gripWork = 0.0
+    public var total: Double { kinetic + elastic + contact + connection + hardening + plastic + fracture + cohesive + gravitational + viscous - gripWork }
 }
 
 public struct FragmentContactReading: Sendable {
@@ -184,6 +187,8 @@ public struct AssemblySimulation: Sendable {
     /// Largest gravitational work released so far on accepted steps (J/m): how far the potential
     /// energy has dropped below its starting value. Part of the energy scale in `EnergyAcceptance`.
     public private(set) var peakGravitationalRelease = 0.0
+    /// Largest work grips have done on the bodies so far (J/m); 0 without grips.
+    public private(set) var peakGripWork = 0.0
     /// Largest fraction of critical damping that artificial bulk viscosity reached in any element on an accepted step.
     public private(set) var peakViscousDamping = 0.0
     package private(set) var rejectedEnergy: AssemblyEnergy?
@@ -258,6 +263,7 @@ public struct AssemblySimulation: Sendable {
     private var fractures: [MaterialFracture?]
     private var contactWorkspaces: [TriangleContact.Workspace]
     private let hasFracture: Bool
+    private let hasGrips: Bool
     private let interbodyStiffnessScale: Double
     private let insertionEnabled: Bool
     private let surfaces: [ContactSurface]
@@ -413,7 +419,15 @@ public struct AssemblySimulation: Sendable {
                 step.fixture = support.isFixture
                 if !support.isFixture { step.clamped = part.clampedNodes(body, support) }
             }
+            if let grip = part.grip {
+                let nodes = part.clampedNodes(body, grip.edge.support)
+                step.grip = GripState(nodes: nodes, start: nodes.map { body.position[$0] })
+            }
             return step
+        }
+        hasGrips = scene.parts.contains { $0.grip != nil }
+        for (part, step) in zip(scene.parts, steps) where (step.grip?.nodes.count ?? 2) < 2 {
+            throw AssemblyError.clampTooFew(part.name)
         }
         for (part, step) in zip(scene.parts, steps) where part.shape == .outline {
             if let support = part.support, !support.isFixture, step.clamped.count < 2 { throw AssemblyError.clampTooFew(part.name) }
@@ -568,6 +582,11 @@ public struct AssemblySimulation: Sendable {
 
     /// Force each support exerts on its body, N per metre of depth; zero for free bodies.
     public func supportReaction(_ index: Int) -> Point { steps[index].supportReaction }
+    /// Force a moving grip exerts on body `index` (N per metre of depth), zero for a body without a grip.
+    public func gripReaction(_ index: Int) -> Point { steps[index].gripReaction }
+    /// How far the grip on body `index` has moved from its start (m), zero for a body without a grip.
+    public func gripDisplacement(_ index: Int) -> Point { scene.parts[index].grip?.motion(at: time).displacement ?? .zero }
+    package func internalForce(_ index: Int) -> [Point] { steps[index].internalForce }
     public func isSupported(_ index: Int) -> Bool { steps[index].fixture || !steps[index].clamped.isEmpty }
 
     private static func kinetic(_ body: Body) -> Double {
@@ -781,6 +800,13 @@ public struct AssemblySimulation: Sendable {
         var locations: [SIMD2<Int>: ContactLocation] = [:]
         var trial = AssemblyEnergy(kinetic: 0, elastic: 0, contact: 0, connection: 0, hardening: 0, plastic: 0, fracture: 0)
         work?.start()
+        if hasGrips {
+            for (i, part) in scene.parts.enumerated() {
+                guard let grip = part.grip else { continue }
+                steps[i].grip!.before = grip.motion(at: time)
+                steps[i].grip!.after = grip.motion(at: time + dt)
+            }
+        }
         if !preparationLanes.isEmpty {
             let stepSize = dt
             let lanes = preparationLanes
@@ -997,6 +1023,7 @@ public struct AssemblySimulation: Sendable {
                 return false
             }
         }
+        if hasGrips { trial.gripWork = steps.reduce(energy.gripWork) { $0 + ($1.grip?.stepWork ?? 0) } }
         if hasFracture {
             for step in steps {
                 for i in step.body.mass.indices {
@@ -1004,7 +1031,8 @@ public struct AssemblySimulation: Sendable {
                 }
             }
             guard EnergyAcceptance.accepts(residual: trial.total - initialEnergy, initialEnergy: initialEnergy,
-                                           gravitationalRelease: peakGravitationalRelease) else {
+                                           gravitationalRelease: peakGravitationalRelease,
+                                           gripWork: max(peakGripWork, trial.gripWork)) else {
                 rejectedEnergy = trial
                 rejectedPenetration = penetration
                 rejectedContactDomains = deepest
@@ -1017,6 +1045,7 @@ public struct AssemblySimulation: Sendable {
         fractures = nextFractures
         maxima = nextMaxima
         peakGravitationalRelease = max(peakGravitationalRelease, -trial.gravitational)
+        peakGripWork = max(peakGripWork, trial.gripWork)
         peakViscousDamping = max(peakViscousDamping, trialViscousDamping)
         time += dt
         if !fragmentLoads.isEmpty || !openFragmentContacts.isEmpty { recordFragmentLoads(fragmentLoads) }
