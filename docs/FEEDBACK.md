@@ -114,7 +114,7 @@ Merged from sections 56, 61, 62, 68, 71, 80 and 91.
 - **The message he saw (as he read it out):** "Overlap, contact overlap by more than 10% of an edge. Try slower impact or a different mesh."
 - **Block level:** Blocking. It stopped run after run, at every speed he tried.
 - **Change type:** Physics/solver (likely).
-- **Note:** a separate read-only investigation of this failure has been started.
+- **Code investigation:** pending. A separate read-only look at this failure is running; its findings go here when they come in.
 
 ### 1. A strong plate bends instead of punching through the enclosure and panel
 
