@@ -16,8 +16,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # One job: build the Swift package once, then run every check as its own step on the same runner.
-  # Each check step uses if: always() so one failure does not hide the rest; any failure fails the job.
+  # Picks where the full build runs: Joseph's Mac (label impactlab-mac) when it is online, else GitHub-hosted macOS.
+  # Fork PRs always go to GitHub (they get no secrets and never touch the Mac). Repo variable IMPACTLAB_MAC=off forces GitHub.
+  where:
+    name: pick runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+    steps:
+      - id: pick
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.STATUS_TOKEN }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          FORCE_MAC: ${{ inputs.mac || false }}
+          SWITCH: ${{ vars.IMPACTLAB_MAC }}
+        run: |
+          hosted='"macos-15"'; mac='["self-hosted","impactlab-mac"]'; pick=$hosted; why="default"
+          if [ "$FORK" = true ]; then why="fork PR"
+          elif [ "$FORCE_MAC" = true ]; then pick=$mac; why="manual run asked for the Mac"
+          elif [ "$SWITCH" = off ]; then why="IMPACTLAB_MAC=off"
+          elif [ -z "$GH_TOKEN" ]; then why="no STATUS_TOKEN secret"
+          else
+            status=$(gh api "repos/${{ github.repository }}/actions/runners" --jq '.runners[]|select(.name=="impactlab-mac")|.status' 2>/dev/null || echo error)
+            if [ "$status" = online ]; then pick=$mac; why="Mac online"; else why="Mac status: ${status:-not found}"; fi
+          fi
+          echo "runs_on=$pick" >> "$GITHUB_OUTPUT"
+          echo "Runner: $pick ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # One job: build the Swift package once, then run every check on the same runner.
   ci:
     # One run's checks at a time across the whole repo (Joseph, 2026-11-25). Other PRs and pushes wait
     # their turn in order (queue: max, up to 100 waiting). The workflow-level group above still cancels
@@ -26,9 +54,8 @@ jobs:
       group: ci-one-at-a-time
       queue: max
     name: build and checks
-    # Joseph's Mac (label impactlab-mac) takes pushes and PRs from this repo's own branches,
-    # only while the repo variable IMPACTLAB_MAC is 'on'. Fork PRs and everything else stay on GitHub-hosted macOS.
-    runs-on: ${{ ((inputs.mac || vars.IMPACTLAB_MAC == 'on') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","impactlab-mac"]') || 'macos-15' }}
+    needs: where
+    runs-on: ${{ fromJSON(needs.where.outputs.runs_on) }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
