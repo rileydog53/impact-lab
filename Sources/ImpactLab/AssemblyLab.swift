@@ -360,40 +360,26 @@ struct AssemblyLab: View {
                 experiment.linkPlacement = nil
                 library = true
             }
-            Button("Scenarios", systemImage: "flask") {
-                experiment.pause()
-                experiment.placingGauge = false
-                experiment.linkPlacement = nil
-                scenarioLibrary = true
-            }
+            // The Scenarios button is hidden (2026-11-26): its solver tests use the simplified soft material, which
+            // Joseph asked not to see. They still run in the automatic checks and the app's scenario smoke test.
             .disabled(experiment.solving)
             Menu("New / Examples", systemImage: "doc.badge.plus") {
                 Button("Blank Assembly") { loadPreset(AssemblyScene(), title: "Untitled assembly") }
-                Button("Enclosure Example") { loadPreset(.enclosureExample(), title: "Enclosure example") }
-                Button("Bending Fracture Example") {
-                    replacement = Replacement(scene: .bendingFractureExample(), title: "Bending fracture example",
-                                              field: .damage, signal: 3)
-                    applyPendingReplacement()
+                Section("Ready-made showcases (real materials)") {
+                    ForEach(ShowcasePreset.allCases) { preset in
+                        Button(preset.rawValue) {
+                            do {
+                                replacement = Replacement(scene: try preset.scene(), title: preset.rawValue)
+                                applyPendingReplacement()
+                            } catch { experiment.error = error.localizedDescription }
+                        }
+                        .help(preset.description)
+                    }
                 }
                 Button("Metal Impact Example") {
                     replacement = Replacement(scene: .metalImpactExample(), title: "Metal impact example",
                                               field: .plastic, signal: 7)
                     applyPendingReplacement()
-                }
-                Button("Bonded Wave Example") {
-                    replacement = Replacement(scene: .bondedWaveExample(), title: "Bonded wave example", field: .pressure)
-                    applyPendingReplacement()
-                }
-                Section("Lab examples (supports, gravity, preload)") {
-                    ForEach(LabExample.allCases, id: \.self) { example in
-                        Button(example.rawValue) {
-                            do {
-                                replacement = Replacement(scene: try example.scene(), title: example.rawValue, field: .stress)
-                                applyPendingReplacement()
-                            } catch { experiment.error = error.localizedDescription }
-                        }
-                        .help(example.description)
-                    }
                 }
                 Section("Layered examples (laminates)") {
                     ForEach(LayeredExample.allCases, id: \.self) { example in

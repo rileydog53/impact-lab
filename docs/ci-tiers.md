@@ -13,6 +13,6 @@ When unsure, the job uses the full suite. Checks are listed in `scripts/ci-check
 ## Joseph's Mac runner
 - Label `impactlab-mac`, installed in `~/actions-runner`, launchd agent `com.impactlab.runner` (not started at login).
 - Used only for this repo's own branches, and only while repo variable `IMPACTLAB_MAC` is `on` (or a manual run with `mac: true`).
-- Runs 3 checks at a time; GitHub-hosted runs 1 at a time.
+- Takes a run only when free; a busy or offline Mac sends the run to GitHub-hosted macOS (no repo-wide queue). Runs 3 checks at a time; GitHub-hosted runs 1 at a time.
 - Keeps one SwiftPM build cache in `~/actions-runner/spm-cache`, wiped by the after-job hook only past 6 GB. The disk rule targets unmanaged clutter, so don't delete this cache.
 - Stop: `launchctl bootout gui/$(id -u)/com.impactlab.runner`

@@ -33,7 +33,7 @@ The seven ready-made showcases:
 - **Perforated copper block**: a copper block with nine holes is crushed from above. Watch the holes squash.
 - **First crack, slow motion**: a glass plate is hit by a steel ball. Made for trying slow motion on the moment the first crack appears.
 
-Under **Controlled experiments** in the same window are simpler, adjustable setups. They load the same way, with **Load experiment**.
+The same showcases are listed under **New / Examples**, and the app opens on the notched acrylic beam. The older test setups made of a simplified soft material are no longer shown in the app. They still run in the automatic checks.
 
 There are also three showcase files saved in the `docs/showcase` folder. To use one, click **Open** (or press Command-O), go to `docs/showcase`, and pick a `.json` file. The [showcase notes](showcase/README.md) describe what each one does.
 

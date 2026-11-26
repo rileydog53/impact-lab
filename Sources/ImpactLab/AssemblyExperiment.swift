@@ -43,7 +43,7 @@ struct AssemblyComparison {
     private var savedScene: AssemblyScene
     private var undoEdits: [Edit] = []
     private var redoEdits: [Edit] = []
-    private(set) var title = "Enclosure example"
+    private(set) var title = AssemblyExperiment.startup.rawValue
     private(set) var fileURL: URL?
     var previewParts: [UUID: AssemblyPart] = [:]
     var previewPart: AssemblyPart? { selectedPart.flatMap { previewParts[$0] } }
@@ -69,8 +69,11 @@ struct AssemblyComparison {
     @ObservationIgnored private var runEstimate: RunCostEstimate?
     private(set) var cameraRevision = 0
 
+    /// The scene the app opens with: a real-material showcase (Joseph, 2026-11-26: no soft demo material in view).
+    static let startup = ShowcasePreset.notchedAcrylicBeam
+
     init() {
-        let initial = AssemblyScene.enclosureExample()
+        let initial = (try? Self.startup.scene()) ?? AssemblyScene()
         let initialRun = try! AssemblyRun(initial)
         run = initialRun
         savedScene = initial

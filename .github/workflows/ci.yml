@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Picks where the full build runs: Joseph's Mac (label impactlab-mac) when it is online, else GitHub-hosted macOS.
+  # Picks where the full build runs: Joseph's Mac (label impactlab-mac) when it is online and free, else GitHub-hosted macOS.
   # Fork PRs always go to GitHub (they get no secrets and never touch the Mac). Repo variable IMPACTLAB_MAC=off forces GitHub.
   where:
     name: pick runner
@@ -39,8 +39,9 @@ jobs:
           elif [ "$SWITCH" = off ]; then why="IMPACTLAB_MAC=off"
           elif [ -z "$GH_TOKEN" ]; then why="no STATUS_TOKEN secret"
           else
-            status=$(gh api "repos/${{ github.repository }}/actions/runners" --jq '.runners[]|select(.name=="impactlab-mac")|.status' 2>/dev/null || echo error)
-            if [ "$status" = online ]; then pick=$mac; why="Mac online"; else why="Mac status: ${status:-not found}"; fi
+            status=$(gh api "repos/${{ github.repository }}/actions/runners" --jq '.runners[]|select(.name=="impactlab-mac")|"\(.status) \(.busy)"' 2>/dev/null || echo error)
+            # Free Mac takes the run; a busy or offline Mac sends it to GitHub at once instead of queueing.
+            if [ "$status" = "online false" ]; then pick=$mac; why="Mac free"; else why="Mac: ${status:-not found}"; fi
           fi
           echo "runs_on=$pick" >> "$GITHUB_OUTPUT"
           echo "Runner: $pick ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -50,9 +51,6 @@ jobs:
     # One run's checks at a time across the whole repo (Joseph, 2026-11-25). Other PRs and pushes wait
     # their turn in order (queue: max, up to 100 waiting). The workflow-level group above still cancels
     # an older run when the same PR or branch gets a newer push.
-    concurrency:
-      group: ci-one-at-a-time
-      queue: max
     name: build and checks
     needs: where
     runs-on: ${{ fromJSON(needs.where.outputs.runs_on) }}

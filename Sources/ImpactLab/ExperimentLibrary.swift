@@ -18,8 +18,8 @@ struct ExperimentLibrary: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Ready-made showcases").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     showcases
-                    Text("Controlled experiments").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    presets
+                    // Controlled experiments are hidden (2026-11-26): they use the simplified soft material. They still
+                    // run in the automatic checks. `presets` stays so they can come back once rebuilt with real materials.
                 }
                 .frame(width: 215)
                 if let showcase { showcaseDetail(showcase) } else { presetDetail }
