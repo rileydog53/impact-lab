@@ -21,10 +21,34 @@ jobs:
   where:
     name: pick runner
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     outputs:
       runs_on: ${{ steps.pick.outputs.runs_on }}
+      tier: ${{ steps.tier.outputs.tier }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Choose test tier
+        id: tier
+        # docs: only docs/text changed -> no build. quick: only the app UI (Sources/ImpactLab, which no check depends on)
+        # plus docs -> build + quick checks. Anything else, and manual runs -> full suite.
+        # PRs: merge commit vs its first parent (current main; base.sha can be stale once main moves).
+        # Pushes to main: everything since the previous main commit, so docs-only merges skip the rerun.
+        shell: bash
+        run: |
+          tier=full; files=""
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            files=$(git diff --name-only HEAD^1 HEAD)
+          elif [ "${{ github.event_name }}" = push ] && ! echo "${{ github.event.before }}" | grep -q '^0*$'; then
+            files=$(git diff --name-only "${{ github.event.before }}" HEAD) || files="(diff failed)"
+          fi
+          if [ -n "$files" ]; then
+            nondoc=$(echo "$files" | grep -Ev '^(docs/|research/|reports/)|\.md$|^LICENSE' || true)
+            if [ -z "$nondoc" ]; then tier=docs
+            elif [ -z "$(echo "$nondoc" | grep -v '^Sources/ImpactLab/' || true)" ]; then tier=quick; fi
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"; echo "Test tier: $tier" | tee -a "$GITHUB_STEP_SUMMARY"
       - id: pick
         shell: bash
         env:
@@ -46,43 +70,31 @@ jobs:
           echo "runs_on=$pick" >> "$GITHUB_OUTPUT"
           echo "Runner: $pick ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # One job: build the Swift package once, then run every check on the same runner.
-  ci:
-    # One run's checks at a time across the whole repo (Joseph, 2026-11-25). Other PRs and pushes wait
-    # their turn in order (queue: max, up to 100 waiting). The workflow-level group above still cancels
-    # an older run when the same PR or branch gets a newer push.
-    name: build and checks
+  # The checks split into 3 shards that run side by side (balanced in scripts/ci-checks.sh).
+  # Shard 1 goes to Joseph's Mac when it is free; the others always use GitHub-hosted macOS.
+  checks:
+    name: checks shard ${{ matrix.shard }}
     needs: where
-    runs-on: ${{ fromJSON(needs.where.outputs.runs_on) }}
+    if: needs.where.outputs.tier != 'docs'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    runs-on: ${{ matrix.shard == 1 && fromJSON(needs.where.outputs.runs_on) || 'macos-15' }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Choose test tier
-        id: tier
-        # docs: only docs/text changed -> no build. quick: only the app UI (Sources/ImpactLab, which no check depends on)
-        # plus docs -> build + quick checks. Anything else, every push to main and manual runs -> full suite.
-        shell: bash
-        run: |
-          tier=full
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            # Merge commit vs its first parent (current main): base.sha can be stale once main moves.
-            files=$(git diff --name-only HEAD^1 HEAD)
-            nondoc=$(echo "$files" | grep -Ev '^(docs/|research/|reports/)|\.md$|^LICENSE' || true)
-            if [ -z "$nondoc" ]; then tier=docs
-            elif [ -z "$(echo "$nondoc" | grep -v '^Sources/ImpactLab/' || true)" ]; then tier=quick; fi
-          fi
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"; echo "Test tier: $tier" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/cache@v4
         # The Mac has little disk; skip the build cache there.
-        if: runner.environment == 'github-hosted' && steps.tier.outputs.tier != 'docs'
+        if: runner.environment == 'github-hosted'
         with:
           path: .build
           key: spm-build-${{ runner.os }}-${{ hashFiles('Package.swift', 'Sources/**') }}
           restore-keys: spm-build-${{ runner.os }}-
       - name: Keep build cache between Mac jobs
-        if: runner.environment != 'github-hosted' && steps.tier.outputs.tier != 'docs'
+        if: runner.environment != 'github-hosted'
         run: |
           mkdir -p "$HOME/actions-runner/spm-cache"
           rm -rf .build && ln -s "$HOME/actions-runner/spm-cache" .build
@@ -90,13 +102,11 @@ jobs:
         run: swift --version
       - name: Build (release)
         id: build
-        if: steps.tier.outputs.tier != 'docs'
         # shell: bash turns on pipefail, so a failed compile fails this step instead of passing through tee.
         shell: bash
         run: swift build -c release 2>&1 | tee build.log
       - name: Prepare tools
         id: prep
-        if: steps.tier.outputs.tier != 'docs'
         # ImpactRegression also goes where tests/regression/run.py looks for it, so --skip-build works.
         run: |
           mkdir -p ci-out .build-regression/release
@@ -108,7 +118,9 @@ jobs:
         shell: bash
         env:
           # Joseph's Mac (10 cores, passively cooled): 3 at a time. GitHub-hosted: one at a time, as before.
-          CI_TIER: ${{ steps.tier.outputs.tier }}
+          CI_TIER: ${{ needs.where.outputs.tier }}
+          CI_SHARDS: 3
+          CI_SHARD: ${{ matrix.shard }}
           CI_PARALLEL: ${{ runner.environment == 'github-hosted' && '1' || '3' }}
         run: scripts/ci-checks.sh
       - name: Timings
@@ -117,10 +129,23 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: logs
+          name: logs-shard-${{ matrix.shard }}
           path: |
             build.log
             ci-out/
             **/*.csv
             !.build/**
           if-no-files-found: ignore
+
+  # One summary check with the old name, green when every shard passed (or docs-only skipped them).
+  ci:
+    name: build and checks
+    needs: [where, checks]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: |
+          echo "Tier: ${{ needs.where.outputs.tier }}, shards: ${{ needs.checks.result }}"
+          [ "${{ needs.where.result }}" = success ] || exit 1
+          case "${{ needs.checks.result }}" in success|skipped) exit 0;; *) exit 1;; esac
