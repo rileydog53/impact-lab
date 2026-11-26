@@ -38,6 +38,10 @@ package struct J2Model: Sendable {
     let yieldStress: Double?
     let hardening: Double
     private let table: HardeningTable?
+    /// True for a valid table (first row at zero strain, stresses never falling). Then a trial stress at or
+    /// below the first row can never yield and an element that never yielded stores no hardening energy, so
+    /// both are answered without walking the table. Same results to the bit, only fewer operations.
+    private let tableShortcuts: Bool
 
     package init(material: Material, yieldStress: Double? = nil, hardening: Double = 0) {
         shear = material.shear
@@ -45,6 +49,7 @@ package struct J2Model: Sendable {
         self.yieldStress = yieldStress
         self.hardening = hardening
         table = nil
+        tableShortcuts = false
     }
 
     package init(material: Material, table: HardeningTable) {
@@ -53,6 +58,7 @@ package struct J2Model: Sendable {
         yieldStress = table.points[0].stress
         hardening = 0
         self.table = table
+        tableShortcuts = table.isValid
     }
 
     /// Plastic work per reference volume (J/m³) at accumulated equivalent plastic strain `alpha`, using the
@@ -69,7 +75,10 @@ package struct J2Model: Sendable {
     }
 
     private func plasticIncrement(trial: Double, strain: Double) -> Double {
-        if let table { return table.plasticIncrement(trial: trial, oldStrain: strain, threeShear: 3 * shear) }
+        if let table {
+            if tableShortcuts && trial <= table.points[0].stress { return 0 }
+            return table.plasticIncrement(trial: trial, oldStrain: strain, threeShear: 3 * shear)
+        }
         guard let yieldStress, trial > yieldStress + hardening * strain else { return 0 }
         return (trial - yieldStress - hardening * strain) / (3 * shear + hardening)
     }
@@ -131,7 +140,8 @@ package struct J2Model: Sendable {
         else { return nil }
         return J2Response(history: history, piolaX: columnX, piolaY: columnY, cauchyZZ: tau.zz / jacobian,
                           equivalentStress: scale * trialStress, elasticEnergy: elastic,
-                          hardeningEnergy: table?.storedEnergy(at: alpha) ?? 0.5 * hardening * alpha * alpha,
+                          hardeningEnergy: table.map { tableShortcuts && alpha == 0 ? 0 : $0.storedEnergy(at: alpha) }
+                              ?? 0.5 * hardening * alpha * alpha,
                           dissipation: (yieldStress ?? 0) * alpha)
     }
 }

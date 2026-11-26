@@ -898,7 +898,9 @@ public struct Simulation: Sendable {
         // Read only the two needed fields per element. Copying a whole `Material`
         // (its optional provenance holds a URL) in this loop dominated the step time.
         let materials = body.elementMaterials
-        for (i, e) in body.mesh.elements.enumerated() {
+        let elements = body.mesh.elements
+        for i in elements.indices {
+            let e = elements[i]
             let started = timing.mark()
             let mu, lambda: Double
             if let materials {
