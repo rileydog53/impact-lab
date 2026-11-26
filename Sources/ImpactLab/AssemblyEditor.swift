@@ -1134,6 +1134,10 @@ struct AssemblyEditor: View {
                 Toggle("Smooth out shock waves (artificial bulk viscosity)", isOn: Binding(get: { experiment.scene.bulkViscosity != nil }, set: { on in
                     experiment.edit(on ? "Turn On Bulk Viscosity" : "Turn Off Bulk Viscosity") { $0.bulkViscosity = on ? .standard : nil }
                 })).toggleStyle(.checkbox).disabled(!experiment.canEdit).settingInfo("Smooth out shock waves")
+                if let warning = experiment.scene.smoothingAdvisory {
+                    Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(assemblyAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let viscosity = experiment.scene.bulkViscosity {
                     numeric("Gentle smoothing (linear coefficient b1)", value: viscosity.linear, range: BulkViscosity.linearRange, scale: 1) { value in
                         experiment.edit { $0.bulkViscosity?.linear = value }

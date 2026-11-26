@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 // Mesh-dependent size limits, the fracture on/off status of a body, and advisory (never blocking) resolution notes.
 
@@ -130,8 +131,38 @@ extension AssemblyScene {
 
     /// Scene-wide advisory notes. Never blocking.
     public var sceneAdvisories: [String] {
-        guard parts.count > Self.advisoryParts else { return [] }
-        return ["Note: \(parts.count) bodies. Every pair is checked for touching (\((parts.count * (parts.count - 1) / 2).formatted()) pairs), so the run gets slower quickly as bodies are added (see the time estimate). The old limit was \(Self.advisoryParts); up to \(Self.maximumParts) are accepted."]
+        var notes: [String] = []
+        if parts.count > Self.advisoryParts {
+            notes.append("Note: \(parts.count) bodies. Every pair is checked for touching (\((parts.count * (parts.count - 1) / 2).formatted()) pairs), so the run gets slower quickly as bodies are added (see the time estimate). The old limit was \(Self.advisoryParts); up to \(Self.maximumParts) are accepted.")
+        }
+        if let smoothing = smoothingAdvisory { notes.append(smoothing) }
+        return notes
+    }
+
+    /// Warns before a run when "Strong smoothing for hard hits" (quadratic bulk viscosity) is likely to stop it.
+    /// Read-only estimate; the solver and its guard are unchanged. While a triangle is squashed at the hit speed v,
+    /// the smoothing's damping share is about b2² · v / c (BulkViscosity.damping with l·|ε̇v| ≈ v), where c = √(E/ρ)
+    /// is the material's sound speed. The run stops once the step must shrink by more than a fifth, which is a
+    /// damping share above about 0.22 (stepFactor 0.8). The note appears from 0.2: rubber (c ≈ 57 m/s) from about
+    /// 8 m/s at b2 = 1.2, the old soft material (c ≈ 32 m/s) from about 4.4 m/s, real metals and glass
+    /// (c ≈ 5 km/s) never below 150 m/s.
+    public var smoothingAdvisory: String? {
+        guard let viscosity = bulkViscosity, viscosity.quadratic > 0, parts.count > 1 else { return nil }
+        let speeds = parts.map { $0.support == .fixed ? Point.zero : $0.velocity }
+        var closing = 0.0
+        for i in speeds.indices { for j in speeds.indices where j > i { closing = max(closing, simd_length(speeds[i] - speeds[j])) } }
+        guard closing > 0 else { return nil }
+        var slowest: (name: String, speed: Double)?
+        for part in parts where part.support != .fixed {
+            let materials = [part.material, part.bondedLayer?.material, part.bondedLayer?.third?.material].compactMap { $0 }
+            for material in materials where material.young > 0 && material.density > 0 {
+                let c = (material.young / material.density).squareRoot()
+                if c < (slowest?.speed ?? .infinity) { slowest = (part.name, c) }
+            }
+        }
+        guard let slowest, viscosity.quadratic * viscosity.quadratic * closing / slowest.speed > 0.2 else { return nil }
+        return String(format: "Note: sound moves through %@ at only about %.0f m/s, and bodies here meet at up to %.0f m/s. With “Smooth out shock waves” on, the run will probably stop when they touch (“needs a shorter step”). To avoid it, turn the smoothing off, lower “Strong smoothing for hard hits”, or slow the hit.",
+                      slowest.name, slowest.speed, closing)
     }
 
     public struct Limit: Equatable, Sendable {
