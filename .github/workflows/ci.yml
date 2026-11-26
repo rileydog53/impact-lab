@@ -67,7 +67,8 @@ jobs:
         run: |
           tier=full
           if [ "${{ github.event_name }}" = pull_request ]; then
-            files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
+            # Merge commit vs its first parent (current main): base.sha can be stale once main moves.
+            files=$(git diff --name-only HEAD^1 HEAD)
             nondoc=$(echo "$files" | grep -Ev '^(docs/|research/|reports/)|\.md$|^LICENSE' || true)
             if [ -z "$nondoc" ]; then tier=docs
             elif [ -z "$(echo "$nondoc" | grep -v '^Sources/ImpactLab/' || true)" ]; then tier=quick; fi
