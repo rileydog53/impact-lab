@@ -1,0 +1,97 @@
+{
+ "description": "Rebuilt from Joseph's feedback (finding 1 and 26, 2026-11-25); his saved file was not found. A plate inside a hollow enclosure moves left at 20 m/s into the carbon-skinned aluminium panel, clamped at its base. The spring he used between plate and enclosure is left out. AS HE BUILT IT: the plate at the old editor maximum (4 MPa, 2500 kg/m3, rubber-soft) and the enclosure on the old default demo material with the lowest crack resistance (0.5 J/m2).",
+ "duration": 0.0004,
+ "meshResolution": "fine",
+ "bulkViscosity": true,
+ "monitor": "Hollow Enclosure 2",
+ "parts": [
+  {
+   "name": "Carbon-skinned aluminium panel",
+   "size": [
+    0.012,
+    0.1
+   ],
+   "center": [
+    0,
+    0
+   ],
+   "material": {
+    "profile": "aluminum-6061-t6"
+   },
+   "fracture": {
+    "strength": 2500000000.0,
+    "energy": 1300
+   },
+   "bondedLayer": {
+    "interfaceFraction": 0.8333,
+    "material": {
+     "young": 70000000000.0,
+     "density": 1600,
+     "poisson": 0.1
+    },
+    "bond": {
+     "strength": 31000000.0,
+     "energy": 466.5,
+     "energySource": {
+      "status": "estimated",
+      "citation": "Structural epoxy G_IC 466.5 J/m\u00b2, average of the two closest of 250 (Betamate 73455, Martiny et al. 2013), 683 (round-robin TDCB on aluminium, Blackman et al. 2003) and 1250 J/m\u00b2 (ESP 110, Martiny et al. 2013). Strength 31 MPa is 3M DP460 overlap shear on etched aluminium, used as a stand-in for opening strength.",
+      "url": "https://core.ac.uk/download/77002118.pdf",
+      "caution": "Experimental; epoxy toughness varies widely with formulation and bond thickness."
+     }
+    },
+    "fracture": {
+     "strength": 100000000.0,
+     "energy": 2150
+    }
+   },
+   "support": "clampBottom"
+  },
+  {
+   "name": "Hollow Enclosure 2",
+   "shape": "enclosure",
+   "size": [
+    0.06,
+    0.04
+   ],
+   "wall": 0.005,
+   "center": [
+    0.037,
+    0
+   ],
+   "velocity": [
+    -20,
+    0
+   ],
+   "material": {
+    "young": 1000000.0,
+    "density": 1000,
+    "poisson": 0.12
+   },
+   "fracture": {
+    "strengthFraction": 0.03,
+    "energy": 0.5
+   },
+   "refinement": "x4"
+  },
+  {
+   "name": "Rectangular Plate 3",
+   "size": [
+    0.04,
+    0.02
+   ],
+   "center": [
+    0.037,
+    0
+   ],
+   "velocity": [
+    -20,
+    0
+   ],
+   "material": {
+    "young": 4000000.0,
+    "density": 2500,
+    "poisson": 0.16
+   }
+  }
+ ]
+}

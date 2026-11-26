@@ -116,7 +116,7 @@ public struct MaterialProfile: Codable, Equatable, Identifiable, Sendable {
 
     public func apply(to part: inout AssemblyPart, elasticOnly: Bool = false) {
         part.material = material
-        part.plasticity = ImpactPlasticity(response: elasticOnly ? .elastic : .elastoplastic)
+        part.plasticity = ImpactPlasticity(response: elasticOnly || springsBackOnly ? .elastic : .elastoplastic)
         part.plasticity.table = hardening
     }
 

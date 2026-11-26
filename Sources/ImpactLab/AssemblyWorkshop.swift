@@ -27,34 +27,35 @@ enum WorkshopGeometry: String, CaseIterable {
 
     func makePart(number: Int) -> AssemblyPart {
         let name = "\(rawValue) \(number)"
+        var part: AssemblyPart
         switch self {
         case .block:
-            return AssemblyPart(name, size: Point(0.060, 0.050))
+            part = AssemblyPart(name, size: Point(0.060, 0.050))
         case .plate:
-            return AssemblyPart(name, size: Point(0.110, 0.025))
+            part = AssemblyPart(name, size: Point(0.110, 0.025))
         case .round:
-            return AssemblyPart(name, shape: .round, size: Point(0.050, 0.050))
+            part = AssemblyPart(name, shape: .round, size: Point(0.050, 0.050))
         case .enclosure:
-            return AssemblyPart(name, shape: .enclosure, size: Point(0.130, 0.100))
+            part = AssemblyPart(name, shape: .enclosure, size: Point(0.130, 0.100))
         case .layered:
-            var plate = AssemblyPart(name, size: Point(0.040, 0.110))
-            plate.bondedLayer = AssemblyPart.BondedLayer()
-            return plate
+            part = AssemblyPart(name, size: Point(0.040, 0.110))
         case .support:
-            var support = AssemblyPart(name, size: Point(0.045, 0.060))
-            AssemblyMaterialProfile.stiff.apply(to: &support)
-            return support
+            part = AssemblyPart(name, size: Point(0.045, 0.060))
         case .bench:
-            var bench = AssemblyPart("Lab bench \(number)", size: Point(0.400, 0.030))
-            AssemblyMaterialProfile.stiff.apply(to: &bench)
-            bench.support = .fixed
-            return bench
+            part = AssemblyPart("Lab bench \(number)", size: Point(0.400, 0.030))
+            part.support = .fixed
         case .roller:
-            var roller = AssemblyPart("Roller support \(number)", shape: .round, size: Point(0.025, 0.025))
-            AssemblyMaterialProfile.stiff.apply(to: &roller)
-            roller.support = .fixed
-            return roller
+            part = AssemblyPart("Roller support \(number)", shape: .round, size: Point(0.025, 0.025))
+            part.support = .fixed
         }
+        // Every new body starts as a real material (Joseph, 2026-11-25), not the old rubber-soft demo values.
+        if self == .support {
+            RealMaterialDefaults.support.apply(to: &part)
+        } else {
+            RealMaterialDefaults.apply(to: &part)
+        }
+        if self == .layered { part.bondedLayer = .realDefault() }
+        return part
     }
 }
 

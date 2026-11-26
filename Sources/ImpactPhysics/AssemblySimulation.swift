@@ -765,6 +765,27 @@ public struct AssemblySimulation: Sendable {
         }
     }
 
+    /// The plain-words stop message for a contact overlap, naming the two bodies. Reporting only: it is built
+    /// after the step has already been refused and changes nothing in the calculation.
+    private func overlapFailure(deepest: SIMD4<Int>?) -> String {
+        var pair: (Int, Int)?
+        if let deepest { pair = (deepest.x, deepest.z) }
+        if pair == nil {
+            var worst = 0.0
+            for candidate in pairs {
+                let pa = steps[candidate.a].nextPosition, pb = steps[candidate.b].nextPosition
+                let value = BoundaryContact.relativePenetration(
+                    surfaces[candidate.a], at: pa, bounds: ContactBounds(surface: surfaces[candidate.a], position: pa),
+                    surfaces[candidate.b], at: pb, bounds: ContactBounds(surface: surfaces[candidate.b], position: pb))
+                if value > worst { worst = value; pair = (candidate.a, candidate.b) }
+            }
+        }
+        let names = pair.map { a, b in
+            a == b ? "Two pieces of \(scene.parts[a].name)" : "\(scene.parts[a].name) and \(scene.parts[b].name)"
+        } ?? "Two bodies"
+        return "Stopped: \(names) pushed into each other deeper than the app can trust (more than 10% of a triangle edge, contact overlap). This usually happens when one body is far softer or far more coarsely meshed than the one it hits. Try a real material for both, a finer mesh, or a slower speed."
+    }
+
     private mutating func intactContact(energy: inout AssemblyEnergy, penetration: inout Double, depth: inout Double,
                                         active: inout [SIMD2<Int>], normal: inout [SIMD2<Int>: Double], locations: inout [SIMD2<Int>: ContactLocation]) {
         let bounds = steps.indices.map { ContactBounds(surface: surfaces[$0], position: steps[$0].nextPosition) }
@@ -950,7 +971,7 @@ public struct AssemblySimulation: Sendable {
                 rejectedPenetration = penetration
                 rejectedContactDomains = deepest
                 rejectedContactEnergy = trial.contact
-                failure = "Contact overlapped by more than 10% of an edge. Try a slower impact or a different mesh."
+                failure = overlapFailure(deepest: deepest)
                 return false
             }
         } else {
@@ -1048,7 +1069,7 @@ public struct AssemblySimulation: Sendable {
                 rejectedPenetration = penetration
                 rejectedContactDomains = deepest
                 rejectedContactEnergy = trial.contact
-                failure = "Energy imbalance exceeded 2%. Try a slower impact or a different mesh."
+                failure = "Stopped: the energy books stopped adding up (off by more than 2%, energy imbalance), so the results after this point could not be trusted. Try a finer mesh or a slower speed."
                 return false
             }
         }

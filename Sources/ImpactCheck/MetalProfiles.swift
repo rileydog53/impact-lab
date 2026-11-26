@@ -147,4 +147,5 @@ func metalProfilesCheck() throws {
     let meshChange = abs(mesh.loss / time.loss - 1)
     print(String(format: "Copper plastic work sensitivity: timestep %.2f%%, mesh %.2f%%", 100 * timeChange, 100 * meshChange))
     require(timeChange < 0.05 && meshChange < 0.05, "Tabulated impact failed the plastic-work sensitivity gates")
+    try libraryAndForecastCheck()
 }

@@ -55,19 +55,28 @@ public struct TimestepDiagnosis: Sendable, Equatable {
     /// "Timestep 9.1 ns, set by fracture crack-face stiffness on Steel target (at least 30·E/h)."
     public var explanation: String {
         guard body != nil else { return "No body moves, so there is nothing to step." }
-        var text = "Timestep \(Self.format(dt)), set by the \(cause.rawValue) on \(bodyName)"
+        var text = "Each calculation step covers \(Self.format(dt)) (time step), set by \(plainCause) on \(bodyName)"
         switch cause {
         case .material:
-            text += String(format: " (wave crossing its smallest triangles, about %.2g mm high). A coarser mesh or a softer, denser material allows a longer step.", elementSize * 1000)
+            text += String(format: ": a step must be shorter than the time sound takes to cross its smallest triangles (about %.2g mm). A coarser mesh, or a softer or heavier material, allows longer steps and a faster run.", elementSize * 1000)
         case .contact:
-            text += ". Contact is a stiff penalty spring scaled from Young's modulus; it is a numerical safeguard and is not relaxed to save time."
+            text += ". Touching bodies push apart through very stiff springs, and those need short steps. This is a safety margin, not relaxed to save time."
         case .connections:
-            text += ". A stiffer spring or link than the body itself shortens the step; a softer connection allows a longer one."
+            text += ". A spring or link stiffer than the body itself needs shorter steps; a softer one allows longer steps."
         case .fracture:
-            text += ". Crack faces are given a stiffness of at least 30·E/h so the uncracked body stays stiff; this is the main cost of fracture on stiff materials. Without fracture the step would be about \(Self.format(withoutFractureStep))."
+            text += ". Crack faces are held shut by very stiff springs until they open, which needs short steps: the main cost of cracking in stiff materials. Without cracking a step could be about \(Self.format(withoutFractureStep))."
         }
         if cause != .material { text += " The material alone would allow about \(Self.format(materialStep))." }
         return text
+    }
+
+    private var plainCause: String {
+        switch cause {
+        case .material: "how fast sound travels through the material"
+        case .contact: "the contact springs"
+        case .connections: "a spring or link"
+        case .fracture: "the crack-face springs"
+        }
     }
 
     public static func format(_ seconds: Double) -> String {

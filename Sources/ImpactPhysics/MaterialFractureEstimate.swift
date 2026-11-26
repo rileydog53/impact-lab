@@ -53,6 +53,18 @@ extension MaterialProfile {
             // Sources conflict: 50 (MIT table), 200 (chemeurope 18Cr-8Ni), ~250 (J_IC ≈ 300 kJ/m² converted, ASTM STP 1985). Two closest: 200 and 250 → 225.
             return estimate(600e6, 225e6, "304 K_IC about 225 MPa√m: average of the two closest of three values (200 MPa√m chemeurope 18Cr-8Ni; ≈250 MPa√m from J ≈ 300 kJ/m², ASTM STP 1985; the outlier 50 MPa√m in an MIT table was dropped). UTS 600 MPa mean at 25 °C (ORNL); G = K²(1−ν²)/E.",
                             "https://www.chemeurope.com/en/encyclopedia/Fracture_toughness.html")
+        case "titanium-ti6al4v-annealed":
+            // K_IC conflict: 75 (AeroSpace Metals), 91 (NIST TN 2065 citing Donachie), 89.5 (NIST citing Salem 2008, 78–101 midpoint). Two closest 91 and 89.5 → 90.3.
+            return estimate(938e6, 90.3e6, "Ti-6Al-4V K_IC about 90.3 MPa√m: average of the two closest of 75 (AeroSpace Metals), 91 (NIST TN 2065, citing Donachie) and 89.5 (NIST, citing Salem 2008); tensile strength 938 MPa. G = K²(1−ν²)/E. See docs/library-materials.md.",
+                            "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2065.pdf")
+        case "epoxy-bulk":
+            return .available(strength: EpoxyValues.strength * 1e6, energy: EpoxyValues.crackEnergy,
+                              source: FractureEstimateSource(citation: EpoxyValues.crackCitation, url: EpoxyValues.crackURL,
+                                                             caution: "Handbook estimate; epoxy toughness varies a lot with hardener and cure."))
+        case "soda-lime-glass":
+            // K_IC 0.75 MPa√m (Wikipedia flat glass; MakeItFrom, agree), breaking strength 41 MPa (Pilkington ATS-129; MakeItFrom).
+            return estimate(41e6, 0.75e6, "Soda-lime glass K_IC 0.75 MPa√m (Wikipedia, MakeItFrom; agree) and mean breaking strength 41 MPa (Pilkington ATS-129, MakeItFrom); G = K²(1−ν²)/E. See docs/laminate-material-profiles.md.",
+                            "https://en.wikipedia.org/wiki/Soda%E2%80%93lime_glass")
         case "copper-c11000-annealed":
             return .unavailable(reason: "Only copper-alloy values were found (94 MPa√m in one table, 73 for dispersion-strengthened copper), none for annealed C11000, and they disagree.")
         default:

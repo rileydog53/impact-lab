@@ -337,8 +337,8 @@ struct AssemblyEditor: View {
             }
             Text("Initial motion").font(.subheadline.weight(.semibold)).padding(.top, 4)
             HStack(spacing: 6) {
-                bodyNumber("X velocity (m/s)", part, \.velocity.x, AssemblyPart.velocityRange)
-                bodyNumber("Y velocity (m/s)", part, \.velocity.y, AssemblyPart.velocityRange)
+                bodyNumber("Sideways speed (m/s, X; − = left)", part, \.velocity.x, AssemblyPart.velocityRange)
+                bodyNumber("Up/down speed (m/s, Y; − = down)", part, \.velocity.y, AssemblyPart.velocityRange)
             }
             if experiment.canEdit, let index = experiment.selectedIndex {
                 let speed = simd_length(part.velocity)
@@ -384,93 +384,53 @@ struct AssemblyEditor: View {
             DisclosureGroup("Material", isExpanded: $materialSettings) {
                 VStack(alignment: .leading, spacing: 7) {
                     materialKind(part)
-                    Button("Material Library…", systemImage: "square.stack.3d.up") { materialTarget = .body }
-                    profiles("Apply illustrative profile", elasticOnly: false) { profile in
-                        experiment.updatePart(part.id, action: "Apply Material") { profile.apply(to: &$0) }
+                    libraryMenu("Choose a material") { profile in
+                        experiment.updatePart(part.id, action: "Apply Material") { MaterialTarget.body.apply(profile, to: &$0, elasticOnly: false) }
                     }.disabled(!experiment.canEdit)
-                    if let provenance = part.material.provenance {
-                        Text(provenance.name).font(.subheadline.weight(.semibold))
+                    Button("Material Library…", systemImage: "square.stack.3d.up") { materialTarget = .body }
+                    if let provenance = part.material.provenance, !provenance.isCustom {
+                        Text(MaterialProfile.libraryProfile(for: provenance)?.plainName ?? provenance.name)
+                            .font(.subheadline.weight(.semibold))
                         assignedMaterial(part.material)
                         if part.plasticity.response == .elastoplastic, let table = part.plasticity.table {
-                            Text("J2 · Initial flow stress \(table.points[0].stress / 1e6, specifier: "%.4g") MPa")
+                            Text("Metal: bends for good at \(table.points[0].stress / 1e6, specifier: "%.4g") MPa (yield strength)")
                                 .font(.caption)
                             HardeningPreview(table: table)
                         } else {
-                            Text("Elastic response").font(.caption)
+                            Text("Springs back to its shape (elastic)").font(.caption)
                         }
+                        Button("Type my own numbers instead") {
+                            experiment.updatePart(part.id, action: "Type Own Material") { $0.material.provenance = nil }
+                        }.disabled(!experiment.canEdit)
                     } else {
-                        Text("Profiles in the menu above use illustrative numbers chosen to show a behaviour, not a real material.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Picker("Response", selection: Binding(get: { part.plasticity.response },
-                                                              set: { response in experiment.updatePart(part.id) { $0.plasticity.response = response } })) {
-                            ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        if part.support == .fixed {
+                            Text("A fixed support never bends, so it springs back only.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Picker("How it behaves", selection: Binding(get: { part.plasticity.response },
+                                                                         set: { response in experiment.updatePart(part.id) {
+                                $0.plasticity = Self.typedPlasticity(response, from: $0.plasticity, young: $0.material.young)
+                            } })) {
+                                Text("Springs back (elastic)").tag(CouponResponse.elastic)
+                                Text("Metal: bends for good (J2 plasticity)").tag(CouponResponse.elastoplastic)
+                            }
+                            .disabled(!experiment.canEdit)
                         }
-                        .disabled(!experiment.canEdit || part.support == .fixed)
                         if part.bondedLayer != nil {
-                            Text("This is the first layer's response. Each bonded layer below has its own.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        } else if part.support == .fixed {
-                            Text("Response is Elastic because a fixed support never deforms.")
+                            Text("These are the first layer's numbers. Each bonded layer below has its own.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
-                            GridRow {
-                                bodyNumber("Young’s modulus (MPa)", part, \.material.young, SceneConfiguration.youngRange, scale: 1e-6)
-                                    .help("Elastic stiffness in uniaxial loading")
-                                bodyNumber("Density (kg/m³)", part, \.material.density, SceneConfiguration.densityRange)
-                            }
-                            GridRow {
-                                bodyNumber("Poisson ratio", part, \.material.poisson, SceneConfiguration.poissonRange)
-                                    .help("Transverse contraction relative to axial extension in uniaxial loading")
-                            }
-                            if part.plasticity.response == .elastoplastic {
-                                GridRow {
-                                    bodyNumber("Yield / E (%)", part, \.plasticity.yieldFraction, ImpactPlasticity.yieldRange, scale: 100)
-                                    bodyNumber("Hardening / E (%)", part, \.plasticity.hardeningFraction, ImpactPlasticity.hardeningRange, scale: 100)
-                                }
+                        typedMaterialFields(part.material) { material in
+                            experiment.updatePart(part.id) { $0.material = material; $0.alignLayerFracture() }
+                        }
+                        if part.plasticity.response == .elastoplastic {
+                            typedPlasticityFields(part.plasticity, young: part.material.young) { plasticity in
+                                experiment.updatePart(part.id) { $0.plasticity = plasticity }
                             }
                         }
                     }
-                    if part.shape == .outline, let reason = part.fractureUnavailableReason {
-                        Text("Material fracture is unavailable: \(reason)")
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    } else if let profile = MaterialProfile.references.first(where: { $0.id == part.material.provenance?.id }),
-                       part.shape != .round, part.fractureUnavailableReason == nil || part.fracture != nil {
-                        VStack(alignment: .leading, spacing: 7) {
-                            if let estimate = profile.defaultFracture {
-                                Toggle("Material fracture (sourced estimate)", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
-                                    experiment.updatePart(part.id) {
-                                        $0.fracture = enabled ? estimate : nil
-                                        $0.alignLayerFracture(fillMissing: enabled)
-                                    }
-                                })).toggleStyle(.checkbox)
-                                if part.fracture == nil {
-                                    Text("Off by default. Turning it on uses the handbook estimate for this material, with its citation.")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                            } else if case let .unavailable(reason) = profile.fractureEstimate {
-                                Text("Fracture toughness is off for this material. \(reason)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            if let fracture = part.fracture { fractureControls(part, fracture) }
-                        }.disabled(!experiment.canEdit)
-                    } else if part.material.provenance != nil {
-                        Text("Material fracture is unavailable here: the selected profile has no sourced fracture estimate for this model. Choose an illustrative material to set fracture values yourself.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if let reason = part.fractureUnavailableReason {
-                        Text("Material fracture is unavailable: \(reason)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Toggle("Material fracture", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
-                                experiment.updatePart(part.id) {
-                                    $0.fracture = enabled ? MaterialFractureSettings() : nil
-                                    $0.alignLayerFracture(fillMissing: enabled)
-                                }
-                            })).toggleStyle(.checkbox)
-                            if let fracture = part.fracture { fractureControls(part, fracture) }
-                        }.disabled(!experiment.canEdit)
-                    }
+                    crackSection(part)
+
                     if part.shape == .block { bondedLayerEditor(part) }
                 }.padding(.top, 7)
             }
@@ -478,6 +438,169 @@ struct AssemblyEditor: View {
         }
     }
 
+
+
+    // MARK: Plain-words material helpers (Joseph, 2026-11-25: layman's term first, technical term in brackets)
+
+    /// A menu of every Library material by its everyday name.
+    private func libraryMenu(_ title: String, choose: @escaping (MaterialProfile) -> Void) -> some View {
+        Menu(title) {
+            Section("Metals: bend for good") {
+                ForEach(MaterialProfile.library.filter { !$0.springsBackOnly }) { profile in
+                    Button(profile.plainName) { choose(profile) }
+                }
+            }
+            Section("Spring back") {
+                ForEach(MaterialProfile.library.filter(\.springsBackOnly)) { profile in
+                    Button(profile.plainName) { choose(profile) }
+                }
+            }
+        }
+    }
+
+    /// Stiffness, weight and sideways squish for a material whose numbers the user types, with real ranges.
+    private func typedMaterialFields(_ material: ImpactPhysics.Material,
+                                     set: @escaping (ImpactPhysics.Material) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
+                GridRow {
+                    numeric("Stiffness (GPa, Young’s modulus)", value: material.young, range: ImpactPhysics.Material.assemblyYoungRange, scale: 1e-9) { value in
+                        var next = material; next.young = value; set(next)
+                    }
+                    numeric("Weight per size (kg/m³, density)", value: material.density, range: ImpactPhysics.Material.assemblyDensityRange, scale: 1) { value in
+                        var next = material; next.density = value; set(next)
+                    }
+                }
+                GridRow {
+                    numeric("Squish sideways (Poisson ratio)", value: material.poisson, range: 0...ImpactPhysics.Material.assemblyPoissonRange.upperBound, scale: 1) { value in
+                        var next = material; next.poisson = value; set(next)
+                    }
+                }
+            }
+            Text("For scale. Stiffness: rubber 0.003 · wood 12 · aluminium 69 · steel 200 GPa. Weight: water 1000 · aluminium 2700 · steel 7850 kg/m³. Squish sideways: cork 0 · metals 0.3 · rubber 0.48.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// "Bends for good at" and "Takes after a big bend" for a typed metal, stored as a two-point flow table.
+    private func typedPlasticityFields(_ plasticity: ImpactPlasticity, young: Double,
+                                       set: @escaping (ImpactPlasticity) -> Void) -> some View {
+        let points = Self.typedFlow(plasticity, young: young)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                numeric("Bends for good at (MPa, yield strength)", value: points.yield, range: 0.001e6...20_000e6, scale: 1e-6) { value in
+                    set(Self.flowPlasticity(yield: value, later: max(value, points.later)))
+                }
+                numeric("Takes after a big bend (MPa, at 12% bend)", value: points.later, range: 0.001e6...20_000e6, scale: 1e-6) { value in
+                    set(Self.flowPlasticity(yield: points.yield, later: max(points.yield, value)))
+                }
+            }
+            Text("For scale, bends for good at: copper 69 · aluminium 276 · steel 250 · titanium 890 MPa.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Yield and the stress at 12% plastic strain, read from a flow table or from the old fraction-of-stiffness settings.
+    static func typedFlow(_ plasticity: ImpactPlasticity, young: Double) -> (yield: Double, later: Double) {
+        if let table = plasticity.table {
+            return (table.points[0].stress, table.flowStress(at: 0.12))
+        }
+        let yield = young * plasticity.yieldFraction
+        return (yield, yield + 0.12 * young * plasticity.hardeningFraction)
+    }
+
+    static func flowPlasticity(yield: Double, later: Double) -> ImpactPlasticity {
+        var plasticity = ImpactPlasticity(response: .elastoplastic)
+        plasticity.table = HardeningTable(points: [HardeningPoint(strain: 0, stress: yield),
+                                                  HardeningPoint(strain: 0.12, stress: later)])
+        return plasticity
+    }
+
+    /// Switching a typed material between springing back and bending for good. A new metal starts at 0.4% of its
+    /// stiffness (about where structural metals start to bend for good), rising 30% by a 12% bend; the user changes both.
+    static func typedPlasticity(_ response: CouponResponse, from plasticity: ImpactPlasticity, young: Double) -> ImpactPlasticity {
+        guard response == .elastoplastic else { var next = plasticity; next.response = .elastic; return next }
+        if plasticity.table != nil { var next = plasticity; next.response = .elastoplastic; return next }
+        let yield = min(20_000e6, max(0.001e6, 0.004 * young))
+        return flowPlasticity(yield: yield, later: 1.3 * yield)
+    }
+
+    /// Whether and how this body can crack, in plain words.
+    @ViewBuilder
+    private func crackSection(_ part: AssemblyPart) -> some View {
+        if let reason = part.fractureUnavailableReason {
+            Text("Cannot crack: \(reason)")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } else {
+            VStack(alignment: .leading, spacing: 7) {
+                Toggle("Can crack (material fracture)", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
+                    experiment.updatePart(part.id) {
+                        if enabled {
+                            if let profile = MaterialProfile.libraryProfile(for: $0.material.provenance) {
+                                $0.fracture = AssemblyPart.startingFracture(for: profile)
+                            } else {
+                                $0.fracture = AssemblyPart.customStartingFracture(young: $0.material.young)
+                            }
+                        } else {
+                            $0.fracture = nil
+                        }
+                        $0.alignLayerFracture(fillMissing: enabled)
+                    }
+                })).toggleStyle(.checkbox)
+                if part.fracture == nil {
+                    Text("Off: this body never cracks.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let fracture = part.fracture { fractureControls(part, fracture) }
+            }.disabled(!experiment.canEdit)
+        }
+    }
+
+
+    /// Above the run length: whether and when bodies will touch, and how long the run goes on after that.
+    @ViewBuilder
+    private func contactTimingNote() -> some View {
+        if experiment.canEdit, experiment.scene.parts.count > 1 {
+            let duration = experiment.scene.duration
+            let parts = experiment.scene.parts
+            VStack(alignment: .leading, spacing: 4) {
+                if let first = experiment.contactForecasts.first {
+                    let names = "\(parts[first.first].name) and \(parts[first.second].name)"
+                    let suggested = min(AssemblyScene.durationRange.upperBound,
+                                        max(AssemblyScene.durationRange.lowerBound, first.time + first.suggestedAfter))
+                    if first.time < duration {
+                        Label("\(names) first touch at about \(Self.milliseconds(first.time)). The run goes on \(Self.milliseconds(duration - first.time)) after that.",
+                              systemImage: "clock")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        if duration - first.time < 0.5 * first.suggestedAfter {
+                            Text("That may be too short to see much happen after they touch.")
+                                .font(.caption).foregroundStyle(assemblyAmber)
+                            Button("Run \(Self.milliseconds(suggested - first.time)) past the touch") { experiment.edit("Set Run Length") { $0.duration = suggested } }
+                                .disabled(!experiment.canEdit)
+                        }
+                    } else {
+                        Label("The run ends before anything touches. \(names) would first touch at about \(Self.milliseconds(first.time)).",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
+                        Button("Make the run long enough (\(Self.milliseconds(suggested)))") { experiment.edit("Set Run Length") { $0.duration = suggested } }
+                            .disabled(!experiment.canEdit)
+                    }
+                } else if (experiment.scene.gravity ?? 0) > 0 {
+                    Label("Nothing is moving toward anything else at the start. With gravity on, bodies may still fall onto each other.", systemImage: "clock")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Label("Nothing is moving toward anything else, so no bodies will touch.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Worked out from the starting speeds in straight lines. Gravity, springs and bending are not counted.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    static func milliseconds(_ seconds: Double) -> String {
+        String(format: "%.3g ms", seconds * 1000)
+    }
 
     @ViewBuilder
     private func fractureControls(_ part: AssemblyPart, _ fracture: MaterialFractureSettings) -> some View {
@@ -487,17 +610,30 @@ struct AssemblyEditor: View {
                 // Strength is shown and entered in real units (MPa = 10⁶ Pa). Legacy scenes
                 // show their fraction-of-E strength converted; the saved value only changes
                 // when the user types a new strength.
-                numeric("Cohesive strength (MPa)", value: fracture.resolvedStrength(young: young),
+                numeric("Crack starts at (MPa, cohesive strength)", value: fracture.resolvedStrength(young: young),
                         range: MaterialFractureSettings.absoluteStrengthRange, scale: 1e-6) { value in
                     experiment.updatePart(part.id) { $0.fracture?.strength = value }
                 }
-                numeric("Fracture energy (J/m²)", value: fracture.energy,
-                        range: fracture.activeEnergyRange, scale: 1) { value in
-                    experiment.updatePart(part.id) { $0.fracture?.energy = value; $0.fracture?.energySource = nil }
+                numeric("Crack resistance (J/m², fracture energy)", value: fracture.energy,
+                        range: MaterialFractureSettings.absoluteEnergyRange, scale: 1) { value in
+                    experiment.updatePart(part.id) {
+                        // Writing the strength in pascals lifts the old 50 J/m² cap; the same strength replays identically.
+                        guard var next = $0.fracture else { return }
+                        next.strength = next.resolvedStrength(young: young)
+                        next.energy = value
+                        next.energySource = nil
+                        $0.fracture = next
+                    }
                 }
             }
+            CrackScale()
+            if fracture.energySource == nil, MaterialProfile.libraryProfile(for: part.material.provenance)?.defaultFracture == nil,
+               part.material.provenance != nil {
+                Text("No measured crack numbers were found for this material, so these are your own numbers, not from a source. Change them to try what you want.")
+                    .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
+            }
             if let source = fracture.energySource {
-                Label("Experimental, not validated. \(source.caution)", systemImage: "exclamationmark.triangle")
+                Label("From a handbook, not tested in this app. \(source.caution)", systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
                 DisclosureGroup("Source") {
                     Text(source.citation).font(.caption).foregroundStyle(.secondary)
@@ -505,16 +641,19 @@ struct AssemblyEditor: View {
                 }.font(.caption)
             }
             if part.shape == .block {
-                Picker("Interior mesh", selection: Binding(get: { fracture.pattern }, set: { pattern in
+                Picker("Triangle pattern inside", selection: Binding(get: { fracture.pattern }, set: { pattern in
                     experiment.updatePart(part.id) { $0.fracture?.meshPattern = pattern }
                 })) {
-                    ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    ForEach(MaterialFractureSettings.MeshPattern.allCases, id: \.self) {
+                        Text($0 == .aligned ? "Aligned (normal)" : "Staggered").tag($0)
+                    }
                 }
+                .help("Which way the triangles inside the block lean. Cracks can only run along triangle edges.")
             }
             let resolution = part.refinement ?? experiment.scene.resolution
             Text(resolution.rawValue <= 3
-                 ? "Coarse fracture preview. Crack paths and fragment motion are qualitative."
-                 : "Experimental fracture. Check mesh and timestep sensitivity before using the readings quantitatively.")
+                 ? "Coarse mesh: crack paths and flying pieces are only a rough picture."
+                 : "Cracking is experimental. Before trusting the numbers, check that a finer mesh gives about the same result.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -523,13 +662,15 @@ struct AssemblyEditor: View {
         if let layer = part.bondedLayer {
             return layer.third == nil ? "Two bonded layers" : "Three bonded layers"
         }
-        if let provenance = part.material.provenance { return provenance.name }
-        if let profile = AssemblyMaterialProfile.allCases.first(where: {
+        if let provenance = part.material.provenance {
+            return MaterialProfile.libraryProfile(for: provenance).map { provenance.isCustom ? provenance.name : $0.plainName } ?? provenance.name
+        }
+        if AssemblyMaterialProfile.allCases.contains(where: {
             $0.response == part.plasticity.response && $0.material == part.material
         }) {
-            return profile.rawValue
+            return "Old soft demo material"
         }
-        return part.plasticity.response.rawValue
+        return part.plasticity.response == .elastoplastic ? "Your own metal" : "Your own springy material"
     }
 
     // MARK: Outline geometry
@@ -669,25 +810,25 @@ struct AssemblyEditor: View {
     private func bondedLayerEditor(_ part: AssemblyPart) -> some View {
         let minimum = AssemblyPart.BondedLayer.minimumFraction
         return VStack(alignment: .leading, spacing: 7) {
-            Toggle("Bonded second material", isOn: Binding(get: { part.bondedLayer != nil }, set: { enabled in
+            Toggle("Glued-on second material (bonded layer)", isOn: Binding(get: { part.bondedLayer != nil }, set: { enabled in
                 experiment.updatePart(part.id) {
-                    $0.bondedLayer = enabled ? AssemblyPart.BondedLayer() : nil
+                    $0.bondedLayer = enabled ? AssemblyPart.BondedLayer.realDefault() : nil
                     $0.alignLayerFracture(fillMissing: true)
                 }
             }))
             .toggleStyle(.checkbox)
             .disabled(!experiment.canEdit || part.notch != nil)
             .help("Available on unnotched blocks")
-            Text("Splits this one block into two or three materials side by side along its width. Each layer has its own material and plasticity. With Material fracture off the layers are joined by a perfect bond (shared nodes). With it on, each layer has its own crack strength and toughness, and each bond its own, usually weaker, so the layers can crack and come apart (delaminate).")
+            Text("Splits this block into two or three materials side by side, glued together. With cracking off the glue never fails. With cracking on, each layer and each glue line has its own crack numbers, so the layers can crack or peel apart (delaminate).")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if part.bondedLayer == nil, part.notch != nil {
                 Text("Unavailable here: remove the V-notch first.").font(.caption).foregroundStyle(assemblyAmber)
             }
             if let layer = part.bondedLayer {
-                Text("Layer positions are measured from the left along the local width.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Where each glue line sits, as a percent of the block's width from its left side. To change the block's size, use Local width and Local height under Geometry.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 let firstUpperBound = layer.third.map { $0.interfaceFraction - minimum } ?? 1 - minimum
-                numeric("First bond from left (% width)", value: layer.interfaceFraction,
+                numeric("First glue line (% of width from left)", value: layer.interfaceFraction,
                         range: minimum...max(minimum, firstUpperBound), scale: 100) { value in
                     experiment.updatePart(part.id) { $0.bondedLayer?.interfaceFraction = value }
                 }
@@ -698,26 +839,26 @@ struct AssemblyEditor: View {
                     experiment.updatePart(part.id) { $0.bondedLayer?.plasticity = plasticity }
                 }
                 if part.fracture != nil {
-                    layerCracks("Bond between first and second layer", layer.bond, young: min(part.material.young, layer.material.young),
+                    layerCracks("Glue between first and second layer can break", layer.bond, young: min(part.material.young, layer.material.young),
                                 allowFraction: true, fallback: part.suggestedBond(0)) { settings in
                         experiment.updatePart(part.id) { $0.bondedLayer?.bond = settings }
                     }
-                    layerCracks("Cracks inside the second layer", layer.fracture, young: layer.material.young,
+                    layerCracks("Second layer itself can crack", layer.fracture, young: layer.material.young,
                                 allowFraction: layer.material.provenance == nil,
                                 fallback: AssemblyPart.defaultLayerFracture(for: layer.material)) { settings in
                         experiment.updatePart(part.id) { $0.bondedLayer?.fracture = settings }
                     }
                 }
-                Toggle("Bonded third material", isOn: Binding(get: { layer.third != nil }, set: { enabled in
+                Toggle("Glued-on third material", isOn: Binding(get: { layer.third != nil }, set: { enabled in
                     experiment.updatePart(part.id) {
                         let fraction = min(1 - minimum, max(0.75, layer.interfaceFraction + minimum))
-                        $0.bondedLayer?.third = enabled ? .init(interfaceFraction: fraction) : nil
+                        $0.bondedLayer?.third = enabled ? .realDefault(interfaceFraction: fraction) : nil
                         $0.alignLayerFracture(fillMissing: true)
                     }
                 })).toggleStyle(.checkbox)
                     .disabled(!experiment.canEdit || (layer.third == nil && layer.interfaceFraction > 1 - 2 * minimum))
                 if let third = layer.third {
-                    numeric("Second bond from left (% width)", value: third.interfaceFraction,
+                    numeric("Second glue line (% of width from left)", value: third.interfaceFraction,
                             range: min(1 - minimum, layer.interfaceFraction + minimum)...(1 - minimum), scale: 100) { value in
                         experiment.updatePart(part.id) { $0.bondedLayer?.third?.interfaceFraction = value }
                     }
@@ -728,11 +869,11 @@ struct AssemblyEditor: View {
                         experiment.updatePart(part.id) { $0.bondedLayer?.third?.plasticity = plasticity }
                     }
                     if part.fracture != nil {
-                        layerCracks("Bond between second and third layer", third.bond, young: min(layer.material.young, third.material.young),
+                        layerCracks("Glue between second and third layer can break", third.bond, young: min(layer.material.young, third.material.young),
                                     allowFraction: true, fallback: part.suggestedBond(1)) { settings in
                             experiment.updatePart(part.id) { $0.bondedLayer?.third?.bond = settings }
                         }
-                        layerCracks("Cracks inside the third layer", third.fracture, young: third.material.young,
+                        layerCracks("Third layer itself can crack", third.fracture, young: third.material.young,
                                     allowFraction: third.material.provenance == nil,
                                     fallback: AssemblyPart.defaultLayerFracture(for: third.material)) { settings in
                             experiment.updatePart(part.id) { $0.bondedLayer?.third?.fracture = settings }
@@ -743,40 +884,35 @@ struct AssemblyEditor: View {
         }.padding(.vertical, 4)
     }
 
-    /// Elastic or J2 response for one bonded layer. A reference metal brings its own hardening table.
+    /// Springs back or bends for good, for one bonded layer. A Library metal brings its own flow table.
     private func layerResponse(_ part: AssemblyPart, _ plasticity: ImpactPlasticity?, material: ImpactPhysics.Material,
                                set: @escaping (ImpactPlasticity?) -> Void) -> some View {
         let plastic = plasticity?.response == .elastoplastic
+        let profile = MaterialProfile.libraryProfile(for: material.provenance)
         return VStack(alignment: .leading, spacing: 6) {
-            Picker("Layer response", selection: Binding(get: { plastic ? CouponResponse.elastoplastic : .elastic }, set: { response in
-                guard response == .elastoplastic else { set(nil); return }
-                if let profile = MaterialProfile.references.first(where: { $0.id == (material.provenance?.referenceID ?? material.provenance?.id) }) {
-                    var applied = AssemblyPart("layer")
-                    profile.apply(to: &applied)
-                    set(applied.plasticity)
-                } else {
-                    set(plasticity.map { var p = $0; p.response = .elastoplastic; return p } ?? ImpactPlasticity())
-                }
-            })) {
-                ForEach(CouponResponse.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .disabled(!experiment.canEdit || part.support == .fixed)
-            if let plasticity, plastic {
-                if let table = plasticity.table {
-                    Text("J2 · Initial flow stress \(table.points[0].stress / 1e6, specifier: "%.4g") MPa").font(.caption)
-                } else {
-                    HStack {
-                        numeric("Yield / E (%)", value: plasticity.yieldFraction, range: ImpactPlasticity.yieldRange, scale: 100) { value in
-                            var next = plasticity
-                            next.yieldFraction = value
-                            set(next)
-                        }
-                        numeric("Hardening / E (%)", value: plasticity.hardeningFraction, range: ImpactPlasticity.hardeningRange, scale: 100) { value in
-                            var next = plasticity
-                            next.hardeningFraction = value
-                            set(next)
-                        }
+            if profile?.springsBackOnly == true {
+                Text("Springs back to its shape (elastic)").font(.caption)
+            } else {
+                Picker("How the layer behaves", selection: Binding(get: { plastic ? CouponResponse.elastoplastic : .elastic }, set: { response in
+                    guard response == .elastoplastic else { set(nil); return }
+                    if let profile, material.provenance?.isCustom == false {
+                        var applied = AssemblyPart("layer")
+                        profile.apply(to: &applied)
+                        set(applied.plasticity)
+                    } else {
+                        set(Self.typedPlasticity(.elastoplastic, from: plasticity ?? ImpactPlasticity(response: .elastic), young: material.young))
                     }
+                })) {
+                    Text("Springs back (elastic)").tag(CouponResponse.elastic)
+                    Text("Metal: bends for good (J2 plasticity)").tag(CouponResponse.elastoplastic)
+                }
+                .disabled(!experiment.canEdit || part.support == .fixed)
+            }
+            if let plasticity, plastic {
+                if material.provenance?.isCustom == false, let table = plasticity.table {
+                    Text("Bends for good at \(table.points[0].stress / 1e6, specifier: "%.4g") MPa (yield strength)").font(.caption)
+                } else {
+                    typedPlasticityFields(plasticity, young: material.young) { set($0) }
                 }
             }
         }
@@ -787,55 +923,48 @@ struct AssemblyEditor: View {
                              fallback: MaterialFractureSettings? = MaterialFractureSettings(),
                              set: @escaping (MaterialFractureSettings?) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(title + (settings == nil ? " (cannot fail)" : ""), isOn: Binding(get: { settings != nil }, set: { enabled in
+            Toggle(title + (settings == nil ? " (never breaks)" : ""), isOn: Binding(get: { settings != nil }, set: { enabled in
                 set(enabled ? fallback : nil)
             }))
             .toggleStyle(.checkbox)
             .disabled(!experiment.canEdit || (settings == nil && fallback == nil))
             if settings == nil && fallback == nil {
-                Text("No sourced fracture estimate for this material, so this layer cannot crack.")
+                Text("This layer's material has no crack numbers, so it never cracks.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let settings {
                 HStack {
-                    numeric("Strength (MPa)", value: settings.resolvedStrength(young: young),
+                    numeric("Breaks at (MPa, strength)", value: settings.resolvedStrength(young: young),
                             range: MaterialFractureSettings.absoluteStrengthRange, scale: 1e-6) { value in
                         var next = settings
                         next.strength = value
                         next.energySource = nil
                         set(next)
                     }
-                    numeric("Fracture energy (J/m²)", value: settings.energy,
-                            range: settings.activeEnergyRange, scale: 1) { value in
+                    numeric("Crack resistance (J/m², fracture energy)", value: settings.energy,
+                            range: MaterialFractureSettings.absoluteEnergyRange, scale: 1) { value in
                         var next = settings
+                        next.strength = settings.resolvedStrength(young: young)
                         next.energy = value
                         next.energySource = nil
                         set(next)
                     }
                 }
+                CrackScale()
                 if let source = settings.energySource {
-                    Label("Experimental, not validated. \(source.caution)", systemImage: "exclamationmark.triangle")
+                    Label("From a handbook, not tested in this app. \(source.caution)", systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
 
-    private func profiles(_ title: String, elasticOnly: Bool, choose: @escaping (AssemblyMaterialProfile) -> Void) -> some View {
-        Menu(title) {
-            ForEach(AssemblyMaterialProfile.allCases.filter { !elasticOnly || $0.response == .elastic }, id: \.self) { profile in
-                Button(profile.rawValue) { choose(profile) }
-            }
-        }
-    }
-
     private func assignedMaterial(_ material: ImpactPhysics.Material) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("E \(material.young / 1e9, specifier: "%.4g") GPa · ρ \(material.density, specifier: "%.5g") kg/m³ · ν \(material.poisson, specifier: "%.3g")")
-                .font(.caption.monospacedDigit())
+            MaterialNumbers(material: material).font(.caption)
             if let provenance = material.provenance {
                 Text(provenance.condition)
-                if provenance.isCustom { Text("Saved inputs from a user-edited profile.") }
+                if provenance.isCustom { Text("Your edited copy of a Library material.") }
                 Text(provenance.evidence)
                 Link(provenance.sourceName, destination: provenance.source)
             }
@@ -845,49 +974,22 @@ struct AssemblyEditor: View {
     private func layerMaterial(_ target: MaterialTarget, _ part: AssemblyPart, _ material: ImpactPhysics.Material,
                                set: @escaping (ImpactPhysics.Material) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button("\(target.rawValue) Material Library…") { materialTarget = target }
-            profiles("\(target.rawValue) illustrative profiles", elasticOnly: false) { profile in
-                experiment.updatePart(part.id) { part in
-                    let plasticity: ImpactPlasticity? = profile.response == .elastoplastic ? {
-                        var applied = AssemblyPart("layer")
-                        profile.apply(to: &applied)
-                        return applied.plasticity
-                    }() : nil
-                    if target == .second {
-                        part.bondedLayer?.material = profile.material
-                        part.bondedLayer?.plasticity = plasticity
-                    } else {
-                        part.bondedLayer?.third?.material = profile.material
-                        part.bondedLayer?.third?.plasticity = plasticity
-                    }
-                    part.alignLayerFracture()
+            HStack {
+                libraryMenu("\(target.rawValue): choose a material") { profile in
+                    experiment.updatePart(part.id) { target.apply(profile, to: &$0, elasticOnly: false) }
                 }
+                Button("Library…") { materialTarget = target }
             }
-                .disabled(!experiment.canEdit)
-            if let provenance = material.provenance {
-                Text(provenance.name).font(.caption.weight(.semibold))
+            .disabled(!experiment.canEdit)
+            if let provenance = material.provenance, !provenance.isCustom {
+                Text(MaterialProfile.libraryProfile(for: provenance)?.plainName ?? provenance.name).font(.caption.weight(.semibold))
                 assignedMaterial(material)
             } else {
-                HStack {
-                    numeric("E (MPa)", value: material.young, range: SceneConfiguration.youngRange, scale: 1e-6) { value in
-                        var next = material
-                        next.young = value
-                        set(next)
-                    }
-                    numeric("Density (kg/m³)", value: material.density, range: SceneConfiguration.densityRange, scale: 1) { value in
-                        var next = material
-                        next.density = value
-                        set(next)
-                    }
-                    numeric("Poisson ratio", value: material.poisson, range: SceneConfiguration.poissonRange, scale: 1) { value in
-                        var next = material
-                        next.poisson = value
-                        set(next)
-                    }
-                }
+                typedMaterialFields(material, set: set)
             }
         }
     }
+
 
     private func gaugeEditor(_ part: AssemblyPart) -> some View {
         ForEach(experiment.gauges.filter { $0.body == part.id }) { gauge in
@@ -1018,24 +1120,25 @@ struct AssemblyEditor: View {
                     Text("\(experiment.scene.parts.filter { $0.refinement != nil }.count) bodies use their own mesh and ignore the assembly mesh.")
                         .font(.caption).foregroundStyle(assemblyAmber)
                 }
-                Text("\(experiment.elementCount) triangles · \(experiment.simulation.dt * 1e6, specifier: "%.3g") µs step")
+                Text("\(experiment.elementCount) triangles · each calculation step covers \(experiment.simulation.dt * 1e6, specifier: "%.3g") µs (time step)")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 Text(experiment.simulation.timestep.explanation)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                numeric("Duration (ms)", value: experiment.scene.duration, range: AssemblyScene.durationRange, scale: 1000) { value in
+                contactTimingNote()
+                numeric("Run length (ms, duration)", value: experiment.scene.duration, range: AssemblyScene.durationRange, scale: 1000) { value in
                     experiment.edit { $0.duration = value }
                 }
-                Toggle("Artificial bulk viscosity (shock smoothing)", isOn: Binding(get: { experiment.scene.bulkViscosity != nil }, set: { on in
+                Toggle("Smooth out shock waves (artificial bulk viscosity)", isOn: Binding(get: { experiment.scene.bulkViscosity != nil }, set: { on in
                     experiment.edit(on ? "Turn On Bulk Viscosity" : "Turn Off Bulk Viscosity") { $0.bulkViscosity = on ? .standard : nil }
                 })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
                 if let viscosity = experiment.scene.bulkViscosity {
-                    numeric("Linear coefficient b1", value: viscosity.linear, range: BulkViscosity.linearRange, scale: 1) { value in
+                    numeric("Gentle smoothing (linear coefficient b1)", value: viscosity.linear, range: BulkViscosity.linearRange, scale: 1) { value in
                         experiment.edit { $0.bulkViscosity?.linear = value }
                     }
-                    numeric("Quadratic coefficient b2", value: viscosity.quadratic, range: BulkViscosity.quadraticRange, scale: 1) { value in
+                    numeric("Strong smoothing for hard hits (quadratic coefficient b2)", value: viscosity.quadratic, range: BulkViscosity.quadraticRange, scale: 1) { value in
                         experiment.edit { $0.bulkViscosity?.quadratic = value }
                     }
-                    Text("A numerical pressure added only while an element is being compressed, as in production impact codes (defaults 0.06 and 1.2, from the Abaqus manual). It keeps stress-wave fronts a few elements wide instead of ringing. The energy it removes is shown as its own line; it is not a material property.")
+                    Text("Adds a small push-back only while a triangle is being squashed, so a hit's shock wave stays smooth instead of ringing like a bell. Commercial impact programs do the same (defaults 0.06 and 1.2, from the Abaqus manual). The energy it soaks up is shown on its own line. It is a calculation aid, not part of the material.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Toggle("Gravity", isOn: Binding(get: { (experiment.scene.gravity ?? 0) > 0 }, set: { on in
@@ -1137,19 +1240,20 @@ struct AssemblyEditor: View {
     private func materialKind(_ part: AssemblyPart) -> some View {
         let (title, detail): (String, String) = if let provenance = part.material.provenance {
             provenance.isCustom
-                ? ("User-defined properties", "Your edits to a reference material. The source describes the original, not your values.")
-                : ("Reference material, sourced properties", "Elastic constants and initial yield come from the cited source. Hardening beyond yield is illustrative, and fracture toughness estimates are experimental, not validated for this 2-D model.")
+                ? ("Your edited copy", "Your changes to a Library material. The source describes the original, not your numbers.")
+                : ("From the Material Library", "Stiffness, weight and where it starts to bend for good come from the cited source. How it hardens after that is a sketch, and crack numbers are handbook estimates.")
         } else if AssemblyMaterialProfile.allCases.contains(where: { $0.response == part.plasticity.response && $0.material == part.material }) {
-            ("Illustrative profile", "Numbers chosen to show a behaviour clearly. Not a real material.")
+            ("Old soft demo material", "This body uses one of the old rubber-soft demo materials. Choose a real material to make it behave like one.")
         } else {
-            ("User-defined properties", "Values you entered. The app checks only that they are in range.")
+            ("Your own numbers", "Values you typed. The app only checks they are possible.")
         }
         VStack(alignment: .leading, spacing: 2) {
-            Text("Material type · \(title)").font(.caption.weight(.semibold))
-            Text(detail + " No material in the app is a validated constitutive model yet.")
+            Text("Material · \(title)").font(.caption.weight(.semibold))
+            Text(detail + " The app's materials are not yet checked against real tests.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
+
 
     private func bodyNumber(_ label: String, _ part: AssemblyPart, _ key: WritableKeyPath<AssemblyPart, Double>,
                             _ range: ClosedRange<Double>, scale: Double = 1) -> some View {
@@ -1241,5 +1345,13 @@ private struct SpringLengthHint: View {
         }
         .padding(.bottom, 14)
         .accessibilityLabel("Starting length \(start * 1000) millimetres, rest length \(rest * 1000) millimetres")
+    }
+}
+
+/// Everyday reference points for the two crack numbers.
+struct CrackScale: View {
+    var body: some View {
+        Text("For scale. Crack starts at: glass 41 · epoxy 64 · aluminium 310 · steel 475 MPa. Crack resistance: glass 7 · epoxy 150 · aluminium 11,000 · steel 89,000 J/m². Lower means it cracks more easily.")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 }

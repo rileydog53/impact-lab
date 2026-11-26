@@ -1,0 +1,89 @@
+{
+ "description": "Rebuilt from Joseph's feedback (finding 1 and 26, 2026-11-25); his saved file was not found. A plate inside a hollow enclosure moves left at 5 m/s into the carbon-skinned aluminium panel, clamped at its base. The spring he used between plate and enclosure is left out. WITH REAL MATERIALS: a steel plate (bends for good) inside an aluminium enclosure that can crack (handbook estimate).",
+ "duration": 0.0016,
+ "meshResolution": "fine",
+ "bulkViscosity": true,
+ "monitor": "Hollow Enclosure 2",
+ "parts": [
+  {
+   "name": "Carbon-skinned aluminium panel",
+   "size": [
+    0.012,
+    0.1
+   ],
+   "center": [
+    0,
+    0
+   ],
+   "material": {
+    "profile": "aluminum-6061-t6"
+   },
+   "fracture": {
+    "strength": 2500000000.0,
+    "energy": 1300
+   },
+   "bondedLayer": {
+    "interfaceFraction": 0.8333,
+    "material": {
+     "young": 70000000000.0,
+     "density": 1600,
+     "poisson": 0.1
+    },
+    "bond": {
+     "strength": 31000000.0,
+     "energy": 466.5,
+     "energySource": {
+      "status": "estimated",
+      "citation": "Structural epoxy G_IC 466.5 J/m\u00b2, average of the two closest of 250 (Betamate 73455, Martiny et al. 2013), 683 (round-robin TDCB on aluminium, Blackman et al. 2003) and 1250 J/m\u00b2 (ESP 110, Martiny et al. 2013). Strength 31 MPa is 3M DP460 overlap shear on etched aluminium, used as a stand-in for opening strength.",
+      "url": "https://core.ac.uk/download/77002118.pdf",
+      "caution": "Experimental; epoxy toughness varies widely with formulation and bond thickness."
+     }
+    },
+    "fracture": {
+     "strength": 100000000.0,
+     "energy": 2150
+    }
+   },
+   "support": "clampBottom"
+  },
+  {
+   "name": "Hollow Enclosure 2",
+   "shape": "enclosure",
+   "size": [
+    0.06,
+    0.04
+   ],
+   "wall": 0.005,
+   "center": [
+    0.037,
+    0
+   ],
+   "velocity": [
+    -5,
+    0
+   ],
+   "material": "aluminum-6061-t6",
+   "fracture": {
+    "strength": 310000000.0,
+    "energy": 10877
+   },
+   "refinement": "x4"
+  },
+  {
+   "name": "Rectangular Plate 3",
+   "size": [
+    0.04,
+    0.02
+   ],
+   "center": [
+    0.037,
+    0
+   ],
+   "velocity": [
+    -5,
+    0
+   ],
+   "material": "structural-steel-a36"
+  }
+ ]
+}
