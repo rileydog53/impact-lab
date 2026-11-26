@@ -222,23 +222,23 @@ struct MaterialLibrary: View {
                 .accessibilityIdentifier("material-profile-name")
             Grid(alignment: .leading) {
                 GridRow {
-                    Text("Stiffness (GPa, Young’s modulus)")
+                    Text("Stiffness (GPa, Young’s modulus)").settingInfo("Stiffness (GPa, Young’s modulus)")
                     number("Stiffness (GPa)", profile.material.young / 1e9) { draft?.material.young = $0 * 1e9 }
                 }
                 GridRow {
-                    Text("Weight per size (kg/m³, density)")
+                    Text("Weight per size (kg/m³, density)").settingInfo("Weight per size (kg/m³, density)")
                     number("Weight per size (kg/m³)", profile.material.density) { draft?.material.density = $0 }
                 }
                 GridRow {
-                    Text("Squish sideways (Poisson ratio)")
+                    Text("Squish sideways (Poisson ratio)").settingInfo("Squish sideways (Poisson ratio)")
                     number("Squish sideways", profile.material.poisson) { draft?.material.poisson = $0 }
                 }
             }
             Text("How it bends for good (flow curve)").font(.headline)
             Grid(alignment: .leading) {
                 GridRow {
-                    Text("Bent for good by (%)")
-                    Text("Takes (MPa)")
+                    Text("Bent for good by (%)").settingInfo("Bent for good by (%)")
+                    Text("Takes (MPa)").settingInfo("Takes (MPa)")
                     Color.clear.frame(width: 20, height: 1)
                 }
                 ForEach(profile.hardening.points.indices, id: \.self) { index in
