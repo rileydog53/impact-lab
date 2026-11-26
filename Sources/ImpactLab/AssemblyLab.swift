@@ -360,12 +360,8 @@ struct AssemblyLab: View {
                 experiment.linkPlacement = nil
                 library = true
             }
-            Button("Scenarios", systemImage: "flask") {
-                experiment.pause()
-                experiment.placingGauge = false
-                experiment.linkPlacement = nil
-                scenarioLibrary = true
-            }
+            // The Scenarios button is hidden (2026-11-26): its solver tests use the simplified soft material, which
+            // Joseph asked not to see. They still run in the automatic checks and the app's scenario smoke test.
             .disabled(experiment.solving)
             Menu("New / Examples", systemImage: "doc.badge.plus") {
                 Button("Blank Assembly") { loadPreset(AssemblyScene(), title: "Untitled assembly") }
