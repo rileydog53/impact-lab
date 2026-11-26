@@ -5,34 +5,32 @@ set -u
 N="${CI_PARALLEL:-1}"
 mkdir -p ci-out/status
 CHECKS=(
-  "ImpactCheck --outline-fracture quick"
-  "ImpactCheck --bend-rig quick"
-  "ImpactCheck --locking"
-  "python3 tests/regression/run.py --out ci-out/regression --skip-build"
-  "ImpactCheck --test-machine"
-  "ImpactCheck --legacy-replay check docs/legacy-replay-baseline.txt"
-  "ImpactCheck --spall"
-  "ImpactCheck --supports-gravity"
-  "ImpactCheck --lab-examples"
-  "ImpactCheck --scene-documents"
-  "ImpactCheck --taylor-trend"
-  "ImpactCheck run docs/showcase/brittle-tile-fracture.json --out ci-out/headless/brittle-tile-fracture --timeout 600"
-  "ImpactCheck --plate-impact"
-  "ImpactCheck --plasticity"
-  "ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/metal-plate-impact --timeout 600"
-  "ImpactCheck --assembly-replay"
-  "ImpactCheck --layered-bodies quick"
-  "ImpactCheck --materials"
-  "ImpactCheck --bulk-viscosity"
-  "ImpactCheck --fracture-guard"
-  "ImpactCheck --metal-profiles"
-  "ImpactCheck --showcases"
-  "ImpactCheck --workshop-improvements"
-  "ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600"
-  "ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/vtk-metal-plate-impact --timeout 600 --vtk && python3 tests/vtk/check_vtk.py ci-out/headless/vtk-metal-plate-impact"
+  "outline-fracture|ImpactCheck --outline-fracture quick"
+  "bend-rig|ImpactCheck --bend-rig quick"
+  "locking|ImpactCheck --locking"
+  "regression|python3 tests/regression/run.py --out ci-out/regression --skip-build"
+  "test-machine|ImpactCheck --test-machine"
+  "legacy-replay|ImpactCheck --legacy-replay check docs/legacy-replay-baseline.txt"
+  "spall|ImpactCheck --spall"
+  "supports-gravity|ImpactCheck --supports-gravity"
+  "lab-examples|ImpactCheck --lab-examples"
+  "scene-documents|ImpactCheck --scene-documents"
+  "taylor-trend|ImpactCheck --taylor-trend"
+  "plate-impact|ImpactCheck --plate-impact"
+  "plasticity|ImpactCheck --plasticity"
+  "assembly-replay|ImpactCheck --assembly-replay"
+  "layered-bodies|ImpactCheck --layered-bodies quick"
+  "materials|ImpactCheck --materials"
+  "bulk-viscosity|ImpactCheck --bulk-viscosity"
+  "fracture-guard|ImpactCheck --fracture-guard"
+  "metal-profiles|ImpactCheck --metal-profiles"
+  "showcases|ImpactCheck --showcases"
+  "workshop-improvements|ImpactCheck --workshop-improvements"
+  "linked-chain|ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600"
+  "metal-plate-vtk|ImpactCheck run docs/scene-examples/metal-plate-impact.json --out ci-out/headless/vtk-metal-plate-impact --timeout 600 --vtk && python3 tests/vtk/check_vtk.py ci-out/headless/vtk-metal-plate-impact"
 )
 run_one() {
-  local cmd="$1" name; name=$(echo "$cmd" | cut -c1-60 | tr -c 'A-Za-z0-9\n' '_')
+  local name="${1%%|*}" cmd="${1#*|}"
   local start=$(date +%s) status=0
   bash -c "$cmd" > "ci-out/$name.log" 2>&1 || status=$?
   echo "$cmd: $(( $(date +%s) - start )) s (exit $status)" >> ci-out/timings.txt
@@ -42,12 +40,16 @@ run_one() {
 # CI_TIER=quick (app-UI-only PRs): only the fast checks, a few minutes in all.
 if [ "${CI_TIER:-full}" = quick ]; then
   CHECKS=(
-    "ImpactCheck --materials" "ImpactCheck --metal-profiles" "ImpactCheck --fracture-guard"
-    "ImpactCheck --bulk-viscosity" "ImpactCheck --showcases" "ImpactCheck --workshop-improvements"
-    "ImpactCheck --assembly-replay" "ImpactCheck --layered-bodies quick" "ImpactCheck --scene-documents"
-    "ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600"
+    "materials|ImpactCheck --materials" "metal-profiles|ImpactCheck --metal-profiles" "fracture-guard|ImpactCheck --fracture-guard"
+    "bulk-viscosity|ImpactCheck --bulk-viscosity" "showcases|ImpactCheck --showcases" "workshop-improvements|ImpactCheck --workshop-improvements"
+    "assembly-replay|ImpactCheck --assembly-replay" "layered-bodies|ImpactCheck --layered-bodies quick" "scene-documents|ImpactCheck --scene-documents"
+    "linked-chain|ImpactCheck run docs/scene-examples/linked-chain.json --out ci-out/headless/linked-chain --timeout 600"
   )
 fi
+# Each check is "id|command"; the id names its log and status file. Refuse duplicate or missing ids.
+dups=$(printf '%s\n' "${CHECKS[@]}" | cut -d'|' -f1 | sort | uniq -d)
+[ -n "$dups" ] && { echo "Duplicate check ids: $dups"; exit 1; }
+for c in "${CHECKS[@]}"; do case "$c" in *"|"*) ;; *) echo "Check without id: $c"; exit 1;; esac; done
 echo "Tier ${CI_TIER:-full}: ${#CHECKS[@]} checks, $N at a time"
 for c in "${CHECKS[@]}"; do
   while [ "$(jobs -rp | wc -l)" -ge "$N" ]; do sleep 2; done
