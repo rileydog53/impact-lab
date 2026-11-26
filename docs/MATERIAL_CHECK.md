@@ -16,6 +16,9 @@ The five values, in the app's words and the code's units:
 
 - **65 values checked** (13 materials × 5).
 - **3 flagged** as more than 20% off: 304 stainless crack resistance, carbon fibre breaking strength, rubber stiffness. Each is explained in its material's section.
+- **The carbon fibre and rubber flags depend on which sources are compared.**
+  - Carbon fibre is compared against aerospace prepregs, though the Library entry is a commercial grade, and commercial sources sit near 600 MPa.
+  - Rubber is compared against two generic tables that repeat the same unsourced range. Against the two rubber-specific sources it lands exactly at the 20% line.
 - **4 near the edge** (15–20% off, not flagged): A36 squish sideways, A36 bends-for-good strength (against typical values), PVB breaking strength, rubber stiffness (against rubber-specific sources).
 - **7 crack resistance values are not stored** (copper, brass, carbon fibre, polycarbonate, PVB, rubber, oak). The app gives these a typed starting value of 1000 J/m² when cracking is switched on.
 - **No source found** for 2 of those 7: annealed copper (no valid test value exists, only estimates) and cartridge brass. PVB has just one source.
@@ -26,6 +29,11 @@ The five values, in the app's words and the code's units:
 1. For each value I took the two sources whose numbers are closest to each other. A range counts as its midpoint.
 2. The Library value is compared with the average of those two.
 3. A flag is a flag only. The average is **not** a suggested replacement. Where sources disagree, the grade, temper, test method and load time are noted, along with which one the Library entry seems to mean.
+4. Grade and test method did not decide which sources were compared.
+   - The pair was picked only by how close its numbers were, from every source read.
+   - Grade, temper, test method and load time were noted beside each value afterward.
+   - Where the closest pair is a different grade or method from the Library entry, the flag is marked source-dependent, and the grade-matched comparison is given beside it. That applies to carbon fibre and rubber.
+   - Elsewhere the closest pair already matched the Library entry's basis. For example, A36's minimum yield was compared with minimum values, and PVB stiffness with values at the same 3 s load and 20 °C.
 
 ### Flagged
 
@@ -38,12 +46,14 @@ The five values, in the app's words and the code's units:
    - Two aerospace prepreg fabrics (Hexcel 8552 AS4 plain weave and Toray T700/2510 plain weave) average 816 MPa, so the Library is −26%.
    - 600 matches ACP's "standard" fabric and the commercial-grade range on performancecomposites.com (345–621 MPa).
    - So the Library entry seems to mean a commercial or wet-layup grade, not aerospace prepreg.
+   - **Source-dependent:** this flag compares a commercial grade with aerospace prepregs. Against the grade-matched commercial sources (ACP 600, and RS about 595 from its failure strain) it is not over 20%.
 3. **Natural rubber, stiffness (3 MPa).**
    - Sources fall into two camps.
    - General property tables (Wikipedia Young's modulus, Engineering ToolBox, Brown University notes) all print "10–100 MPa" with no source and no grade. Against them the Library is −95%.
    - Unfilled vulcanised rubber sources give about 1–2 MPa (Nian & Suo 2 MPa; Treloar's data, about 1 MPa). NETZSCH gives a range of 1–5 MPa.
    - Against NETZSCH and Nian & Suo the Library is +20%, right at the line.
    - The 10–100 MPa tables look like they cover filled or hard compounds.
+   - **Source-dependent:** the two tables behind this flag repeat the same unsourced range. Against the two rubber-specific sources the Library lands exactly at the 20% line.
 
 ### Biggest surprises
 
@@ -227,7 +237,7 @@ The five values, in the app's words and the code's units:
 | Stiffness | 33 MPa | [AGC Stratobel](https://www.agc-yourglass.com/sites/default/files/2022-10/Material%20Properties%20of%20PVB%200722_EN_0.pdf) 33 (3 s, 20 °C) | [Eastman Saflex Clear](https://saflex-vanceva.eastman.com/content/dam/saflex/product-pages/saflex-clear/ai-arch-4321_saflex_clear_product_bulletin.pdf) 42 (3 s, 20 °C) | −12% | OK |
 | Squish sideways | 0.48 | AGC 0.5 | Saflex 0.5 | −4% | OK |
 | Density | 1070 | AGC 1070 | Saflex 1070 | 0% | OK |
-| Breaking strength | 20 MPa | Saflex 25 | [Zhang et al. 2015](https://core.ac.uk/download/195659926.pdf) 21.3–24.0 (slowest rate) | −16% to −18% | Near edge |
+| Breaking strength | 20 MPa | Saflex 25 | [Zhang et al. 2015](https://core.ac.uk/download/195659926.pdf) 21.3–24.0 (slowest rate) | −16.1% (midpoint); −13.6% to −18.4% across Zhang's range | Near edge |
 | Crack resistance | not stored | Saint-Gobain patent US 7,197,941: tearing 35,100 J/m² (0.38 mm film, 20 °C) | none | n/a | Not stored, one source |
 
 - **Stiffness:**
