@@ -6,7 +6,7 @@ Impact Lab is a 2D simulator. You see a flat slice of each object, as if it were
 
 ## Opening the app
 
-On the Mac, double-click `launch.command` in the Impact Lab folder. It builds the app and opens it. The first build takes a few minutes.
+On the Mac, double-click **Impact Lab (test build)** on the Desktop, or `launch.command` in the Impact Lab folder. Both open the latest shared test build without rebuilding it, so you always get the version Claude last built from main.
 
 The window has two tabs at the top:
 

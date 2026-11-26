@@ -1,6 +1,6 @@
 # Impact Lab candidate build: your test checklist (about 15 minutes)
 
-One app. To open it, double-click `launch.command` in this folder (first time it builds, about 2 minutes; macOS may ask you to allow it).
+One app. To open it, double-click **Impact Lab (test build)** on the Desktop or `launch.command` in this folder. Both open the shared test build without rebuilding (macOS may ask you to allow it the first time).
 
 ## What is new in this build
 1. **The 4 small fixes (PR 2):** each body shows "fracture on / off / n/a" tags; small bodies are allowed (minimum follows mesh size); Open/Save remember your last folder; the spring panel explains starting length, rest length, preload and stiffness in plain words with a picture. Also a crash fix for enclosures.
