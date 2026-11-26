@@ -72,5 +72,24 @@ func libraryAndForecastCheck() throws {
     let inner = try AssemblySimulation(nested).contactForecasts()
     // Inner face at x = -0.04, core's left face at x = -0.015: 25 mm at 10 m/s = 2.5 ms.
     require(inner.count == 1 && abs(inner[0].time - 0.0025) < 1e-6, "Core reaches the inner face: \(inner)")
+
+    // 4. Strong-smoothing warning: rubber hit at 20 m/s with smoothing on is warned about; steel at 150 m/s is not.
+    var padded = AssemblyScene()
+    var pad = AssemblyPart("Pad", center: Point(-0.03, 0), size: Point(0.02, 0.02))
+    MaterialProfile.naturalRubber.apply(to: &pad)
+    var striker = AssemblyPart("Striker", center: Point(0.01, 0), size: Point(0.02, 0.02))
+    MaterialProfile.structuralSteel.apply(to: &striker)
+    striker.velocity = Point(-20, 0)
+    padded.parts = [pad, striker]
+    padded.bulkViscosity = .standard
+    require(padded.smoothingAdvisory?.contains("Pad") == true && padded.sceneAdvisories.contains(padded.smoothingAdvisory!),
+            "Rubber hit at 20 m/s with smoothing on is warned about")
+    var unsmoothed = padded
+    unsmoothed.bulkViscosity = nil
+    require(unsmoothed.smoothingAdvisory == nil, "No smoothing, no warning")
+    var metal = padded
+    MaterialProfile.structuralSteel.apply(to: &metal.parts[0])
+    metal.parts[1].velocity = Point(-150, 0)
+    require(metal.smoothingAdvisory == nil, "Steel on steel at 150 m/s is not warned about")
     print("Library and touch estimate: \(library.count) materials, all checks passed")
 }
