@@ -361,6 +361,7 @@ struct AssemblyEditor: View {
                 }
                     .disabled(!experiment.canEdit)
                     .help("Override the triangle size for this body")
+                    .settingInfo("Body mesh")
                 Text(part.refinement == nil
                      ? "Follows the assembly mesh (\(experiment.scene.resolution.label)) set in Simulation settings."
                      : "Overrides the assembly mesh. This body keeps \(part.refinement!.label) even when the assembly mesh changes. Reset all overrides in Simulation settings.")
@@ -415,6 +416,7 @@ struct AssemblyEditor: View {
                                 Text("Metal: bends for good (J2 plasticity)").tag(CouponResponse.elastoplastic)
                             }
                             .disabled(!experiment.canEdit)
+                            .settingInfo("How it behaves")
                         }
                         if part.bondedLayer != nil {
                             Text("These are the first layer's numbers. Each bonded layer below has its own.")
@@ -546,7 +548,7 @@ struct AssemblyEditor: View {
                         }
                         $0.alignLayerFracture(fillMissing: enabled)
                     }
-                })).toggleStyle(.checkbox)
+                })).toggleStyle(.checkbox).settingInfo("Can crack")
                 if part.fracture == nil {
                     Text("Off: this body never cracks.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -649,6 +651,7 @@ struct AssemblyEditor: View {
                     }
                 }
                 .help("Which way the triangles inside the block lean. Cracks can only run along triangle edges.")
+                .settingInfo("Triangle pattern inside")
             }
             let resolution = part.refinement ?? experiment.scene.resolution
             Text(resolution.rawValue <= 3
@@ -738,7 +741,7 @@ struct AssemblyEditor: View {
         if let outline = part.outline {
             Toggle("Set this body's mesh size", isOn: Binding(get: { outline.meshSize != nil }, set: { custom in
                 experiment.setMeshSize(part.id, custom ? outline.edgeLength(resolution: mesh) : nil)
-            })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
+            })).toggleStyle(.checkbox).disabled(!experiment.canEdit).settingInfo("Set this body's mesh size")
             if let size = outline.meshSize {
                 numeric("Target triangle edge (mm)", value: size, range: BodyOutline.meshSizeRange, scale: 1000) { value in
                     experiment.setMeshSize(part.id, value)
@@ -1110,7 +1113,7 @@ struct AssemblyEditor: View {
                     experiment.edit { $0.meshResolution = resolution }
                 })) {
                     ForEach(AssemblyScene.Resolution.allCases, id: \.self) { Text($0.label).tag($0) }
-                }.disabled(!experiment.canEdit)
+                }.disabled(!experiment.canEdit).settingInfo("Assembly mesh")
                 if experiment.scene.parts.contains(where: { $0.refinement != nil }) {
                     Button("Reset All Body Mesh Overrides") {
                         experiment.edit("Reset Mesh Overrides") { scene in
@@ -1130,7 +1133,7 @@ struct AssemblyEditor: View {
                 }
                 Toggle("Smooth out shock waves (artificial bulk viscosity)", isOn: Binding(get: { experiment.scene.bulkViscosity != nil }, set: { on in
                     experiment.edit(on ? "Turn On Bulk Viscosity" : "Turn Off Bulk Viscosity") { $0.bulkViscosity = on ? .standard : nil }
-                })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
+                })).toggleStyle(.checkbox).disabled(!experiment.canEdit).settingInfo("Smooth out shock waves")
                 if let viscosity = experiment.scene.bulkViscosity {
                     numeric("Gentle smoothing (linear coefficient b1)", value: viscosity.linear, range: BulkViscosity.linearRange, scale: 1) { value in
                         experiment.edit { $0.bulkViscosity?.linear = value }
@@ -1143,7 +1146,7 @@ struct AssemblyEditor: View {
                 }
                 Toggle("Gravity", isOn: Binding(get: { (experiment.scene.gravity ?? 0) > 0 }, set: { on in
                     experiment.edit(on ? "Turn On Gravity" : "Turn Off Gravity") { $0.gravity = on ? AssemblyScene.standardGravity : nil }
-                })).toggleStyle(.checkbox).disabled(!experiment.canEdit)
+                })).toggleStyle(.checkbox).disabled(!experiment.canEdit).settingInfo("Gravity")
                 if let g = experiment.scene.gravity, g > 0 {
                     numeric("Gravity (m/s², downward)", value: g, range: AssemblyScene.gravityRange, scale: 1) { value in
                         experiment.edit { $0.gravity = value > 0 ? value : nil }
@@ -1272,7 +1275,7 @@ struct AssemblyEditor: View {
     private func numeric(_ label: String, value: Double, range: ClosedRange<Double>, scale: Double,
                          set: @escaping (Double) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.caption).foregroundStyle(.secondary).settingInfo(label)
             TextField(label, value: Binding(get: { value * scale }, set: { newValue in
                 if newValue.isFinite { set(min(range.upperBound, max(range.lowerBound, newValue / scale))) }
             }), format: .number.precision(.fractionLength(0...3)))
