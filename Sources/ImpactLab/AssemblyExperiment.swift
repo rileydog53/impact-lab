@@ -67,6 +67,12 @@ struct AssemblyComparison {
     static let historyLimit = 6
     private var runNumber = 0
     @ObservationIgnored private var runEstimate: RunCostEstimate?
+    /// Recent (wall seconds, simulated seconds) progress points of the running calculation, for the time-left
+    /// estimate. Reporting only: nothing in the calculation reads it.
+    @ObservationIgnored private(set) var progressTrail: [(elapsed: Double, time: Double)] = []
+    /// How far back the time-left estimate looks: long enough to smooth out single slow steps, short enough to
+    /// follow a run that slows down once bodies touch or start cracking.
+    static let recentWindow = 15.0
     private(set) var cameraRevision = 0
 
     /// The scene the app opens with: a real-material showcase (Joseph, 2026-11-26: no soft demo material in view).
@@ -439,6 +445,7 @@ struct AssemblyComparison {
         let id = UUID()
         solveID = id
         runEstimate = estimate
+        progressTrail = []
         solving = true
         cancelling = false
         let (updates, continuation) = AsyncStream.makeStream(of: AssemblyComputation.self, bufferingPolicy: .bufferingNewest(1))
@@ -492,6 +499,10 @@ struct AssemblyComparison {
         Task { [weak self] in
             for await update in updates {
                 guard let self, solveID == id else { return }
+                progressTrail.append((update.elapsed, update.time))
+                if let first = progressTrail.first, update.elapsed - first.elapsed > 2 * Self.recentWindow {
+                    progressTrail.removeAll { update.elapsed - $0.elapsed > Self.recentWindow }
+                }
                 computation = update
             }
             let (solved, recorded, checkpoints, final) = await worker.value
@@ -518,6 +529,19 @@ struct AssemblyComparison {
                 if history.count > Self.historyLimit { history.removeFirst() }
             }
         }
+    }
+
+    /// Wall seconds left in the running calculation, from its speed over the last `recentWindow` seconds.
+    /// The whole-run average misleads when a run slows down after bodies touch or start cracking, which
+    /// is when the old estimate ran out before the run did (Joseph, 2026-11-26).
+    func remainingWallTime(_ run: AssemblyComputation) -> Double? {
+        guard run.elapsed > 1, run.time > 0 else { return nil }
+        var rate = run.time / run.elapsed
+        if let first = progressTrail.first(where: { run.elapsed - $0.elapsed <= Self.recentWindow }),
+           run.elapsed - first.elapsed >= 3, run.time > first.time {
+            rate = (run.time - first.time) / (run.elapsed - first.elapsed)
+        }
+        return max(0, run.duration - run.time) / rate
     }
 
     func cancelCalculation() {

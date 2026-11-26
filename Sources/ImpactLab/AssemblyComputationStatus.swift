@@ -82,8 +82,8 @@ struct AssemblyComputationStatus: View {
                 }
                 Text("\(run.work.steps.formatted()) steps · \(run.elapsed, specifier: "%.2f") s elapsed · CPU \(cpu(run)) · RAM \(memory(run.process.resident))")
                     .foregroundStyle(.secondary)
-                if experiment.solving, let remaining = remaining(run) {
-                    Text("About \(RunCostEstimate.duration(remaining).replacingOccurrences(of: "about ", with: "")) remaining at the measured speed (updates as the run goes; contact or cracking can change it). \(experiment.simulation.timestep.cause == .material ? "" : "Step set by \(experiment.simulation.timestep.cause.rawValue).")")
+                if experiment.solving, let remaining = experiment.remainingWallTime(run) {
+                    Text("About \(RunCostEstimate.duration(remaining).replacingOccurrences(of: "about ", with: "")) left at the speed of the last few seconds (it updates as the run goes; touching or cracking bodies slow it down). \(experiment.simulation.timestep.cause == .material ? "" : "Step set by \(experiment.simulation.timestep.cause.rawValue).")")
                         .foregroundStyle(remaining > RuntimeWarnings.thresholds.long ? assemblyAmber : .secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -92,12 +92,6 @@ struct AssemblyComputationStatus: View {
             .font(.caption)
             .controlSize(.small)
         }
-    }
-
-    /// Remaining wall time from the simulated time reached so far in this calculation.
-    private func remaining(_ run: AssemblyComputation) -> Double? {
-        guard run.elapsed > 1, run.time > 0 else { return nil }
-        return (run.duration - run.time) * run.elapsed / run.time
     }
 
     private func cpu(_ run: AssemblyComputation) -> String {
