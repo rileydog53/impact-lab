@@ -169,21 +169,37 @@ private extension Preset {
 
 @available(macOS 15.0, *)
 private struct PresentedLaboratory: App {
-    var body: some Scene { LaboratoryWindow().defaultLaunchBehavior(.presented) }
+    var body: some Scene {
+        LaboratoryWindow().defaultLaunchBehavior(.presented)
+        CreditsWindow().defaultLaunchBehavior(.suppressed)
+    }
 }
 
 private struct Laboratory: App {
-    var body: some Scene { LaboratoryWindow() }
+    var body: some Scene {
+        LaboratoryWindow()
+        CreditsWindow()
+    }
 }
 
 private struct LaboratoryWindow: Scene {
     var body: some Scene {
-        WindowGroup("Impact Lab") {
+        WindowGroup("Impact Lab · build \(BuildInfo.label)") {
             LaboratoryTabs()
                 .frame(minWidth: 940, minHeight: 660)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1180, height: 760)
+        .commands { ImpactLabCommands() }
+    }
+}
+
+private struct CreditsWindow: Scene {
+    var body: some Scene {
+        Window("Credits and Licences", id: "credits") {
+            CreditsView().preferredColorScheme(.dark)
+        }
+        .windowResizability(.contentSize)
     }
 }
 
@@ -912,7 +928,7 @@ struct LabView: View {
         let args = CommandLine.arguments
         guard let flag = args.firstIndex(of: "--smoke"), args.indices.contains(flag + 1) else { return }
         try? await Task.sleep(for: .milliseconds(250))
-        let windowVisible = NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" }
+        let windowVisible = NSApplication.shared.windows.contains { $0.isVisible && $0.title.hasPrefix("Impact Lab") }
         var results = ["window=\(windowVisible)", "opens on off-axis impact=\(experiment.preset == .offAxisImpact)"]
         for preset in Preset.allCases {
             experiment.select(preset)

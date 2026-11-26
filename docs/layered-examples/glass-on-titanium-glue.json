@@ -1,0 +1,81 @@
+{
+  "description": "Fracture demonstration: a 6 mm window-glass sheet glued with structural epoxy to a 6 mm titanium plate, hit on the glass by a 20 mm steel ball at 20 m/s. Three different things can fail, each with its own settings: the glass can crack inside itself, the glue line can let go so the glass peels off the titanium (delamination), and the titanium can crack inside itself (it is far tougher than glass). Materials, left to right: Window glass (Library: Pilkington ATS-129) and Titanium Ti-6Al-4V (Library: Wikipedia and AeroSpace Metals); the ball is Library steel (A36). Glass crack numbers: 41 MPa and 7.4 J/m² (Pilkington; Wikipedia and MakeItFrom toughness). Titanium crack numbers: 938 MPa and 64918 J/m² (NIST TN 2065 and others, as in the Library's estimate). Glue: 31 MPa and 466.5 J/m², the structural-epoxy stand-ins also used in the laminated-glass example (3M DP460; Martiny et al. 2013, Blackman et al. 2003). Every toughness and glue value is experimental. The app is 2D (plane strain), so the ball is really a long steel rod seen end on. Numerical results, not validation.",
+  "duration": 0.0002,
+  "meshResolution": "x4",
+  "bulkViscosity": true,
+  "monitor": "Glass glued on titanium",
+  "parts": [
+    {
+      "name": "Glass glued on titanium",
+      "size": [
+        0.012,
+        0.1
+      ],
+      "center": [
+        0,
+        0
+      ],
+      "material": {
+        "profile": "soda-lime-glass",
+        "elasticOnly": true
+      },
+      "fracture": {
+        "strength": 41000000.0,
+        "energy": 7.4,
+        "energySource": {
+          "status": "estimated",
+          "citation": "Soda-lime glass K_IC 0.75 MPa√m (Wikipedia, MakeItFrom) and mean modulus of rupture 41 MPa (Pilkington ATS-129); G = K²(1-ν²)/E.",
+          "url": "https://en.wikipedia.org/wiki/Soda%E2%80%93lime_glass",
+          "caution": "Experimental; glass strength depends strongly on surface flaws."
+        }
+      },
+      "bondedLayer": {
+        "interfaceFraction": 0.5,
+        "material": {
+          "profile": "titanium-ti6al4v-annealed",
+          "elasticOnly": false
+        },
+        "fracture": {
+          "strength": 938000000.0,
+          "energy": 64918.2,
+          "energySource": {
+            "status": "estimated",
+            "citation": "Ti-6Al-4V K_IC about 90.3 MPa√m: average of the two closest of 75 (AeroSpace Metals), 91 (NIST TN 2065, citing Donachie) and 89.5 (NIST, citing Salem 2008); tensile strength 938 MPa. G = K²(1-ν²)/E.",
+            "url": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2065.pdf",
+            "caution": "Handbook estimate; real toughness varies with heat, orientation and thickness."
+          }
+        },
+        "bond": {
+          "strength": 31000000.0,
+          "energy": 466.5,
+          "energySource": {
+            "status": "estimated",
+            "citation": "Structural epoxy G_IC 466.5 J/m², average of the two closest of 250 (Betamate 73455, Martiny et al. 2013), 683 (round-robin TDCB on aluminium, Blackman et al. 2003) and 1250 J/m² (ESP 110, Martiny et al. 2013). Strength 31 MPa is 3M DP460 overlap shear, used as a stand-in for opening strength.",
+            "url": "https://core.ac.uk/download/77002118.pdf",
+            "caution": "Experimental; epoxy toughness varies widely with formulation and bond thickness; measured on aluminium, used here on titanium."
+          }
+        }
+      }
+    },
+    {
+      "name": "Steel ball",
+      "shape": "round",
+      "size": [
+        0.02,
+        0.02
+      ],
+      "center": [
+        -0.0165,
+        0
+      ],
+      "velocity": [
+        20,
+        0
+      ],
+      "material": {
+        "profile": "structural-steel-a36",
+        "elasticOnly": true
+      }
+    }
+  ]
+}

@@ -78,7 +78,7 @@ Add bodies with the **+** menu in the workshop, or draw your own shape. Every ne
 
 Under **Material**, click **Choose a material** and pick one by name. The Library has metals that bend for good (steel, stainless steel, aluminium, copper, titanium, brass) and materials that spring back (carbon fibre, window glass, epoxy, polycarbonate, safety-glass plastic, rubber, oak). Each one's numbers come from published sources, listed under its **Source** link.
 
-To try something that isn't in the list, click **Type my own numbers instead**. The settings, in plain words:
+To try something that isn't in the list, click **Change these numbers** (it keeps the Library numbers as your starting point). The settings, in plain words:
 
 | Setting | What it means | For scale |
 |---|---|---|
