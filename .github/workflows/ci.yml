@@ -19,6 +19,12 @@ jobs:
   # One job: build the Swift package once, then run every check as its own step on the same runner.
   # Each check step uses if: always() so one failure does not hide the rest; any failure fails the job.
   ci:
+    # One run's checks at a time across the whole repo (Joseph, 2026-11-25). Other PRs and pushes wait
+    # their turn in order (queue: max, up to 100 waiting). The workflow-level group above still cancels
+    # an older run when the same PR or branch gets a newer push.
+    concurrency:
+      group: ci-one-at-a-time
+      queue: max
     name: build and checks
     # Joseph's Mac (label impactlab-mac) takes pushes and PRs from this repo's own branches,
     # only while the repo variable IMPACTLAB_MAC is 'on'. Fork PRs and everything else stay on GitHub-hosted macOS.
