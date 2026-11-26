@@ -6,7 +6,7 @@ The `build and checks` job picks a tier from the files a pull request changes:
 |---|---|---|
 | docs | only `docs/`, `research/`, `reports/`, `*.md`, `LICENSE` changed | nothing; the check passes so merges aren't blocked |
 | quick | only the app UI (`Sources/ImpactLab/`) plus docs changed. No check target depends on it | release build + 10 fast checks |
-| full | anything else (solver, physics, geometry, checks, scenes, CI), every push to `main`, manual runs | every check, including replay regressions |
+| full | anything else (solver, physics, geometry, checks, scenes, CI), manual runs. Pushes to `main` use the same rules on everything since the previous main commit | every check, including replay regressions |
 
 When unsure, the job uses the full suite. Checks are listed in `scripts/ci-checks.sh`.
 
@@ -16,3 +16,5 @@ When unsure, the job uses the full suite. Checks are listed in `scripts/ci-check
 - Takes a run only when free; a busy or offline Mac sends the run to GitHub-hosted macOS (no repo-wide queue). Runs 3 checks at a time; GitHub-hosted runs 1 at a time.
 - Keeps one SwiftPM build cache in `~/actions-runner/spm-cache`, wiped by the after-job hook only past 6 GB. The disk rule targets unmanaged clutter, so don't delete this cache.
 - Stop: `launchctl bootout gui/$(id -u)/com.impactlab.runner`
+
+The full and quick tiers split into 3 shards that run side by side (`checks shard 1..3`), balanced by measured durations in `scripts/ci-checks.sh`. Shard 1 uses the Mac when it is free. The summary check `build and checks` passes only when every shard passed.
