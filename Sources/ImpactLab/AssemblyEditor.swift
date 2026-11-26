@@ -45,6 +45,7 @@ struct AssemblyEditor: View {
                 if !experiment.canEdit {
                     Text("Showing a result. Use Edit a Copy to change the setup while keeping this result as the reference, or Reset Run to discard it.")
                         .font(.caption).foregroundStyle(assemblyAmber)
+                    AssemblyRunSummary(experiment: experiment)
                 }
                 components
                 if experiment.scene.parts.isEmpty {
@@ -103,6 +104,7 @@ struct AssemblyEditor: View {
                 }
                 Divider()
                 runSettings
+                if experiment.canEdit && !experiment.scene.parts.isEmpty { AssemblyRunSummary(experiment: experiment) }
             }
             .padding(.horizontal, 17)
             .padding(.vertical, 15)

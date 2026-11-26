@@ -53,7 +53,6 @@ struct AssemblyLab: View {
                     indicators
                     trace
                     if experiment.frames.count > 1 { timeline }
-                    if !experiment.scene.parts.isEmpty { AssemblyRunSummary(experiment: experiment) }
                     if experiment.clip != nil || experiment.slowing || experiment.slowNote != nil { slowMotionBanner }
                     if scenario != nil { scenarioBanner }
                     AssemblyComputationStatus(experiment: experiment)

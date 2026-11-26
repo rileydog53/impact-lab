@@ -11,7 +11,7 @@ struct AssemblyRunSummary: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            ScrollView { VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(experiment.scene.parts.enumerated()), id: \.element.id) { index, part in
                     bodyRow(index, part)
                 }
@@ -21,14 +21,13 @@ struct AssemblyRunSummary: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4) }
-            .frame(maxHeight: 150)
+            .padding(.top, 4)
         } label: {
             Text(experiment.canEdit ? "What will be simulated" : "What was simulated")
                 .font(.callout.weight(.semibold))
         }
         .padding(8)
-        .background(assemblyPanel, in: RoundedRectangle(cornerRadius: 8))
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var runLine: String {
