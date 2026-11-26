@@ -76,7 +76,7 @@ struct SettingInfoIcon: View {
         }
         .buttonStyle(.borderless)
         .help(text)
-        .popover(isPresented: $showing, arrowEdge: .trailing) {
+        .popover(isPresented: $showing, arrowEdge: .leading) {
             Text(text)
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)

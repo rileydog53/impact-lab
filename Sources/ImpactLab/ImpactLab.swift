@@ -184,7 +184,7 @@ private struct Laboratory: App {
 
 private struct LaboratoryWindow: Scene {
     var body: some Scene {
-        WindowGroup("Impact Lab · build \(BuildInfo.label)") {
+        WindowGroup("Impact Lab") {
             LaboratoryTabs()
                 .frame(minWidth: 940, minHeight: 660)
                 .preferredColorScheme(.dark)

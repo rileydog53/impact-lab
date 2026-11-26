@@ -6,7 +6,7 @@ import SwiftUI
 
 struct AssemblyEditor: View {
     let experiment: AssemblyExperiment
-    @State private var bodySettings = !CommandLine.arguments.contains("--open-mesh")
+    @State private var bodySettings = false
     @State private var materialTarget: MaterialTarget?
     @State private var materialSettings = false
     @State private var connectionList = false
@@ -27,6 +27,8 @@ struct AssemblyEditor: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Inspector").font(.headline)
+                    Text("build \(BuildInfo.label)").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                        .help("The build of Impact Lab you are using. Quote it when reporting a problem. Also under Help > Credits and Licences.")
                     Spacer()
                     Button("Undo", systemImage: "arrow.uturn.backward") { experiment.undo() }
                         .labelStyle(.iconOnly)
@@ -202,9 +204,9 @@ struct AssemblyEditor: View {
                     .disabled(!experiment.canEdit || experiment.selectedParts.isEmpty)
                     .help("Duplicate, group, delete, or reorder selected bodies. Copies carry internal links. With two bodies selected, Cut removes the second body's material from the first (highlighted) one, and Join merges them; both results are outline bodies.")
                 }
-                Button("Limits and advice", systemImage: "ruler") { showWorkshopLimits.toggle() }
+                Button("Limits", systemImage: "ruler") { showWorkshopLimits.toggle() }
                     .help("Which numbers the app will not accept (hard limits), and which notes are only advice")
-                    .popover(isPresented: $showWorkshopLimits) { workshopLimits }
+                    .popover(isPresented: $showWorkshopLimits, arrowEdge: .leading) { workshopLimits }
             }.controlSize(.small)
         }
     }
@@ -1337,6 +1339,8 @@ struct AssemblyNumberField: View {
     let enabled: Bool
     let set: (Double) -> Void
     @State private var note: String?
+    /// The value the note was written about; any other change of the value clears the note.
+    @State private var noteValue: Double?
 
     private static func show(_ number: Double) -> String { number.formatted(.number.precision(.significantDigits(1...6))) }
 
@@ -1349,7 +1353,8 @@ struct AssemblyNumberField: View {
                 if used != typed / scale {
                     let side = typed / scale > range.upperBound ? "largest" : "smallest"
                     note = "You typed \(Self.show(typed)). The \(side) value this box accepts is \(Self.show(used * scale)), so \(Self.show(used * scale)) is used."
-                } else {
+                    noteValue = used
+                } else if used != value {
                     note = nil
                 }
                 set(used)
@@ -1357,7 +1362,7 @@ struct AssemblyNumberField: View {
             .labelsHidden().textFieldStyle(.roundedBorder).monospacedDigit()
             .disabled(!enabled)
             .help("Accepts \(Self.show(range.lowerBound * scale)) to \(Self.show(range.upperBound * scale)). Press Return to apply.")
-            if let note {
+            if let note, noteValue == value {
                 Label(note, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
             }

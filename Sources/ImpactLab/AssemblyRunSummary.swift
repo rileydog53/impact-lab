@@ -78,7 +78,7 @@ struct AssemblyRunSummary: View {
                 ? "your version of \(library?.plainName ?? provenance.name)"
                 : (library?.plainName ?? provenance.name) + " (Library, sourced)"
         } else {
-            label = "numbers set in this experiment (stiffness \(String(format: "%.3g", material.young / 1e9)) GPa)"
+            label = "numbers set in this experiment (stiffness \((material.young / 1e9).formatted(.number.precision(.significantDigits(1...4)))) GPa)"
         }
         return label + (plastic ? ", bends for good" : ", springs back")
     }
