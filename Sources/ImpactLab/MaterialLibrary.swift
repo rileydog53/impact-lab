@@ -56,6 +56,7 @@ enum MaterialTarget: String, Identifiable {
         switch self {
         case .body:
             let hadFracture = part.fracture != nil
+            part.name = MaterialNaming.renamed(part.name, from: part.material.provenance, to: profile.material.provenance)
             profile.apply(to: &part, elasticOnly: elasticOnly || requiresElastic(in: part))
             // Cracking stays on when it was on: the profile's sourced numbers if it has them, else a start the user edits.
             if hadFracture { part.fracture = AssemblyPart.startingFracture(for: profile) }
@@ -183,7 +184,7 @@ struct MaterialLibrary: View {
                     }
                 } else {
                     Text("Metal: bends for good past a point (J2 plasticity).")
-                    Text("Bends for good at \(profile.hardening.points[0].stress / 1e6, specifier: "%.4g") MPa (yield strength)")
+                    Text("Bends for good at \(profile.hardening.points[0].stress / 1e6, specifier: "%.4g") MPa")
                     HardeningPreview(table: profile.hardening)
                     Text("How much harder it gets to bend as it bends further. Past the last point it stays level.")
                         .foregroundStyle(.secondary)
@@ -222,15 +223,15 @@ struct MaterialLibrary: View {
                 .accessibilityIdentifier("material-profile-name")
             Grid(alignment: .leading) {
                 GridRow {
-                    Text("Stiffness (GPa, Young’s modulus)").settingInfo("Stiffness (GPa, Young’s modulus)")
+                    Text("Stiffness (GPa)").settingInfo("Stiffness (GPa)")
                     number("Stiffness (GPa)", profile.material.young / 1e9) { draft?.material.young = $0 * 1e9 }
                 }
                 GridRow {
-                    Text("Weight per size (kg/m³, density)").settingInfo("Weight per size (kg/m³, density)")
+                    Text("Weight per size (kg/m³)").settingInfo("Weight per size")
                     number("Weight per size (kg/m³)", profile.material.density) { draft?.material.density = $0 }
                 }
                 GridRow {
-                    Text("Squish sideways (Poisson ratio)").settingInfo("Squish sideways (Poisson ratio)")
+                    Text("Squish sideways").settingInfo("Squish sideways")
                     number("Squish sideways", profile.material.poisson) { draft?.material.poisson = $0 }
                 }
             }
@@ -297,7 +298,7 @@ struct MaterialLibrary: View {
                 return "Row \(i + 1): the stress must not be lower than the row above it."
             }
         }
-        return "Check the numbers: stiffness 0.0005–400 GPa, weight per size 100–25,000 kg/m³, squish sideways −0.9–0.48, stress above 0 up to 20,000 MPa, bend up to 100%."
+        return "Check the numbers: stiffness 0.0005–1,200 GPa, weight per size 100–25,000 kg/m³, squish sideways −0.9–0.48, stress above 0 up to 20,000 MPa, bend up to 100%."
     }
 
     private func number(_ label: String, _ value: Double, set: @escaping (Double) -> Void) -> some View {

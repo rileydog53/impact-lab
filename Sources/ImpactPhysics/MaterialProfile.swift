@@ -83,6 +83,12 @@ public struct MaterialProvenance: Codable, Equatable, Sendable {
     public let referenceID: String?
 
     public var isCustom: Bool { referenceID != nil }
+
+    /// The same label under a new id and name, marked as the user's version of this material.
+    public func editableCopy(named newName: String) -> MaterialProvenance {
+        MaterialProvenance(id: UUID().uuidString, name: newName, family: family, condition: condition, source: source,
+                           sourceName: sourceName, evidence: evidence, referenceID: referenceID ?? id)
+    }
     var isValid: Bool {
         !id.isEmpty && id.count <= 64 && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && name.count <= 64 && family.count <= 100 && condition.count <= 200 && evidence.count <= 500

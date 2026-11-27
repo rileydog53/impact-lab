@@ -63,7 +63,7 @@
         {
           "type": "object", "additionalProperties": false,
           "properties": {
-            "young": { "type": "number", "minimum": 500000, "maximum": 400000000000, "default": 1000000, "description": "Young's modulus, Pa." },
+            "young": { "type": "number", "minimum": 500000, "maximum": 1200000000000, "default": 1000000, "description": "Young's modulus, Pa." },
             "density": { "type": "number", "minimum": 100, "maximum": 25000, "default": 1000, "description": "kg/m³." },
             "poisson": { "type": "number", "minimum": -0.9, "maximum": 0.48, "default": 0 },
             "provenance": { "type": "object", "description": "Written by the app for library profiles. Prefer the profile form when writing by hand." }

@@ -81,7 +81,7 @@ There are three ways to write a material:
 ```
 
 - **Reference profiles** come with their source, evidence notes and tabulated J2 plasticity. The four profiles are `structural-steel-a36`, `stainless-304-annealed`, `aluminum-6061-t6` and `copper-c11000-annealed`. `elasticOnly: true` keeps the elastic constants and turns off yielding.
-- **Custom materials** take Young's modulus (0.5 MPa – 400 GPa), density (100 – 25,000 kg/m³) and Poisson's ratio (−0.9 – 0.48). For a custom material you can add:
+- **Custom materials** take Young's modulus (0.5 MPa – 1,200 GPa), density (100 – 25,000 kg/m³) and Poisson's ratio (−0.9 – 0.48). For a custom material you can add:
 
 ```json
 "plasticity": { "response": "Elastoplastic",

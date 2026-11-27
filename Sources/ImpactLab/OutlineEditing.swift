@@ -175,7 +175,9 @@ enum OutlinePrimitive: String, CaseIterable {
             error = "A bonded-layer block cannot become an outline yet: region materials are not part of the outline model. Remove the bonded layers first."
             return
         }
-        let next = part.reshaped(to: part.region())
+        // 24 points for a round body (Joseph, 2026-11-26: 48 was too many to edit by hand). Its edge stays within
+        // 0.9% of the true circle, finer than one triangle of the usual mesh.
+        let next = part.reshaped(to: part.region(roundSides: 24))
         edit("Convert to Outline") { $0.replace(part, with: next) }
     }
 

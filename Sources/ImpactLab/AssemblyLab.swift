@@ -20,6 +20,7 @@ struct AssemblyLab: View {
     @State private var sceneGuide = false
     @State private var study = false
     @State private var library = false
+    @State private var savedExperiments = false
     @State private var studySmokeResult: Result<AssemblyStudy, Error>?
     @State private var signal = 0
     @State private var replacement: Replacement?
@@ -78,6 +79,7 @@ struct AssemblyLab: View {
         }
         .sheet(isPresented: $showMeshReport) { meshReport }
         .sheet(isPresented: $sceneGuide) { SceneFormatGuide() }
+        .sheet(isPresented: $savedExperiments) { SavedExperimentsSheet { open($0) } }
         .sheet(isPresented: $measurements) {
             ReplayMeasurements(scene: experiment.scene, frames: experiment.frames,
                                events: experiment.replay?.timeline ?? [], time: experiment.displayTime)
@@ -395,6 +397,9 @@ struct AssemblyLab: View {
             }.fixedSize()
             Button("Open", systemImage: "folder") { open() }
                 .keyboardShortcut("o", modifiers: .command)
+            Button("Saved Experiments", systemImage: "clock.arrow.circlepath") { savedExperiments = true }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .help("Every experiment you opened or saved recently, and every saved experiment Spotlight finds on this Mac")
             Button("Save", systemImage: "square.and.arrow.down") { save() }
                 .keyboardShortcut("s", modifiers: .command)
             Menu {
@@ -930,8 +935,15 @@ struct AssemblyLab: View {
         let dialog = NSOpenPanel()
         dialog.allowedContentTypes = [.json]
         guard let url = ExperimentDirectory.run(dialog, fallback: experiment.fileURL) else { return }
+        open(url)
+    }
+
+    /// Opens one saved experiment, from the Open dialog or the Saved Experiments list, and remembers it.
+    private func open(_ url: URL) {
+        experiment.pause()
         do {
             replacement = Replacement(scene: try AssemblyScene.open(url), title: AssemblyExperiment.fileTitle(url), url: url)
+            SavedExperiments.remember(url)
             applyPendingReplacement()
         } catch { experiment.error = error.localizedDescription }
     }
@@ -965,11 +977,14 @@ struct AssemblyLab: View {
             let dialog = NSSavePanel()
             dialog.allowedContentTypes = [.json]
             dialog.nameFieldStringValue = "\(experiment.title).impact-assembly.json"
-            guard let destination = ExperimentDirectory.run(dialog, fallback: experiment.fileURL) else { return false }
+            let start = experiment.fileURL ?? (ExperimentDirectory.start() == nil
+                ? SavedExperiments.prepareDefaultFolder().appendingPathComponent("new") : nil)
+            guard let destination = ExperimentDirectory.run(dialog, fallback: start) else { return false }
             url = destination
         }
         do {
             try experiment.save(to: url)
+            SavedExperiments.remember(url)
             return true
         } catch {
             experiment.error = error.localizedDescription
@@ -1014,7 +1029,7 @@ struct AssemblyLab: View {
             GeometrySmoke.pose(args[index + 1], experiment)
             showMesh = args.contains("--show-mesh")
             NSApplication.shared.activate(ignoringOtherApps: true)
-            if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0.title == "Impact Lab" }),
+            if let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0.title.hasPrefix("Impact Lab") }),
                let screen = window.screen?.visibleFrame {
                 window.setFrame(screen.insetBy(dx: 8, dy: 8), display: true)
             }
@@ -1036,7 +1051,7 @@ struct AssemblyLab: View {
             for _ in 0..<1200 where experiment.solving { try? await Task.sleep(for: .milliseconds(100)) }
         }
         do {
-            let visible = NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" }
+            let visible = NSApplication.shared.windows.contains { $0.isVisible && $0.title.hasPrefix("Impact Lab") }
             checks.append("native window=\(visible)")
             loadPreset(try LabExample.hanging_springs.scene(), title: LabExample.hanging_springs.rawValue)
             checks.append("lab example loads=\(experiment.canRun && experiment.scene.gravity != nil && experiment.scene.parts[0].support == .fixed)")
@@ -1131,7 +1146,7 @@ struct AssemblyLab: View {
             for _ in 0..<300 where studySmokeResult == nil {
                 try await Task.sleep(for: .milliseconds(100))
             }
-            checks.append("native window=\(NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" })")
+            checks.append("native window=\(NSApplication.shared.windows.contains { $0.isVisible && $0.title.hasPrefix("Impact Lab") })")
             checks.append("native study sheet=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
             if let outcome = studySmokeResult {
                 let outcome = try outcome.get()
@@ -1213,7 +1228,7 @@ struct AssemblyLab: View {
             for _ in 0..<20 where !NSApplication.shared.windows.contains(where: { $0.attachedSheet?.isVisible == true }) {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            result.append("native window=\(NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" })")
+            result.append("native window=\(NSApplication.shared.windows.contains { $0.isVisible && $0.title.hasPrefix("Impact Lab") })")
             result.append("comparison sheet=\(NSApplication.shared.windows.contains { $0.attachedSheet?.isVisible == true })")
             compare = false
             var contactScene = try AssemblyScene.open(sceneURL)
@@ -1237,7 +1252,7 @@ struct AssemblyLab: View {
         try? await Task.sleep(for: .milliseconds(400))
         var result: [String] = []
         do {
-            let visible = NSApplication.shared.windows.contains { $0.isVisible && $0.title == "Impact Lab" }
+            let visible = NSApplication.shared.windows.contains { $0.isVisible && $0.title.hasPrefix("Impact Lab") }
             result.append("native window=\(visible)")
             let scene = AssemblyScene.enclosureExample()
             try experiment.configure(AssemblyScene())

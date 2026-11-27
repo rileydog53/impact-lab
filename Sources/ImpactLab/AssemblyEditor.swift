@@ -6,7 +6,7 @@ import SwiftUI
 
 struct AssemblyEditor: View {
     let experiment: AssemblyExperiment
-    @State private var bodySettings = !CommandLine.arguments.contains("--open-mesh")
+    @State private var bodySettings = false
     @State private var materialTarget: MaterialTarget?
     @State private var materialSettings = false
     @State private var connectionList = false
@@ -16,6 +16,8 @@ struct AssemblyEditor: View {
     @State private var layoutGap = 0.010
     @State private var showWorkshopLimits = false
     @State private var outlinePoints = false
+    @State private var crackSettings = false
+    @State private var layerSettings = false
     @AppStorage(RuntimeWarnings.showKey) private var showEstimateAbove = RuntimeWarnings.defaultShow
     @AppStorage(RuntimeWarnings.confirmKey) private var confirmAbove = RuntimeWarnings.defaultConfirm
     @AppStorage(RuntimeWarnings.longKey) private var warnAbove = RuntimeWarnings.defaultLong
@@ -25,6 +27,8 @@ struct AssemblyEditor: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Inspector").font(.headline)
+                    Text("build \(BuildInfo.label)").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                        .help("The build of Impact Lab you are using. Quote it when reporting a problem. Also under Help > Credits and Licences.")
                     Spacer()
                     Button("Undo", systemImage: "arrow.uturn.backward") { experiment.undo() }
                         .labelStyle(.iconOnly)
@@ -41,6 +45,7 @@ struct AssemblyEditor: View {
                 if !experiment.canEdit {
                     Text("Showing a result. Use Edit a Copy to change the setup while keeping this result as the reference, or Reset Run to discard it.")
                         .font(.caption).foregroundStyle(assemblyAmber)
+                    AssemblyRunSummary(experiment: experiment)
                 }
                 components
                 if experiment.scene.parts.isEmpty {
@@ -99,6 +104,7 @@ struct AssemblyEditor: View {
                 }
                 Divider()
                 runSettings
+                if experiment.canEdit && !experiment.scene.parts.isEmpty { AssemblyRunSummary(experiment: experiment) }
             }
             .padding(.horizontal, 17)
             .padding(.vertical, 15)
@@ -200,35 +206,47 @@ struct AssemblyEditor: View {
                     .disabled(!experiment.canEdit || experiment.selectedParts.isEmpty)
                     .help("Duplicate, group, delete, or reorder selected bodies. Copies carry internal links. With two bodies selected, Cut removes the second body's material from the first (highlighted) one, and Join merges them; both results are outline bodies.")
                 }
-                Button("Workshop Limits", systemImage: "info.circle") { showWorkshopLimits.toggle() }
-                    .labelStyle(.iconOnly)
-                    .help("Supported geometry, connections, and constraints")
-                    .popover(isPresented: $showWorkshopLimits) { workshopLimits }
+                Button("Limits", systemImage: "ruler") { showWorkshopLimits.toggle() }
+                    .help("Which numbers the app will not accept (hard limits), and which notes are only advice")
+                    .popover(isPresented: $showWorkshopLimits, arrowEdge: .leading) { workshopLimits }
             }.controlSize(.small)
         }
     }
 
     private var workshopLimits: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("Workshop limits").font(.headline)
-            Text("Bodies may translate and rotate. A body can be a fixed support (a rigid bench, floor or roller that never moves) or have one edge clamped. A deformable support is an ordinary free block that can move and deform under load. Pinned points, rigid joints and partial constraints are unavailable.")
-            Text("Gravity can be switched on in Simulation settings; it pulls every free body downward (−Y). No other applied loads, pressures or friction exist; contact is frictionless.")
-            Text("Permanent bonds join elastic layers within a block. Use springs (optionally preloaded) or breakable tension links between separate bodies. Round bodies and fixed supports cannot fracture (a clamped body and an outline body can); each body's list entry says \"fracture on\", \"fracture off\" or \"fracture n/a\", and hovering explains why.")
-            Text("Outline bodies can have any polygon shape with holes: draw one, insert an outline shape, convert a structured body, or Cut and Join two bodies (polygon operations by Clipper2, Angus Johnson, Boost licence). They are meshed by a quality triangle mesher (Ruppert/Shewchuk refinement). Round bodies use an elliptical mesh. Outline bodies can fracture: cracks open along the generated mesh's element edges. Curved edges, imported outlines, arbitrary cracks, and nested groups are unavailable.")
-            Text("Limits and their causes").font(.subheadline.weight(.semibold))
-            ForEach(AssemblyScene.limits, id: \.name) { limit in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("\(limit.name): \(limit.value)").fontWeight(.medium)
-                    Text("\(limit.kind.rawValue). \(limit.cause)").font(.caption).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Limits and advice").font(.headline)
+                Text("Hard limits: numbers the app will not accept").font(.subheadline.weight(.semibold))
+                Text("If you type past one, the box says so and shows the number it used.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(AssemblyLimitsGuide.hard, id: \.0) { name, value in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(name).fontWeight(.medium)
+                        Text(value).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
+                Divider()
+                Text("Advice: never blocks a run").font(.subheadline.weight(.semibold))
+                ForEach(AssemblyLimitsGuide.advice, id: \.0) { name, value in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(name).fontWeight(.medium)
+                        Text(value).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Divider()
+                Text("What the app can do").font(.subheadline.weight(.semibold))
+                Text("Bodies move and turn. A body can be a fixed support (a rigid bench or floor) or have one edge clamped. Gravity is in Simulation settings. Contact has no friction. Everything is flat (2-D): forces and energies are per metre of depth.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Credits for the methods and libraries the app uses are under Help > Credits and Licences.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Everything is two-dimensional plane strain: forces and energies are per metre of depth.")
-            Text("Duplicates retain geometry, materials, initial motion, and links within the copied selection. External links and gauges stay with their original bodies.")
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 330, alignment: .leading)
+            .padding(15)
         }
-        .font(.callout)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(width: 310, alignment: .leading)
-        .padding(15)
+        .frame(maxHeight: 560)
     }
 
     private var selectionInspector: some View {
@@ -282,11 +300,11 @@ struct AssemblyEditor: View {
 
     private func sizeHelp(_ part: AssemblyPart, mesh: AssemblyScene.Resolution) -> String {
         let resolved = String(format: "%.3g", AssemblyPart.minimumSize(resolution: mesh) * 1000)
-        var text = "Any size from 0.5 mm to 10 m is accepted; size is advice, not a limit."
+        var text = "Hard limit: 0.5 mm to 10 m."
         if part.shape == .outline {
             text += " Width and height stretch the outline to fit. The mesh follows the outline's target edge length (Mesh below)."
         } else {
-            text += " Below \(resolved) mm (three elements of the \(mesh.label) mesh) the elements shrink to fit, which shortens the time step; the run-cost estimate shows the time."
+            text += " Advice only: below \(resolved) mm the triangles shrink to fit, so the run takes longer."
         }
         if part.shape == .enclosure { text += " Walls are at least 5 mm and at most 40% of the smaller side." }
         return text
@@ -337,19 +355,16 @@ struct AssemblyEditor: View {
             }
             Text("Initial motion").font(.subheadline.weight(.semibold)).padding(.top, 4)
             HStack(spacing: 6) {
-                bodyNumber("Sideways speed (m/s, X; − = left)", part, \.velocity.x, AssemblyPart.velocityRange)
-                bodyNumber("Up/down speed (m/s, Y; − = down)", part, \.velocity.y, AssemblyPart.velocityRange)
+                bodyNumber("Sideways speed (m/s, − = left)", part, \.velocity.x, AssemblyPart.velocityRange)
+                bodyNumber("Up/down speed (m/s, − = down)", part, \.velocity.y, AssemblyPart.velocityRange)
             }
             if experiment.canEdit, let index = experiment.selectedIndex {
                 let speed = simd_length(part.velocity)
                 let mass = experiment.simulation.body(index).totalMass
                 let direction = atan2(part.velocity.y, part.velocity.x) * 180 / .pi
-                Text(speed > 0 ? "Speed \(speed, specifier: "%.3g") m/s · \(direction, specifier: "%.1f")° from +X" : "Initially at rest")
-                    .font(.caption.monospacedDigit())
-                Text("Mass \(mass, specifier: "%.3g") kg/m · Kinetic energy \(0.5 * mass * speed * speed, specifier: "%.3g") J/m")
+                Text(speed > 0 ? "\(speed, specifier: "%.3g") m/s at \(direction, specifier: "%.0f")° · energy \(0.5 * mass * speed * speed, specifier: "%.3g") J per m of depth" : "Starts at rest")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                Text("Momentum (\(mass * part.velocity.x, specifier: "%.3g"), \(mass * part.velocity.y, specifier: "%.3g")) N·s/m")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .help("Mass \(String(format: "%.3g", mass)) kg per metre of depth. Momentum (\(String(format: "%.3g", mass * part.velocity.x)), \(String(format: "%.3g", mass * part.velocity.y))) N·s/m. The angle is measured counter-clockwise from rightward. Speeds are limited to 150 m/s because the app has no heating; see the ⓘ.")
             }
             supportEditor(part)
             DisclosureGroup("Mesh", isExpanded: $meshSettings) {
@@ -368,9 +383,16 @@ struct AssemblyEditor: View {
                     .font(.caption).foregroundStyle(part.refinement == nil ? Color.secondary : assemblyAmber)
                     .fixedSize(horizontal: false, vertical: true)
                 if part.shape == .outline { outlineMeshControls(part) }
-                ForEach(experiment.scene.advisories(for: part), id: \.self) { advisory in
-                    Label(advisory, systemImage: "info.circle").font(.caption).foregroundStyle(assemblyAmber)
-                        .fixedSize(horizontal: false, vertical: true)
+                let advisories = experiment.scene.advisories(for: part)
+                if !advisories.isEmpty {
+                    DisclosureGroup("Mesh advice (\(advisories.count)), never blocks a run") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(advisories, id: \.self) { advisory in
+                                Text(advisory).font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }.font(.caption)
                 }
                 if let index = experiment.selectedIndex {
                     let quality = experiment.meshQuality[index]
@@ -394,15 +416,19 @@ struct AssemblyEditor: View {
                             .font(.subheadline.weight(.semibold))
                         assignedMaterial(part.material)
                         if part.plasticity.response == .elastoplastic, let table = part.plasticity.table {
-                            Text("Metal: bends for good at \(table.points[0].stress / 1e6, specifier: "%.4g") MPa (yield strength)")
+                            Text("Metal: bends for good at \(table.points[0].stress / 1e6, specifier: "%.4g") MPa")
                                 .font(.caption)
                             HardeningPreview(table: table)
                         } else {
                             Text("Springs back to its shape (elastic)").font(.caption)
                         }
-                        Button("Type my own numbers instead") {
-                            experiment.updatePart(part.id, action: "Type Own Material") { $0.material.provenance = nil }
-                        }.disabled(!experiment.canEdit)
+                        Button("Change these numbers") {
+                            experiment.updatePart(part.id, action: "Change Material Numbers") {
+                                $0.material.provenance = $0.material.provenance?.editableCopy()
+                            }
+                        }
+                        .disabled(!experiment.canEdit)
+                        .help("Keeps every number shown here and lets you change any of them. The app then calls it your version of this material, with the original source still shown.")
                     } else {
                         if part.support == .fixed {
                             Text("A fixed support never bends, so it springs back only.")
@@ -418,6 +444,13 @@ struct AssemblyEditor: View {
                             .disabled(!experiment.canEdit)
                             .settingInfo("How it behaves")
                         }
+                        if let provenance = part.material.provenance, provenance.isCustom,
+                           let original = MaterialProfile.libraryProfile(for: provenance) {
+                            Text("Started from \(original.plainName). Numbers you have not changed are still the Library's.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Link("Original source: \(original.provenance.sourceName)", destination: original.provenance.source)
+                                .font(.caption)
+                        }
                         if part.bondedLayer != nil {
                             Text("These are the first layer's numbers. Each bonded layer below has its own.")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -431,10 +464,19 @@ struct AssemblyEditor: View {
                             }
                         }
                     }
-                    crackSection(part)
-
-                    if part.shape == .block { bondedLayerEditor(part) }
                 }.padding(.top, 7)
+            }
+            DisclosureGroup(isExpanded: $crackSettings) {
+                crackSection(part).padding(.top, 7)
+            } label: {
+                Text("Cracking · " + (part.fracture == nil ? (part.fractureUnavailableReason == nil ? "off" : "not available") : "on"))
+            }
+            if part.shape == .block {
+                DisclosureGroup(isExpanded: $layerSettings) {
+                    bondedLayerEditor(part).padding(.top, 7)
+                } label: {
+                    Text("Glued-on layers · " + (part.bondedLayer == nil ? "none" : part.bondedLayer?.third == nil ? "2 materials" : "3 materials"))
+                }
             }
             gaugeEditor(part)
         }
@@ -466,20 +508,20 @@ struct AssemblyEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 7) {
                 GridRow {
-                    numeric("Stiffness (GPa, Young’s modulus)", value: material.young, range: ImpactPhysics.Material.assemblyYoungRange, scale: 1e-9) { value in
+                    numeric("Stiffness (GPa)", value: material.young, range: ImpactPhysics.Material.assemblyYoungRange, scale: 1e-9) { value in
                         var next = material; next.young = value; set(next)
                     }
-                    numeric("Weight per size (kg/m³, density)", value: material.density, range: ImpactPhysics.Material.assemblyDensityRange, scale: 1) { value in
+                    numeric("Weight per size (kg/m³)", value: material.density, range: ImpactPhysics.Material.assemblyDensityRange, scale: 1) { value in
                         var next = material; next.density = value; set(next)
                     }
                 }
                 GridRow {
-                    numeric("Squish sideways (Poisson ratio)", value: material.poisson, range: 0...ImpactPhysics.Material.assemblyPoissonRange.upperBound, scale: 1) { value in
+                    numeric("Squish sideways", value: material.poisson, range: ImpactPhysics.Material.assemblyPoissonRange, scale: 1) { value in
                         var next = material; next.poisson = value; set(next)
                     }
                 }
             }
-            Text("For scale. Stiffness: rubber 0.003 · wood 12 · aluminium 69 · steel 200 GPa. Weight: water 1000 · aluminium 2700 · steel 7850 kg/m³. Squish sideways: cork 0 · metals 0.3 · rubber 0.48.")
+            Text("For scale. Stiffness: rubber 0.003 · wood 12 · aluminium 69 · steel 200 · diamond about 1,050 GPa. Weight: water 1000 · aluminium 2700 · steel 7850 kg/m³. Squish sideways: cork 0 · metals 0.3 · rubber 0.48.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -490,10 +532,10 @@ struct AssemblyEditor: View {
         let points = Self.typedFlow(plasticity, young: young)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                numeric("Bends for good at (MPa, yield strength)", value: points.yield, range: 0.001e6...20_000e6, scale: 1e-6) { value in
+                numeric("Bends for good at (MPa)", value: points.yield, range: 0.001e6...20_000e6, scale: 1e-6) { value in
                     set(Self.flowPlasticity(yield: value, later: max(value, points.later)))
                 }
-                numeric("Takes after a big bend (MPa, at 12% bend)", value: points.later, range: 0.001e6...20_000e6, scale: 1e-6) { value in
+                numeric("Takes after a big bend (MPa)", value: points.later, range: 0.001e6...20_000e6, scale: 1e-6) { value in
                     set(Self.flowPlasticity(yield: points.yield, later: max(points.yield, value)))
                 }
             }
@@ -535,7 +577,7 @@ struct AssemblyEditor: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else {
             VStack(alignment: .leading, spacing: 7) {
-                Toggle("Can crack (material fracture)", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
+                Toggle("Can crack (the material itself)", isOn: Binding(get: { part.fracture != nil }, set: { enabled in
                     experiment.updatePart(part.id) {
                         if enabled {
                             if let profile = MaterialProfile.libraryProfile(for: $0.material.provenance) {
@@ -548,13 +590,13 @@ struct AssemblyEditor: View {
                         }
                         $0.alignLayerFracture(fillMissing: enabled)
                     }
-                })).toggleStyle(.checkbox).settingInfo("Can crack")
+                })).toggleStyle(.checkbox).disabled(!experiment.canEdit).settingInfo("Can crack")
                 if part.fracture == nil {
                     Text("Off: this body never cracks.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if let fracture = part.fracture { fractureControls(part, fracture) }
-            }.disabled(!experiment.canEdit)
+            }
         }
     }
 
@@ -612,11 +654,11 @@ struct AssemblyEditor: View {
                 // Strength is shown and entered in real units (MPa = 10⁶ Pa). Legacy scenes
                 // show their fraction-of-E strength converted; the saved value only changes
                 // when the user types a new strength.
-                numeric("Crack starts at (MPa, cohesive strength)", value: fracture.resolvedStrength(young: young),
+                numeric("Crack starts at (MPa)", value: fracture.resolvedStrength(young: young),
                         range: MaterialFractureSettings.absoluteStrengthRange, scale: 1e-6) { value in
                     experiment.updatePart(part.id) { $0.fracture?.strength = value }
                 }
-                numeric("Crack resistance (J/m², fracture energy)", value: fracture.energy,
+                numeric("Crack resistance (J/m²)", value: fracture.energy,
                         range: MaterialFractureSettings.absoluteEnergyRange, scale: 1) { value in
                     experiment.updatePart(part.id) {
                         // Writing the strength in pascals lifts the old 50 J/m² cap; the same strength replays identically.
@@ -631,7 +673,7 @@ struct AssemblyEditor: View {
             CrackScale()
             if fracture.energySource == nil, MaterialProfile.libraryProfile(for: part.material.provenance)?.defaultFracture == nil,
                part.material.provenance != nil {
-                Text("No measured crack numbers were found for this material, so these are your own numbers, not from a source. Change them to try what you want.")
+                Text("No measured crack numbers were found for this material, so the app filled in a starting guess: Crack starts at is the metal's highest strengthening value, and Crack resistance is a 1,000 J/m² placeholder. Neither is measured. Change them to try what you want.")
                     .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
             }
             if let source = fracture.energySource {
@@ -650,6 +692,7 @@ struct AssemblyEditor: View {
                         Text($0 == .aligned ? "Aligned (normal)" : "Staggered").tag($0)
                     }
                 }
+                .disabled(!experiment.canEdit)
                 .help("Which way the triangles inside the block lean. Cracks can only run along triangle edges.")
                 .settingInfo("Triangle pattern inside")
             }
@@ -813,7 +856,7 @@ struct AssemblyEditor: View {
     private func bondedLayerEditor(_ part: AssemblyPart) -> some View {
         let minimum = AssemblyPart.BondedLayer.minimumFraction
         return VStack(alignment: .leading, spacing: 7) {
-            Toggle("Glued-on second material (bonded layer)", isOn: Binding(get: { part.bondedLayer != nil }, set: { enabled in
+            Toggle("Glued-on second material", isOn: Binding(get: { part.bondedLayer != nil }, set: { enabled in
                 experiment.updatePart(part.id) {
                     $0.bondedLayer = enabled ? AssemblyPart.BondedLayer.realDefault() : nil
                     $0.alignLayerFracture(fillMissing: true)
@@ -821,7 +864,7 @@ struct AssemblyEditor: View {
             }))
             .toggleStyle(.checkbox)
             .disabled(!experiment.canEdit || part.notch != nil)
-            .help("Available on unnotched blocks")
+            .settingInfo("Glued-on second material")
             Text("Splits this block into two or three materials side by side, glued together. With cracking off the glue never fails. With cracking on, each layer and each glue line has its own crack numbers, so the layers can crack or peel apart (delaminate).")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if part.bondedLayer == nil, part.notch != nil {
@@ -841,8 +884,12 @@ struct AssemblyEditor: View {
                 layerResponse(part, layer.plasticity, material: layer.material) { plasticity in
                     experiment.updatePart(part.id) { $0.bondedLayer?.plasticity = plasticity }
                 }
+                if part.fracture == nil {
+                    Text("The glue and the layers can only break when “Can crack” is on under Cracking.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if part.fracture != nil {
-                    layerCracks("Glue between first and second layer can break", layer.bond, young: min(part.material.young, layer.material.young),
+                    layerCracks("Glue between first and second layer can let go", layer.bond, young: min(part.material.young, layer.material.young),
                                 allowFraction: true, fallback: part.suggestedBond(0)) { settings in
                         experiment.updatePart(part.id) { $0.bondedLayer?.bond = settings }
                     }
@@ -872,7 +919,7 @@ struct AssemblyEditor: View {
                         experiment.updatePart(part.id) { $0.bondedLayer?.third?.plasticity = plasticity }
                     }
                     if part.fracture != nil {
-                        layerCracks("Glue between second and third layer can break", third.bond, young: min(layer.material.young, third.material.young),
+                        layerCracks("Glue between second and third layer can let go", third.bond, young: min(layer.material.young, third.material.young),
                                     allowFraction: true, fallback: part.suggestedBond(1)) { settings in
                             experiment.updatePart(part.id) { $0.bondedLayer?.third?.bond = settings }
                         }
@@ -913,7 +960,7 @@ struct AssemblyEditor: View {
             }
             if let plasticity, plastic {
                 if material.provenance?.isCustom == false, let table = plasticity.table {
-                    Text("Bends for good at \(table.points[0].stress / 1e6, specifier: "%.4g") MPa (yield strength)").font(.caption)
+                    Text("Bends for good at \(table.points[0].stress / 1e6, specifier: "%.4g") MPa").font(.caption)
                 } else {
                     typedPlasticityFields(plasticity, young: material.young) { set($0) }
                 }
@@ -925,26 +972,28 @@ struct AssemblyEditor: View {
     private func layerCracks(_ title: String, _ settings: MaterialFractureSettings?, young: Double, allowFraction: Bool,
                              fallback: MaterialFractureSettings? = MaterialFractureSettings(),
                              set: @escaping (MaterialFractureSettings?) -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle(title + (settings == nil ? " (never breaks)" : ""), isOn: Binding(get: { settings != nil }, set: { enabled in
+        let isGlue = title.hasPrefix("Glue")
+        return VStack(alignment: .leading, spacing: 6) {
+            Toggle(title + (settings == nil ? (isGlue ? " (holds forever)" : " (never cracks)") : ""), isOn: Binding(get: { settings != nil }, set: { enabled in
                 set(enabled ? fallback : nil)
             }))
             .toggleStyle(.checkbox)
             .disabled(!experiment.canEdit || (settings == nil && fallback == nil))
+            .settingInfo(title)
             if settings == nil && fallback == nil {
                 Text("This layer's material has no crack numbers, so it never cracks.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let settings {
                 HStack {
-                    numeric("Breaks at (MPa, strength)", value: settings.resolvedStrength(young: young),
+                    numeric(isGlue ? "Glue lets go at (MPa)" : "Crack starts at (MPa)", value: settings.resolvedStrength(young: young),
                             range: MaterialFractureSettings.absoluteStrengthRange, scale: 1e-6) { value in
                         var next = settings
                         next.strength = value
                         next.energySource = nil
                         set(next)
                     }
-                    numeric("Crack resistance (J/m², fracture energy)", value: settings.energy,
+                    numeric(isGlue ? "Glue peel resistance (J/m²)" : "Crack resistance (J/m²)", value: settings.energy,
                             range: MaterialFractureSettings.absoluteEnergyRange, scale: 1) { value in
                         var next = settings
                         next.strength = settings.resolvedStrength(young: young)
@@ -953,7 +1002,7 @@ struct AssemblyEditor: View {
                         set(next)
                     }
                 }
-                CrackScale()
+                if !isGlue { CrackScale() }
                 if let source = settings.energySource {
                     Label("From a handbook, not tested in this app. \(source.caution)", systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
@@ -967,7 +1016,7 @@ struct AssemblyEditor: View {
             MaterialNumbers(material: material).font(.caption)
             if let provenance = material.provenance {
                 Text(provenance.condition)
-                if provenance.isCustom { Text("Your edited copy of a Library material.") }
+                if provenance.isCustom { Text("Your version of a Library material. The source describes the original.") }
                 Text(provenance.evidence)
                 Link(provenance.sourceName, destination: provenance.source)
             }
@@ -1128,10 +1177,10 @@ struct AssemblyEditor: View {
                 Text(experiment.simulation.timestep.explanation)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 contactTimingNote()
-                numeric("Run length (ms, duration)", value: experiment.scene.duration, range: AssemblyScene.durationRange, scale: 1000) { value in
+                numeric("Run length (ms)", value: experiment.scene.duration, range: AssemblyScene.durationRange, scale: 1000) { value in
                     experiment.edit { $0.duration = value }
                 }
-                Toggle("Smooth out shock waves (artificial bulk viscosity)", isOn: Binding(get: { experiment.scene.bulkViscosity != nil }, set: { on in
+                Toggle("Smooth out shock waves", isOn: Binding(get: { experiment.scene.bulkViscosity != nil }, set: { on in
                     experiment.edit(on ? "Turn On Bulk Viscosity" : "Turn Off Bulk Viscosity") { $0.bulkViscosity = on ? .standard : nil }
                 })).toggleStyle(.checkbox).disabled(!experiment.canEdit).settingInfo("Smooth out shock waves")
                 if let warning = experiment.scene.smoothingAdvisory {
@@ -1139,13 +1188,13 @@ struct AssemblyEditor: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let viscosity = experiment.scene.bulkViscosity {
-                    numeric("Gentle smoothing (linear coefficient b1)", value: viscosity.linear, range: BulkViscosity.linearRange, scale: 1) { value in
+                    numeric("Gentle smoothing (usual 0.06)", value: viscosity.linear, range: BulkViscosity.linearRange, scale: 1) { value in
                         experiment.edit { $0.bulkViscosity?.linear = value }
                     }
-                    numeric("Strong smoothing for hard hits (quadratic coefficient b2)", value: viscosity.quadratic, range: BulkViscosity.quadraticRange, scale: 1) { value in
+                    numeric("Strong smoothing for hard hits (usual 1.2)", value: viscosity.quadratic, range: BulkViscosity.quadraticRange, scale: 1) { value in
                         experiment.edit { $0.bulkViscosity?.quadratic = value }
                     }
-                    Text("Adds a small push-back only while a triangle is being squashed, so a hit's shock wave stays smooth instead of ringing like a bell. Commercial impact programs do the same (defaults 0.06 and 1.2, from the Abaqus manual). The energy it soaks up is shown on its own line. It is a calculation aid, not part of the material.")
+                    Text("Adds a small push-back only while a triangle is being squashed, so a hit's shock wave stays smooth instead of ringing like a bell. Commercial impact programs do the same, with the same usual values (credits under Help). The energy it soaks up is shown on its own line. It is a calculation aid, not part of the material.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Toggle("Gravity", isOn: Binding(get: { (experiment.scene.gravity ?? 0) > 0 }, set: { on in
@@ -1247,12 +1296,12 @@ struct AssemblyEditor: View {
     private func materialKind(_ part: AssemblyPart) -> some View {
         let (title, detail): (String, String) = if let provenance = part.material.provenance {
             provenance.isCustom
-                ? ("Your edited copy", "Your changes to a Library material. The source describes the original, not your numbers.")
+                ? ("Your version of \(MaterialProfile.libraryProfile(for: provenance)?.plainName ?? provenance.name)", "Started from the Library and open for you to change. The source describes the original material, not your changes.")
                 : ("From the Material Library", "Stiffness, weight and where it starts to bend for good come from the cited source. How it hardens after that is a sketch, and crack numbers are handbook estimates.")
         } else if AssemblyMaterialProfile.allCases.contains(where: { $0.response == part.plasticity.response && $0.material == part.material }) {
             ("Old soft demo material", "This body uses one of the old rubber-soft demo materials. Choose a real material to make it behave like one.")
         } else {
-            ("Your own numbers", "Values you typed. The app only checks they are possible.")
+            ("Numbers set in this experiment", "Typed here or saved with this experiment, not linked to a Library material. The app only checks they are possible.")
         }
         VStack(alignment: .leading, spacing: 2) {
             Text("Material · \(title)").font(.caption.weight(.semibold))
@@ -1278,14 +1327,47 @@ struct AssemblyEditor: View {
 
     private func numeric(_ label: String, value: Double, range: ClosedRange<Double>, scale: Double,
                          set: @escaping (Double) -> Void) -> some View {
+        AssemblyNumberField(label: label, value: value, range: range, scale: scale, enabled: experiment.canEdit, set: set)
+    }
+}
+
+/// A number box that says so when it changes what was typed (Joseph, 2026-11-26: typing 500 GPa silently became
+/// 400). The note stays until the value changes again.
+struct AssemblyNumberField: View {
+    let label: String
+    let value: Double
+    let range: ClosedRange<Double>
+    let scale: Double
+    let enabled: Bool
+    let set: (Double) -> Void
+    @State private var note: String?
+    /// The value the note was written about; any other change of the value clears the note.
+    @State private var noteValue: Double?
+
+    private static func show(_ number: Double) -> String { number.formatted(.number.precision(.significantDigits(1...6))) }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label).font(.caption).foregroundStyle(.secondary).settingInfo(label)
-            TextField(label, value: Binding(get: { value * scale }, set: { newValue in
-                if newValue.isFinite { set(min(range.upperBound, max(range.lowerBound, newValue / scale))) }
+            TextField(label, value: Binding(get: { value * scale }, set: { typed in
+                guard typed.isFinite else { return }
+                let used = min(range.upperBound, max(range.lowerBound, typed / scale))
+                if used != typed / scale {
+                    let side = typed / scale > range.upperBound ? "largest" : "smallest"
+                    note = "You typed \(Self.show(typed)). The \(side) value this box accepts is \(Self.show(used * scale)), so \(Self.show(used * scale)) is used."
+                    noteValue = used
+                } else if used != value {
+                    note = nil
+                }
+                set(used)
             }), format: .number.precision(.fractionLength(0...3)))
             .labelsHidden().textFieldStyle(.roundedBorder).monospacedDigit()
-            .disabled(!experiment.canEdit)
-            .help("Allowed range \((range.lowerBound * scale).formatted()) to \((range.upperBound * scale).formatted()). Press Return to apply.")
+            .disabled(!enabled)
+            .help("Accepts \(Self.show(range.lowerBound * scale)) to \(Self.show(range.upperBound * scale)). Press Return to apply.")
+            if let note, noteValue == value {
+                Label(note, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(assemblyAmber).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

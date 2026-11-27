@@ -15,7 +15,7 @@ public struct Material: Codable, Equatable, Sendable {
         self.poisson = poisson
     }
 
-    public static let assemblyYoungRange = 0.5e6...400e9
+    public static let assemblyYoungRange = 0.5e6...1_200e9
     public static let assemblyDensityRange = 100...25_000.0
     public static let assemblyPoissonRange = -0.9...0.48
 

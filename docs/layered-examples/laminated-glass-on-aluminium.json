@@ -1,5 +1,5 @@
 {
-  "description": "A 6 mm annealed soda-lime glass sheet laminated with PVB interlayer and bonded with structural epoxy to an aluminium plate, hit on the glass by a 20 mm steel ball at 20 m/s, as in a ball-drop test of a glass-faced panel. Watch for the first crack in the glass, the glass coming off the PVB (delamination), and any crack that opens inside the material. The PVB is drawn 1.6 mm thick (the app's thinnest layer; real sheets are 0.38-1.52 mm). Its stiffness, 33 MPa, is the shortest-load sourced value (3 s, 20 °C, AGC): PVB is much stiffer at impact speeds and no measured high-rate value was found, so this layer is too soft and its result is a lower bound. PVB has no sourced toughness, so it never cracks; the glass-PVB bond strength is a guess capped at PVB's own tensile strength. Values and their sources: docs/laminate-material-profiles.md. Every toughness and bond value is experimental. The app is 2D (plane strain), so the ball is really a long steel rod seen end on. Numerical results, not validation.",
+  "description": "A 6 mm annealed soda-lime glass sheet laminated with PVB interlayer and bonded with structural epoxy to an aluminium plate, hit on the glass by a 20 mm steel ball at 20 m/s, as in a ball-drop test of a glass-faced panel. Materials, left to right: Window glass (Library: Pilkington ATS-129), Safety-glass plastic PVB (Library: AGC Stratobel data sheet) and Aluminium 6061-T6 (Library: MatWeb); the ball is Library steel (A36). Each layer's source is shown in the inspector under Material. The two glue lines (glass to PVB, PVB to aluminium with structural epoxy) carry their own sourced estimates under Glued-on layers. Watch for the first crack in the glass, the glass coming off the PVB (delamination), and any crack that opens inside the material. The PVB is drawn 1.6 mm thick (the app's thinnest layer; real sheets are 0.38-1.52 mm). Its stiffness, 33 MPa, is the shortest-load sourced value (3 s, 20 °C, AGC): PVB is much stiffer at impact speeds and no measured high-rate value was found, so this layer is too soft and its result is a lower bound. PVB has no sourced toughness, so it never cracks; the glass-PVB bond strength is a guess capped at PVB's own tensile strength. Values and their sources: docs/laminate-material-profiles.md. Every toughness and bond value is experimental. The app is 2D (plane strain), so the ball is really a long steel rod seen end on. Numerical results, not validation.",
   "duration": 0.0002,
   "meshResolution": "x4",
   "bulkViscosity": true,
@@ -16,9 +16,8 @@
         0
       ],
       "material": {
-        "young": 72000000000.0,
-        "density": 2500,
-        "poisson": 0.23
+        "profile": "soda-lime-glass",
+        "elasticOnly": true
       },
       "fracture": {
         "strength": 41000000.0,
@@ -33,9 +32,8 @@
       "bondedLayer": {
         "interfaceFraction": 0.375,
         "material": {
-          "young": 33000000.0,
-          "density": 1070,
-          "poisson": 0.48
+          "profile": "pvb-interlayer",
+          "elasticOnly": true
         },
         "bond": {
           "strength": 20000000.0,

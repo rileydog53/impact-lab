@@ -153,7 +153,9 @@ struct AssemblyFieldLegend: View {
         .font(.caption.monospacedDigit())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Color scale \(field.display(low, limit: limit)) to \(field.display(limit, limit: limit))")
-        .help("Values outside the scale use the end colors. Local readings retain their full values.")
+        .help(field == .separation
+              ? "Only the crack lines are coloured: each is a pair of crack faces from the calculation, coloured by how far apart they are (opening and sliding). Solid: fully broken. Dashed: weakening, not yet broken. The faint fill of each body is only its identifying colour, not a calculated value. Values outside the scale use the end colours."
+              : "Values outside the scale use the end colors. Local readings retain their full values.")
     }
 }
 

@@ -351,7 +351,16 @@ struct AssemblyComparison {
 
     func assignMaterial(_ profile: MaterialProfile, to id: UUID, target: MaterialTarget, elasticOnly: Bool) {
         guard canEdit, profile.isValid else { return }
+        let old = target.current(in: scene.parts.first { $0.id == id } ?? AssemblyPart("none"))?.provenance
         updatePart(id, action: "Apply Material") { target.apply(profile, to: &$0, elasticOnly: elasticOnly) }
+        followMaterialInTitle(from: old, to: profile.material.provenance)
+    }
+
+    /// An unsaved experiment's title follows a material change the same way a body's name does
+    /// ("Steel Ball into Glass" becomes "Titanium Ball into Glass"). A saved file keeps its file name.
+    func followMaterialInTitle(from old: MaterialProvenance?, to new: MaterialProvenance?) {
+        guard fileURL == nil else { return }
+        title = MaterialNaming.renamed(title, from: old, to: new)
     }
 
     func fitWall(of part: inout AssemblyPart) {
